@@ -1,0 +1,12 @@
+struct User {
+    name: string,
+}
+
+fn make_user(name: string) -> User {
+    User { name: name }
+}
+
+fn main() {
+    let user = make_user("Alice");
+    println!("{}", user.name);
+}

@@ -1,0 +1,16 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"fn bump(mut x: i32) {\\n    x = x + 1;\\n    println!(\\\"{}\\\", x);\\n}\\n\\nfn main() {\\n    let mut n = 1;\\n    bump(n);\\n    println!(\\\"{}\\\", n);\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn bump(x: &mut i32) {
+    *x = *x + 1;
+    println!("{}", x);
+}
+
+fn main() {
+    let mut n = 1;
+    bump(&mut n);
+    println!("{}", n);
+}

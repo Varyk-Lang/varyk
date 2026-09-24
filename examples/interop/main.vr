@@ -1,0 +1,8 @@
+// expected output: Hello from Rust, Varyk!
+
+mod greet;
+
+fn main() {
+    let name = "Varyk";
+    println!("{}", greet::hello(name));
+}

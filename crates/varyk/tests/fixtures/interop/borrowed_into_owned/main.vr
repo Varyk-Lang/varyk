@@ -1,0 +1,27 @@
+mod ext;
+
+fn from_param(name: string) -> i32 {
+    ext::take(name)
+}
+
+fn from_mut_param(mut name: string) -> i32 {
+    ext::take(name)
+}
+
+fn push_shared(label: string) {
+    ext::push(label);
+}
+
+fn accepted(mut name: string) -> i32 {
+    ext::push(name);
+    ext::push(ext::make());
+    let owned = "owned";
+    ext::take("literal") + ext::take(ext::make()) + ext::take(owned)
+}
+
+fn main() {
+    println!("{}", from_param("a"));
+    println!("{}", from_mut_param("b"));
+    push_shared("c");
+    println!("{}", accepted("d"));
+}

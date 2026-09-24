@@ -1,0 +1,17 @@
+struct Person {
+    name: string,
+}
+
+fn rename(mut p: Person) {
+    p.name = "Bob";
+}
+
+fn greet(p: Person, greeting: string) {
+    println!("{}, {}", greeting, p.name);
+}
+
+fn main() {
+    let mut person = Person { name: "Alice" };
+    let hello = "Hello";
+    greet(person, { rename(person); hello });
+}

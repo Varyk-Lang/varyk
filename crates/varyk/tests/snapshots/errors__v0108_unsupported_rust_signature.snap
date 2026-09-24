@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: unsupported Rust signature: `ext::first` cannot be called from Varyk
+ --> crates/varyk/tests/fixtures/errors/v0108_unsupported_rust_signature/main.vr:4:20
+  |
+4 |     println!("{}", ext::first(3));
+  |                    ^^^^^^^^^^^^^ unsupported Rust signature: `ext::first` cannot be called from Varyk
+  |
+  = note: the Rust signature is `fn first<T>(value: T) -> T`

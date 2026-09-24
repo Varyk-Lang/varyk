@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0203]: a whole `User` cannot be printed with `{}`; print its fields one by one instead
+ --> crates/varyk/tests/fixtures/errors/v0203_print_struct/main.vr:7:20
+  |
+7 |     println!("{}", user);
+  |                    ^^^^ a whole `User` cannot be printed with `{}`; print its fields one by one instead
+  |
+  = note: structs have no printed form yet

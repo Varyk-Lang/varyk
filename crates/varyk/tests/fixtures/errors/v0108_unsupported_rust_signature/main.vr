@@ -1,0 +1,5 @@
+mod ext;
+
+fn main() {
+    println!("{}", ext::first(3));
+}

@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let mut n = 1;
+    ext::bump(n);
+    println!("{}", n);
+}

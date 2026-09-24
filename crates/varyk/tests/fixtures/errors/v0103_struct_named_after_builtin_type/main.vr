@@ -1,0 +1,5 @@
+struct String {
+    n: i32,
+}
+
+fn main() {}

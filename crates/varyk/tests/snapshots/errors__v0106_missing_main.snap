@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0106]: the entry file must define `fn main()`
+ --> crates/varyk/tests/fixtures/errors/v0106_missing_main/main.vr:1:1
+  |
+1 | fn greet() {
+  | ^ the entry file must define `fn main()`

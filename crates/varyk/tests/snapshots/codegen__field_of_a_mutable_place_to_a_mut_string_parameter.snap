@@ -1,0 +1,23 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn clear(mut s: string) {\\n    s = \\\"\\\";\\n}\\n\\nfn clear_user(mut user: User) {\\n    clear(user.name);\\n}\\n\\nfn main() {\\n    let mut user = User { name: \\\"Ann\\\" };\\n    clear(user.name);\\n    clear_user(user);\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct User {
+    name: String,
+}
+
+fn clear(s: &mut String) {
+    *s = "".to_string();
+}
+
+fn clear_user(user: &mut User) {
+    clear(&mut user.name);
+}
+
+fn main() {
+    let mut user = User { name: "Ann".to_string() };
+    clear(&mut user.name);
+    clear_user(&mut user);
+}

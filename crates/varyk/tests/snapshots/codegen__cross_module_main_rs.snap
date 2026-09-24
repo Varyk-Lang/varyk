@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+mod shapes;
+
+fn main() {
+    let p = crate::shapes::make(1);
+    crate::shapes::show(&p);
+    println!("{}", p.x * 2);
+}

@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0302]: `rename` may change `user`, but `user` was declared without `mut`
+  --> crates/varyk/tests/fixtures/errors/v0302_immutable_let_to_mut_param/main.vr:11:12
+   |
+10 |     let user = User { name: "Alice" };
+   |         ---- `user` is declared here without `mut`
+11 |     rename(user);
+   |            ^^^^ `rename` may change `user`, but `user` was declared without `mut`
+   |
+help: insert `mut ` before `user`

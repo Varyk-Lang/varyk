@@ -1,0 +1,7 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/math.rs\")"
+---
+pub fn square(x: i32) -> i32 {
+    x * x
+}

@@ -1,0 +1,21 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn show(user: User) {\\n    let n = user.name;\\n    println!(\\\"{}\\\", n);\\n}\\n\\nfn main() {\\n    let user = User { name: \\\"Ann\\\" };\\n    let n = user.name;\\n    println!(\\\"{}\\\", n);\\n    show(user);\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct User {
+    name: String,
+}
+
+fn show(user: &User) {
+    let n = &user.name;
+    println!("{}", n);
+}
+
+fn main() {
+    let user = User { name: "Ann".to_string() };
+    let n = &user.name;
+    println!("{}", n);
+    show(&user);
+}

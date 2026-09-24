@@ -1,0 +1,29 @@
+mod ext;
+
+fn bad_mut_first() {
+    let mut x = 1;
+    ext::f(x, x);
+}
+
+fn bad_mut_second() {
+    let mut x = 1;
+    ext::rev(x, x);
+}
+
+fn good() {
+    let mut x = 1;
+    let y = 2;
+    ext::f(x, y);
+}
+
+fn good_shared() {
+    let x = 1;
+    ext::shared(x, x);
+}
+
+fn main() {
+    bad_mut_first();
+    bad_mut_second();
+    good();
+    good_shared();
+}

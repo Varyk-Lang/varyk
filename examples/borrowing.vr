@@ -1,0 +1,25 @@
+// expected output:
+// Alice
+// Bob
+
+struct User {
+    name: string,
+}
+
+fn rename(mut user: User) {
+    user.name = "Bob";
+}
+
+fn print_user(user: User) {
+    println!("{}", user.name);
+}
+
+fn main() {
+    let mut user = User {
+        name: "Alice",
+    };
+
+    print_user(user);
+    rename(user);
+    print_user(user);
+}

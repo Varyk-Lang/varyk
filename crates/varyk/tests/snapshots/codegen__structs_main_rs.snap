@@ -1,0 +1,20 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct User {
+    name: String,
+    age: i32,
+}
+
+fn print_user(user: &User) {
+    println!("{}", user.name);
+}
+
+fn main() {
+    let user = User { name: "Alice".to_string(), age: 30 };
+    print_user(&user);
+    print_user(&user);
+}

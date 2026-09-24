@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0300]: this function only reads `user`; to change it, add `mut` to the parameter
+ --> crates/varyk/tests/fixtures/errors/v0300_change_through_param/main.vr:6:5
+  |
+5 | fn rename(user: User) {
+  |           ---- `user` is declared here without `mut`
+6 |     user.name = "Bob";
+  |     ^^^^^^^^^ this function only reads `user`; to change it, add `mut` to the parameter
+  |
+help: insert `mut ` before `user`

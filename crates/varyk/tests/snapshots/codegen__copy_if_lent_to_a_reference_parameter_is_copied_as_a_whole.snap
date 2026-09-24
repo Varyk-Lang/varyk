@@ -1,0 +1,25 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+mod ext;
+
+fn make() -> i32 {
+    7
+}
+
+fn main() {
+    let c = true;
+    let n = 1;
+    println!("{}", crate::ext::peek(&(if c {
+        make()
+    } else {
+        n
+    })));
+    println!("{}", crate::ext::peek(&({
+        let m = n;
+        m
+    })));
+}

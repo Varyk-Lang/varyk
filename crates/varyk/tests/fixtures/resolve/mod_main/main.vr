@@ -1,0 +1,3 @@
+mod main;
+
+fn main() {}

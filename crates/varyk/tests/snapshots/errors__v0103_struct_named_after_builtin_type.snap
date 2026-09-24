@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0103]: the name `String` is already taken by a built-in type
+ --> crates/varyk/tests/fixtures/errors/v0103_struct_named_after_builtin_type/main.vr:1:8
+  |
+1 | struct String {
+  |        ^^^^^^ the name `String` is already taken by a built-in type

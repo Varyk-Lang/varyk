@@ -1,0 +1,44 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"fn make() -> string {\\n    \\\"m\\\"\\n}\\n\\nfn show(s: string) {\\n    println!(\\\"{}\\\", s);\\n}\\n\\nfn clear(mut s: string) {\\n    s = \\\"\\\";\\n}\\n\\nfn f(c: bool, name: string) -> bool {\\n    show(if c { make() } else { \\\"lit\\\" });\\n    clear(if c { make() } else { make() });\\n    println!(\\\"{}\\\", if c { make() } else { \\\"y\\\" });\\n    (if c { make() } else { \\\"y\\\" }) == name\\n}\\n\\nfn main() {\\n    println!(\\\"{}\\\", f(true, \\\"m\\\"));\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn make() -> String {
+    "m".to_string()
+}
+
+fn show(s: &str) {
+    println!("{}", s);
+}
+
+fn clear(s: &mut String) {
+    *s = "".to_string();
+}
+
+fn f(c: bool, name: &str) -> bool {
+    show(&(if c {
+        make()
+    } else {
+        "lit".to_string()
+    }));
+    clear(&mut (if c {
+        make()
+    } else {
+        make()
+    }));
+    println!("{}", if c {
+        make()
+    } else {
+        "y".to_string()
+    });
+    (if c {
+        make()
+    } else {
+        "y".to_string()
+    }).as_str() == name
+}
+
+fn main() {
+    println!("{}", f(true, "m"));
+}

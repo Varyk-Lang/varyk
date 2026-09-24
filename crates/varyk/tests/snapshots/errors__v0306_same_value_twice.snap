@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0306]: `p` is passed to this call more than once, and one of those may change it
+  --> crates/varyk/tests/fixtures/errors/v0306_same_value_twice/main.vr:14:13
+   |
+14 |     swap(p, p);
+   |          -  ^ `p` is passed to this call more than once, and one of those may change it
+   |          |
+   |          `p` is first passed here

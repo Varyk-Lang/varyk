@@ -1,0 +1,16 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn swap(mut a: Point, mut b: Point) {
+    let t = a.x;
+    a.x = b.x;
+    b.x = t;
+}
+
+fn main() {
+    let mut p = Point { x: 1, y: 2 };
+    swap(p, p);
+    println!("{} {}", p.x, p.y);
+}

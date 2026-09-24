@@ -1,0 +1,22 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"fn count(limit: i32) -> i32 {\\n    let mut i = 0;\\n    while i < limit {\\n        i = i + 1;\\n        if i == 3 {\\n            continue;\\n        } else if i > 5 {\\n            break;\\n        }\\n    }\\n    i\\n}\\n\\nfn main() {\\n    println!(\\\"{}\\\", count(10));\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn count(limit: i32) -> i32 {
+    let mut i = 0;
+    while i < limit {
+        i = i + 1;
+        if i == 3 {
+            continue;
+        } else if i > 5 {
+            break;
+        }
+    }
+    i
+}
+
+fn main() {
+    println!("{}", count(10));
+}

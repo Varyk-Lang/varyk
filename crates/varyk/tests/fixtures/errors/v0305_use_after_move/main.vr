@@ -1,0 +1,9 @@
+struct User {
+    name: string,
+}
+
+fn main() {
+    let name = "Alice";
+    let user = User { name: name };
+    println!("{} {}", user.name, name);
+}

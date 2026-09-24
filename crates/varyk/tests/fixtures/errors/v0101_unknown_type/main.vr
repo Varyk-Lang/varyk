@@ -1,0 +1,7 @@
+fn show(count: integer) {
+    println!("{}", count);
+}
+
+fn main() {
+    show(3);
+}

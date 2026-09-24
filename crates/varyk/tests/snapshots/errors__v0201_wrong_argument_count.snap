@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0201]: `add` takes 2 arguments but 1 was given
+ --> crates/varyk/tests/fixtures/errors/v0201_wrong_argument_count/main.vr:6:20
+  |
+6 |     println!("{}", add(1));
+  |                    ^^^^^^ `add` takes 2 arguments but 1 was given

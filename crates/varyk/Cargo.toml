@@ -1,0 +1,29 @@
+[package]
+name = "varyk"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Varyk: an experimental language with Rust-like safety and Go-like simplicity that compiles to Rust"
+readme = "../../README.md"
+keywords = ["varyk", "language", "compiler", "rust"]
+categories = ["compilers", "command-line-utilities"]
+
+[[bin]]
+name = "varyk"
+path = "src/main.rs"
+
+[dependencies]
+annotate-snippets = "0.12.16"
+clap = { version = "4.6.7", features = ["derive"] }
+quote = "1.0.47"
+proc-macro2 = "1.0"
+serde_json = "1.0.151"
+syn = { version = "3.0.6", features = ["full"] }
+varyk-syntax = { path = "../varyk-syntax", version = "0.0.0" }
+
+[dev-dependencies]
+insta = "1.48.0"

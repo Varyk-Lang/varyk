@@ -2,16 +2,14 @@
 
 Date: 2026-09-23.
 
-**Status.** Design for milestone 1. Nothing is implemented yet. Varyk is
-experimental and pre-0.1: any syntax, diagnostic code, or command-line flag in
-this document may change until a 0.1 release, which is not scheduled.
-Discussion happens in the issues of this repository. Until milestone 1 lands,
-the design itself is the thing to comment on.
+**Status.** Milestone 1 is implemented. Varyk is experimental and pre-0.1:
+any syntax, diagnostic code, or command-line flag in this document may change
+until a 0.1 release, which is not scheduled. Discussion happens in the issues
+of this repository.
 
-This is the design specification the compiler is built from. Shorter derived
-documents, `docs/design.md`, `docs/language.md`, and `docs/open-questions.md`,
-are planned and listed in the repository layout below. Until they exist, this
-file and `docs/roadmap.md` are the only references.
+This is the design specification the compiler is built from. Shorter
+documents derived from it are `docs/design.md`, `docs/language.md`, and
+`docs/open-questions.md`; `docs/roadmap.md` tracks the milestones.
 
 ## 1. Summary
 
@@ -42,7 +40,7 @@ and `varyk run` invoke `cargo`.
 
 This section describes the language Varyk is designed to become. Section 4
 lists what milestone 1 implements, and section 8 schedules the rest. Varyk
-must be attractive to three audiences at once.
+must be attractive to four audiences at once.
 
 A developer arriving from JavaScript, TypeScript, Go, or Python sees:
 
@@ -67,6 +65,15 @@ A Rust developer sees:
   `cargo`;
 - Varyk packages are Cargo packages and publish to crates.io as ordinary
   crates (milestone 2).
+
+A person who has never programmed sees:
+
+- one way to do each thing, a small grammar, and no symbols that have to
+  be memorized before the first program makes sense;
+- error messages written in plain words that say what to change, without
+  assuming Rust vocabulary such as "borrow" or "lifetime";
+- a language reference short enough to read in one sitting, and a beginner's
+  guide written for them (milestone 4).
 
 An AI coding agent sees:
 
@@ -117,7 +124,8 @@ In priority order. When two conflict, the earlier one wins.
    are preserved. The generated Rust is checked by rustc, and Varyk never works
    around rustc with unsafe code.
 2. **Newcomer first, human or agent.** Every tie-breaker on the surface
-   language goes toward the developer who has never written Rust. AI agents
+   language goes toward someone who has never programmed, then toward the
+   developer who has never written Rust. AI agents
    are first-class writers of Varyk. Where their needs and human readability
    diverge, human readability wins.
 3. **Rust syntax with sigils inferred.** Functions borrow their arguments by
@@ -204,8 +212,9 @@ Unsupported features must fail loudly. Nothing may silently mis-compile.
   structs have no display form yet.
 
 Type inference covers `let` bindings without annotations. Integer and float
-literals take their type from context, as in Rust, and fall back to `i32` and
-`f64`.
+literals take the type their immediate context expects, with `i32` and `f64`
+as fallbacks; milestone 1 does not infer a literal's type backwards from later
+uses.
 
 ### 4.2 Ownership rules
 
@@ -236,9 +245,11 @@ mutable borrow, or owned.
   fields, and bindings are never borrowed places: reading one yields an owned
   copy. A borrowed place cannot flow into an **owned slot**: a struct field, a
   return value, an imported Rust parameter taken by value, or a `let` binding
-  that section 4.3 determines must be owned. The diagnostic names the
-  parameter or the struct the field belongs to, and says milestone 2 will
-  allow borrowed returns and field moves.
+  that section 4.3 determines must be owned. The diagnostic says in plain
+  words that the value belongs to the caller, naming the parameter, or is
+  kept inside the struct the field belongs to, and so cannot be stored or
+  returned from here; a note gives the Rust-terms explanation and says
+  milestone 2 will allow it.
 - `let b = a;` moves, as in Rust. Later use of `a` is an error, and the
   diagnostic shows where the move happened. `string` is never `Copy` in Varyk,
   whatever its representation in the generated Rust.
@@ -328,7 +339,8 @@ the HIR is designed to carry it.
 
 `mod greet;` in the entry file resolves to `greet.vr` or `greet.rs` in the same
 directory. This is Rust's module rule, extended to `.vr` files. If both files
-exist, that is an error, and `main` is not a valid module name. Items are
+exist, that is an error, and neither `main` nor `lib` is a valid module
+name (they are cargo's crate roots). Items are
 referenced through their module path, as in
 `greet::hello(name)`, and the generated Rust spells every such path with a
 `crate::` prefix so it resolves the same way from any module.
@@ -344,8 +356,12 @@ tree mirrors the source tree.
 
 A `.rs` module is copied verbatim into the generated crate and compiled as
 edition 2024. In milestone 1 it may use only the standard library, because the
-generated crate has no dependencies, and it may not declare nested modules,
-because only the one file is copied. Its top-level free `pub fn` items are
+generated crate has no dependencies, and it may not declare nested modules or
+include other files, because only the one file is copied; `varyk check`
+rejects those with V0104. Beyond that, `varyk check` does not validate the
+Rust inside a `.rs` file: rustc does, at `varyk build`. The "passes check,
+compiles under rustc" guarantee is for Varyk code and imported signatures,
+not for the body of a Rust module. Its top-level free `pub fn` items are
 parsed with the `syn` crate and imported. Methods, `pub(crate)` and
 `pub(super)` items, `unsafe fn`, `async fn`, `const fn`, `#[cfg]`-gated items,
 and macro-generated items are ignored. Imported signatures map to Varyk modes
@@ -460,7 +476,7 @@ fn main() {
 ```text
 varyk/
 ├── Cargo.toml                  workspace; edition 2024 in each crate manifest
-├── rust-toolchain.toml         pinned stable toolchain for building the compiler
+├── rust-toolchain.toml         stable channel; MSRV 1.85 declared in Cargo.toml and checked in CI
 ├── LICENSE-MIT, LICENSE-APACHE dual license, Rust ecosystem convention
 ├── README.md
 ├── .gitignore
@@ -470,8 +486,8 @@ varyk/
 │       ├── src/
 │       │   ├── diagnostics/    Diagnostic type, codes, renderer adapter, JSON output
 │       │   ├── resolve.rs      names, modules, imported Rust signatures
-│       │   ├── types.rs        type checking, inference, string representation
-│       │   ├── borrow.rs       parameter modes, moves, places, mutability contracts
+│       │   ├── types.rs        type checking, inference; `Ty` and `ParamMode`
+│       │   ├── borrow.rs       parameter modes, places, moves, mutability contracts, string representation
 │       │   ├── hir.rs          lowered program with semantic decisions
 │       │   ├── interop.rs      syn-based import of `.rs` signatures
 │       │   ├── backend/        Backend trait, RustBackend
@@ -499,8 +515,8 @@ source (.vr)
   → lexer            tokens with spans
   → parser           AST, recursive descent, Pratt for expressions
   → resolver         names, `mod` declarations, imported .rs signatures
-  → type checker     types, inference, string representation per binding
-  → borrow analysis  parameter modes, places, mutability contracts, whole-variable moves
+  → type checker     types, inference
+  → borrow analysis  parameter modes, places, mutability contracts, whole-variable moves, string representation per binding
   → HIR              semantic decisions made explicit
   → Backend trait    RustBackend: Cargo project under target/varyk/<name>/
   → cargo build      rustc does code generation and the full borrow check
@@ -573,21 +589,27 @@ directory, which is the normal situation when adopting Varyk inside an
 existing Rust project.
 
 Cargo is invoked with a shared target directory, `target/varyk/cache/`, so
-dependencies compile once across programs. The executable is at
-`target/varyk/cache/<profile>/<package name>`. `varyk build` builds the debug
-profile by default and accepts `--release`; integer overflow behaves as in
-Rust for the chosen profile.
+dependencies compile once across programs. The driver does not predict the
+executable's path itself; it reads it from cargo's `compiler-artifact`
+message, so it stays correct even when `CARGO_BUILD_TARGET` or
+`[build].target` nests the profile directory under an extra target-triple
+path component. `varyk build` builds the debug profile by default and
+accepts `--release`; integer overflow behaves as in Rust for the chosen
+profile.
 
 The generated crate begins with `#![allow(dead_code, unused_variables,
-unused_mut)]`, because generated code triggers these warnings routinely and
-they mean nothing to a Varyk writer. In milestone 1 this also covers copied
+unused_mut, arithmetic_overflow, unconditional_panic)]`. The first three
+are warnings generated code triggers routinely; the last two are rustc's
+compile-time refusals of constant overflow and division by zero, allowed so
+that such a program panics at run time with Rust's own message, as it would
+with non-constant operands. In milestone 1 the attribute also covers copied
 `.rs` modules; per-file handling is milestone 2.
 
 The generated Rust is emitted by the backend in a deterministic, readable
 style, and builds do not depend on rustfmt being installed. `--emit-rust`
-prints every `.rs` file in the generated crate to stdout, each preceded by a
-header line naming the file, passed through rustfmt when rustfmt is on the
-path, and then continues the build.
+prints the generated `Cargo.toml` and every `.rs` file in the generated crate
+to stdout, each preceded by a header line naming the file, passed through
+rustfmt when rustfmt is on the path, and then continues the build.
 
 ### 6.5 Two-layer safety
 
@@ -666,7 +688,8 @@ Every command accepts `--message-format=json` to emit structured diagnostics
 instead of the human renderer.
 
 `check` is the fast loop and must stay fast. The build directory lives under
-`target/varyk/` and generated Rust never lands in the source tree.
+`target/varyk/` in the current directory, and generated Rust never lands next
+to the `.vr` files.
 
 ### 6.8 Packages and Cargo
 
@@ -739,7 +762,9 @@ milestone titles.
   on three open questions in section 9: how Varyk structs derive serde's
   traits, the async runtime shape, and ownership-transfer syntax.
 - **Milestone 4: tooling and beyond.** Language server on top of
-  `varyk-syntax`, and a decision on a native backend.
+  `varyk-syntax`, a beginner's guide written for people with no programming
+  background with error messages checked against that audience, and a
+  decision on a native backend.
 - **Unscheduled, pending open questions.** Declaring generics, traits, and
   attributes in Varyk code.
 
@@ -800,4 +825,5 @@ Recorded, deliberately unanswered.
 | Diagnostics renderer | `annotate-snippets` | maintained by the Rust project; no renderer to own |
 | Concurrency | Rust async, JavaScript surface, built-in runtime | ecosystem is already async |
 | License | MIT or Apache-2.0 | Rust ecosystem convention |
+| Learnability | designed to be learnable without a programming background; plain-word diagnostics | the audience Varyk is meant to grow, not only Rust or JavaScript developers |
 | AI agents | first-class writers, humans win on conflicts | Rust knowledge transfers; the removed syntax is where models fail; structured diagnostics close the loop |

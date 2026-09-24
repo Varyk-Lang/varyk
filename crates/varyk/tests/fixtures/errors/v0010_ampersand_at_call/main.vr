@@ -1,0 +1,12 @@
+struct User {
+    name: string,
+}
+
+fn greet(user: User) {
+    println!("Hello, {}!", user.name);
+}
+
+fn main() {
+    let user = User { name: "Alice" };
+    greet(&user);
+}

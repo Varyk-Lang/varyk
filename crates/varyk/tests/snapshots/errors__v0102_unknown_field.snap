@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0102]: no field `age` on type `User`
+ --> crates/varyk/tests/fixtures/errors/v0102_unknown_field/main.vr:7:25
+  |
+7 |     println!("{}", user.age);
+  |                         ^^^ no field `age` on type `User`

@@ -1,0 +1,22 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn make() -> string {\\n    \\\"Ann\\\"\\n}\\n\\nfn same(user: User, other: string) -> bool {\\n    user.name == make() && other != user.name && other == \\\"x\\\"\\n}\\n\\nfn main() {\\n    let user = User { name: \\\"Ann\\\" };\\n    println!(\\\"{}\\\", same(user, \\\"Ann\\\"));\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct User {
+    name: String,
+}
+
+fn make() -> String {
+    "Ann".to_string()
+}
+
+fn same(user: &User, other: &str) -> bool {
+    user.name.as_str() == make().as_str() && other != user.name.as_str() && other == "x"
+}
+
+fn main() {
+    let user = User { name: "Ann".to_string() };
+    println!("{}", same(&user, "Ann"));
+}

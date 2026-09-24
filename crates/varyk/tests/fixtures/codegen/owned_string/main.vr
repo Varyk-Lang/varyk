@@ -1,0 +1,22 @@
+mod ext;
+
+struct Label {
+    text: string,
+}
+
+fn make() -> string {
+    let s = "made";
+    s
+}
+
+fn wrap() -> Label {
+    let s = "wrapped";
+    Label { text: s }
+}
+
+fn main() {
+    let s = "loud";
+    println!("{}", ext::shout(s));
+    println!("{}", make());
+    println!("{}", wrap().text);
+}

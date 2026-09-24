@@ -1,0 +1,16 @@
+struct User {
+    name: string,
+}
+
+fn rename(mut user: User) {
+    user.name = "Bob";
+}
+
+fn update(user: User) {
+    rename(user);
+}
+
+fn main() {
+    let mut user = User { name: "Alice" };
+    update(user);
+}

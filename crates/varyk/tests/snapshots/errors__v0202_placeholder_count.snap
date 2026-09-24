@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0202]: the format string has 2 placeholders but 1 argument was given
+ --> crates/varyk/tests/fixtures/errors/v0202_placeholder_count/main.vr:3:5
+  |
+3 |     println!("{} is {} years old", name);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the format string has 2 placeholders but 1 argument was given

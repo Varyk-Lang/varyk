@@ -1,0 +1,23 @@
+struct Hidden {
+    x: i32,
+}
+
+fn private_use(h: Hidden) -> Hidden {
+    h
+}
+
+pub fn take(h: Hidden) -> i32 {
+    h.x
+}
+
+pub fn make() -> Hidden {
+    Hidden { x: 1 }
+}
+
+pub struct Shown {
+    h: Hidden,
+}
+
+struct Quiet {
+    h: Hidden,
+}

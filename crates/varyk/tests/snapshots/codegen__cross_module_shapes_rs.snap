@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/shapes.rs\")"
+---
+pub struct Point {
+    pub x: i32,
+}
+
+pub fn make(x: i32) -> Point {
+    Point { x: x }
+}
+
+pub fn show(p: &Point) {
+    println!("{}", p.x);
+}

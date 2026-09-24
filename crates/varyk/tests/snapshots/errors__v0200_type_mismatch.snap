@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0200]: mismatched types: expected `i32`, found `string`
+ --> crates/varyk/tests/fixtures/errors/v0200_type_mismatch/main.vr:2:20
+  |
+2 |     let age: i32 = "thirty";
+  |                    ^^^^^^^^ mismatched types: expected `i32`, found `string`

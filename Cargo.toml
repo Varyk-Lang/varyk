@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/varyk-syntax", "crates/varyk"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Vlad Mickevic"]
+repository = "https://github.com/Varyk-Lang/varyk"
+homepage = "https://varyk.com"
+rust-version = "1.85"

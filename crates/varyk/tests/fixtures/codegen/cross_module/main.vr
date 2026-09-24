@@ -1,0 +1,7 @@
+mod shapes;
+
+fn main() {
+    let p = shapes::make(1);
+    shapes::show(p);
+    println!("{}", p.x * 2);
+}

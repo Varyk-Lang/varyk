@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0104]: cannot parse `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_include/ext.rs`: uses `include!`, which is not supported: only the module file itself is copied
+ --> crates/varyk/tests/fixtures/errors/v0104_rust_module_with_include/main.vr:1:1
+  |
+1 | mod ext;
+  | ^^^^^^^^ cannot parse `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_include/ext.rs`: uses `include!`, which is not supported: only the module file itself is copied

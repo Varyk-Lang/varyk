@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `name` belongs to the caller of this function, so it cannot be stored in field `name` of `User`
+ --> crates/varyk/tests/fixtures/errors/v0304_param_into_struct/main.vr:6:18
+  |
+6 |     User { name: name }
+  |                  ^^^^ `name` belongs to the caller of this function, so it cannot be stored in field `name` of `User`
+  |
+  = note: milestone 2 will allow this; in Rust terms, a borrowed value cannot move into a place that owns it

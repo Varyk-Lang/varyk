@@ -1,0 +1,11 @@
+pub struct Point {
+    x: i32,
+}
+
+pub fn make(x: i32) -> Point {
+    Point { x: x }
+}
+
+pub fn show(p: Point) {
+    println!("{}", p.x);
+}

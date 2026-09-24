@@ -1,0 +1,27 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"fn show(s: string) {\\n    println!(\\\"{}\\\", s);\\n}\\n\\nfn clear(mut s: string) {\\n    s = \\\"\\\";\\n}\\n\\nfn main() {\\n    let c = true;\\n    show(if c { \\\"a\\\" } else { \\\"b\\\" });\\n    clear(if c { \\\"a\\\" } else { \\\"b\\\" });\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn show(s: &str) {
+    println!("{}", s);
+}
+
+fn clear(s: &mut String) {
+    *s = "".to_string();
+}
+
+fn main() {
+    let c = true;
+    show(if c {
+        "a"
+    } else {
+        "b"
+    });
+    clear(&mut (if c {
+        "a".to_string()
+    } else {
+        "b".to_string()
+    }));
+}
