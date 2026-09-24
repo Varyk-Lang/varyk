@@ -1,0 +1,20 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"fn show(s: string) {\\n    println!(\\\"{}\\\", s);\\n}\\n\\nfn forward(s: string) {\\n    show(s);\\n}\\n\\nfn main() {\\n    let s = \\\"x\\\";\\n    show(s);\\n    show(\\\"y\\\");\\n    forward(s);\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn show(s: &str) {
+    println!("{}", s);
+}
+
+fn forward(s: &str) {
+    show(s);
+}
+
+fn main() {
+    let s = "x";
+    show(s);
+    show("y");
+    forward(s);
+}

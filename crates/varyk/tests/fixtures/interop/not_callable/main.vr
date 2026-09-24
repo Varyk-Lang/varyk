@@ -1,0 +1,8 @@
+mod ext;
+
+fn main() {
+    let s = "hi";
+    ext::by_ref_string(s);
+    ext::generic(1);
+    ext::ref_return(s);
+}

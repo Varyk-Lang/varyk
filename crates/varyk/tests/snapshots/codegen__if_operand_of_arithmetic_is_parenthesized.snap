@@ -1,0 +1,17 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"fn pick(c: bool) -> i32 {\\n    if c { 1 } else { 2 } + 10\\n}\\n\\nfn main() {\\n    println!(\\\"{}\\\", pick(true));\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn pick(c: bool) -> i32 {
+    (if c {
+        1
+    } else {
+        2
+    }) + 10
+}
+
+fn main() {
+    println!("{}", pick(true));
+}

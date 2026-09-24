@@ -1,0 +1,15 @@
+fn hidden() {}
+
+pub fn shown(mut n: i32, s: string) {}
+
+struct Secret {
+    x: i32,
+}
+
+struct Holder {
+    s: Secret,
+}
+
+pub struct Open {
+    x: i32,
+}

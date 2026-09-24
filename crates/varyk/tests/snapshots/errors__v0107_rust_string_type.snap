@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0107]: `String` is not a Varyk type; Varyk's string type is `string`
+ --> crates/varyk/tests/fixtures/errors/v0107_rust_string_type/main.vr:1:16
+  |
+1 | fn greet(name: String) {
+  |                ^^^^^^ `String` is not a Varyk type; Varyk's string type is `string`
+  |
+help: replace `String` with `string`

@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0103]: the name `greet` is defined more than once
+ --> crates/varyk/tests/fixtures/errors/v0103_duplicate_definition/main.vr:5:4
+  |
+1 | fn greet() {
+  |    ----- `greet` first defined here
+...
+5 | fn greet() {
+  |    ^^^^^ the name `greet` is defined more than once

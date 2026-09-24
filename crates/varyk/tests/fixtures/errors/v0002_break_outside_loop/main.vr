@@ -1,0 +1,7 @@
+fn main() {
+    let count = 3;
+    if count > 2 {
+        break;
+    }
+    println!("{}", count);
+}

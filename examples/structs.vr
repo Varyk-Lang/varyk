@@ -1,0 +1,22 @@
+// expected output:
+// Alice
+// Alice
+
+struct User {
+    name: string,
+    age: i32,
+}
+
+fn print_user(user: User) {
+    println!("{}", user.name);
+}
+
+fn main() {
+    let user = User {
+        name: "Alice",
+        age: 30,
+    };
+
+    print_user(user);
+    print_user(user);
+}

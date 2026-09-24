@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0012]: lifetimes are inferred
+ --> crates/varyk/tests/fixtures/errors/v0012_lifetime_parameter/main.vr:1:9
+  |
+1 | fn greet<'a>() {
+  |         ^^^^ lifetimes are inferred
+  |
+help: remove `<'a>`

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/cli.rs
+expression: stderr
+---
+error[V0002]: expected an expression
+ --> crates/varyk/tests/fixtures/parse_error/main.vr:1:21
+  |
+1 | fn main() { let x = ; }
+  |                     ^ expected an expression

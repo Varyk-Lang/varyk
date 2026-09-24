@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0109]: a struct cannot contain itself
+ --> crates/varyk/tests/fixtures/errors/v0109_recursive_struct/main.vr:3:5
+  |
+3 |     next: Node,
+  |     ^^^^^^^^^^ a struct cannot contain itself
+  |
+  = note: the cycle is Node -> Node

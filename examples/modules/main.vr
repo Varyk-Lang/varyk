@@ -1,0 +1,7 @@
+// expected output: 49
+
+mod math;
+
+fn main() {
+    println!("{}", math::square(7));
+}

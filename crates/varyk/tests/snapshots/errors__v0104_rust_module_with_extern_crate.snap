@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0104]: cannot parse `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/ext.rs`: depends on the crate `serde`, which is not supported: the generated crate has no dependencies
+ --> crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/main.vr:1:1
+  |
+1 | mod ext;
+  | ^^^^^^^^ cannot parse `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/ext.rs`: depends on the crate `serde`, which is not supported: the generated crate has no dependencies

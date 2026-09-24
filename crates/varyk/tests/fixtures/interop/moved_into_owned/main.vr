@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let s = "moved";
+    println!("{}", ext::take(s));
+    println!("{}", s);
+}

@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0301]: `count` cannot be changed because it was declared without `mut`
+ --> crates/varyk/tests/fixtures/errors/v0301_assign_immutable_let/main.vr:3:5
+  |
+2 |     let count = 1;
+  |         ----- `count` is declared here without `mut`
+3 |     count = 2;
+  |     ^^^^^ `count` cannot be changed because it was declared without `mut`
+  |
+help: insert `mut ` before `count`

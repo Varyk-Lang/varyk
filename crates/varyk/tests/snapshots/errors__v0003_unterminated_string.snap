@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0003]: this string has no closing `"`
+ --> crates/varyk/tests/fixtures/errors/v0003_unterminated_string/main.vr:2:14
+  |
+2 |     println!("hello);
+  |              ^ this string has no closing `"`

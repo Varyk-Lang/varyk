@@ -1,0 +1,22 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"struct Point {\\n    x: i32,\\n}\\n\\nfn make() -> Point {\\n    Point { x: 1 }\\n}\\n\\nfn main() {\\n    let c = true;\\n    if c { make() } else { make() };\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct Point {
+    x: i32,
+}
+
+fn make() -> Point {
+    Point { x: 1 }
+}
+
+fn main() {
+    let c = true;
+    if c {
+        make()
+    } else {
+        make()
+    };
+}

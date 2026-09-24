@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0303]: `rename` may change `user`, but this function only reads `user`
+  --> crates/varyk/tests/fixtures/errors/v0303_param_to_mut_param/main.vr:10:12
+   |
+ 9 | fn update(user: User) {
+   |           ---- `user` is declared here without `mut`
+10 |     rename(user);
+   |            ^^^^ `rename` may change `user`, but this function only reads `user`
+   |
+   = note: adding `mut` to `user` means every caller of `update` must also pass something it is allowed to change
+help: insert `mut ` before `user`

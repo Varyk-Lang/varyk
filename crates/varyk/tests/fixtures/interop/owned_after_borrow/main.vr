@@ -1,0 +1,17 @@
+mod ext;
+
+fn bad() {
+    let s = "x";
+    ext::both(s, s);
+}
+
+fn good() {
+    let s = "x";
+    let t = "y";
+    ext::both(s, t);
+}
+
+fn main() {
+    bad();
+    good();
+}

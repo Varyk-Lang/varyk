@@ -11,20 +11,20 @@ date. An item in progress is marked in its text.
 
 Spec: `docs/specs/2026-09-23-varyk-design.md`.
 
-- [ ] Workspace with `varyk-syntax` and `varyk` crates, pinned stable toolchain, edition 2024
-- [ ] Lexer and recursive-descent parser with spans on every node
-- [ ] Resolver, type checker with per-binding string representation, and borrow analysis (modes, places, moves) producing HIR
-- [ ] `println!` intrinsic with placeholder-count check
-- [ ] `mod name;` resolving to `.vr` or `.rs` modules, `pub` visibility, `crate::` paths
-- [ ] Import of top-level `pub fn` signatures from `.rs` modules via `syn`
-- [ ] `RustBackend` writing a Cargo project under `target/varyk/`, with `[workspace]` table, `mod` declarations, crate-wide warning allows, and `--emit-rust`
-- [ ] Driver invoking `cargo build` with a shared target directory and passing rustc errors through with a note
-- [ ] Diagnostics with `Vnnnn` codes, fix-its, `annotate-snippets` rendering, `--message-format=json`
-- [ ] Rust-habit diagnostics: `&x` at call sites, `&T` in parameters, `String`/`str`, lifetimes
-- [ ] CLI: `varyk check`, `varyk build`, `varyk run`, `--release`
-- [ ] Six examples building and running with expected output
-- [ ] Unit tests, `insta` snapshots, integration tests, CI (fmt, clippy, test)
-- [ ] `README.md`, `docs/design.md`, `docs/language.md`, `docs/open-questions.md`, dual license
+- [x] Workspace with `varyk-syntax` and `varyk` crates, stable toolchain, MSRV 1.85 checked in CI, edition 2024
+- [x] Lexer and recursive-descent parser with spans on every node
+- [x] Resolver, type checker, and borrow analysis (modes, places, moves, per-binding string representation) producing HIR
+- [x] `println!` intrinsic with placeholder-count check
+- [x] `mod name;` resolving to `.vr` or `.rs` modules, `pub` visibility, `crate::` paths
+- [x] Import of top-level `pub fn` signatures from `.rs` modules via `syn`
+- [x] `RustBackend` writing a Cargo project under `target/varyk/`, with `[workspace]` table, `mod` declarations, crate-wide warning allows, and `--emit-rust`
+- [x] Driver invoking `cargo build` with a shared target directory and passing rustc errors through with a note
+- [x] Diagnostics with `Vnnnn` codes, fix-its, `annotate-snippets` rendering, `--message-format=json`
+- [x] Rust-habit diagnostics: `&x` at call sites, `&T` in parameters, `String`/`str`, lifetimes
+- [x] CLI: `varyk check`, `varyk build`, `varyk run`, `--release`
+- [x] Six examples building and running with expected output
+- [x] Unit tests, `insta` snapshots, integration tests, CI (fmt, clippy, test)
+- [x] `README.md`, `docs/design.md`, `docs/language.md`, `docs/open-questions.md`, dual license
 
 Done when every item above is checked. The full definition of done is
 section 7 of the spec.
@@ -46,6 +46,7 @@ section 7 of the spec.
 - [ ] `varyk init` with a `build.rs` so plain `cargo build` works
 - [ ] Publishing a Varyk library to crates.io with generated `.rs` included
 - [ ] `varyk fmt`, a deterministic formatter on `varyk-syntax`
+- [ ] Site at varyk.com: the pitch, `borrowing.vr` beside its generated Rust, getting started, install via `cargo install varyk`, the language reference
 
 ## Milestone 3: batteries for services
 

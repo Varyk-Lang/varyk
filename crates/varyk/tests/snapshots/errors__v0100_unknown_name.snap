@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0100]: nothing named `nmae` exists here
+ --> crates/varyk/tests/fixtures/errors/v0100_unknown_name/main.vr:3:28
+  |
+3 |     println!("Hello, {}!", nmae);
+  |                            ^^^^ nothing named `nmae` exists here

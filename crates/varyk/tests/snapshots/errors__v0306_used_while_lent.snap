@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0306]: `person` is used here while it is still lent out earlier in the same expression
+  --> crates/varyk/tests/fixtures/errors/v0306_used_while_lent/main.vr:16:28
+   |
+16 |     greet(person, { rename(person); hello });
+   |           ------           ^^^^^^ `person` is used here while it is still lent out earlier in the same expression
+   |           |
+   |           `person` is lent out here
+   |
+   = note: in Rust terms, the earlier borrow lasts until the whole call or comparison is made; store the value with `let` first

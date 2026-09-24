@@ -1,0 +1,11 @@
+fn greet() {
+    println!("Hello!");
+}
+
+fn greet() {
+    println!("Hi!");
+}
+
+fn main() {
+    greet();
+}

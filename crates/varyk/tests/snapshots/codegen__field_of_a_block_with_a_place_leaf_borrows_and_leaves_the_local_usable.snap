@@ -1,0 +1,17 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"struct Point {\\n    x: i32,\\n}\\n\\nfn main() {\\n    let p = Point { x: 1 };\\n    let x = { p }.x;\\n    println!(\\\"{} {}\\\", x, p.x);\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct Point {
+    x: i32,
+}
+
+fn main() {
+    let p = Point { x: 1 };
+    let x = ({
+        &p
+    }).x;
+    println!("{} {}", x, p.x);
+}

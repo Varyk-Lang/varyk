@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"struct Label {\\n    text: string,\\n}\\n\\nfn main() {\\n    let s = \\\"x\\\";\\n    let label = Label { text: s };\\n    println!(\\\"{}\\\", label.text);\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct Label {
+    text: String,
+}
+
+fn main() {
+    let s = "x".to_string();
+    let label = Label { text: s };
+    println!("{}", label.text);
+}

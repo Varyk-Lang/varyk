@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0105]: `Hidden` is used by a public item but is not public; add `pub` to the struct
+ --> crates/varyk/tests/fixtures/errors/v0105_private_struct_in_public_signature/pn.vr:5:16
+  |
+1 | struct Hidden {
+  | ------ declared here without `pub`
+...
+5 | pub fn mk() -> Hidden {
+  |                ^^^^^^ `Hidden` is used by a public item but is not public; add `pub` to the struct
+  |
+help: insert `pub ` before `struct`

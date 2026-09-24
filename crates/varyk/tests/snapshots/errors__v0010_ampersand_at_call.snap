@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0010]: Varyk infers references; remove the `&`
+  --> crates/varyk/tests/fixtures/errors/v0010_ampersand_at_call/main.vr:11:11
+   |
+11 |     greet(&user);
+   |           ^ Varyk infers references; remove the `&`
+   |
+help: remove `&`

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: unknown type `integer`
+ --> crates/varyk/tests/fixtures/errors/v0101_unknown_type/main.vr:1:16
+  |
+1 | fn show(count: integer) {
+  |                ^^^^^^^ unknown type `integer`

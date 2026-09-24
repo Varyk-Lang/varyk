@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: krate.cargo_toml
+---
+[package]
+name = "test_pkg"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]

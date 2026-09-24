@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0104]: no file for module `shapes`: expected `shapes.vr` or `shapes.rs` next to the entry file
+ --> crates/varyk/tests/fixtures/errors/v0104_module_file_missing/main.vr:1:1
+  |
+1 | mod shapes;
+  | ^^^^^^^^^^^ no file for module `shapes`: expected `shapes.vr` or `shapes.rs` next to the entry file

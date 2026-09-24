@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let mut s = "a";
+    let r = ext::mix(10, 2, s, "x");
+    println!("{}", r);
+}

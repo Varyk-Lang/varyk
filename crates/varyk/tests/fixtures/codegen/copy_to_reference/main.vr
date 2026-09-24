@@ -1,0 +1,12 @@
+mod ext;
+
+fn make() -> i32 {
+    7
+}
+
+fn main() {
+    let c = true;
+    let n = 1;
+    println!("{}", ext::peek(if c { make() } else { n }));
+    println!("{}", ext::peek({ let m = n; m }));
+}

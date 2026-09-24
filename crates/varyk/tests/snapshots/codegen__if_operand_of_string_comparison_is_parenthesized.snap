@@ -1,0 +1,17 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"fn same(c: bool, a: string) -> bool {\\n    (if c { a } else { \\\"b\\\" }) == \\\"x\\\"\\n}\\n\\nfn main() {\\n    println!(\\\"{}\\\", same(true, \\\"x\\\"));\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn same(c: bool, a: &str) -> bool {
+    (if c {
+        a
+    } else {
+        "b"
+    }) == "x"
+}
+
+fn main() {
+    println!("{}", same(true, "x"));
+}

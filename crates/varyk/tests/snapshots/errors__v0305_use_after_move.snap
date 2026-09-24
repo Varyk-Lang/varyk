@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0305]: `name` was given away earlier and cannot be used again
+ --> crates/varyk/tests/fixtures/errors/v0305_use_after_move/main.vr:8:34
+  |
+7 |     let user = User { name: name };
+  |                             ---- `name` is given away here
+8 |     println!("{} {}", user.name, name);
+  |                                  ^^^^ `name` was given away earlier and cannot be used again

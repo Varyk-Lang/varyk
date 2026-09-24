@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0011]: parameter types have no `&` in Varyk; write `user: User` to only read `user`, or `mut user: User` to change it
+ --> crates/varyk/tests/fixtures/errors/v0011_reference_parameter_type/main.vr:5:10
+  |
+5 | fn greet(user: &User) {
+  |          ^^^^^^^^^^^ parameter types have no `&` in Varyk; write `user: User` to only read `user`, or `mut user: User` to change it
+  |
+help: replace `user: &User` with `user: User`

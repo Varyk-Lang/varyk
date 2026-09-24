@@ -1,0 +1,52 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn make() -> User {\\n    User { name: \\\"Ann\\\" }\\n}\\n\\nfn text() -> string {\\n    \\\"t\\\"\\n}\\n\\nfn show(s: string) {\\n    println!(\\\"{}\\\", s);\\n}\\n\\nfn show_user(user: User) {\\n    println!(\\\"{}\\\", user.name);\\n}\\n\\nfn main() {\\n    let c = true;\\n    let s = text();\\n    show(if c { text() } else { make().name });\\n    show({ let a = make(); a.name });\\n    show({ let t = s; t });\\n    show_user({ let u = make(); u });\\n    println!(\\\"{}\\\", if c { make().name } else { \\\"lit\\\" });\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct User {
+    name: String,
+}
+
+fn make() -> User {
+    User { name: "Ann".to_string() }
+}
+
+fn text() -> String {
+    "t".to_string()
+}
+
+fn show(s: &str) {
+    println!("{}", s);
+}
+
+fn show_user(user: &User) {
+    println!("{}", user.name);
+}
+
+fn main() {
+    let c = true;
+    let s = text();
+    show(&(if c {
+        text()
+    } else {
+        make().name
+    }));
+    show(&({
+        let a = make();
+        a.name
+    }));
+    show(&({
+        let t = s;
+        t
+    }));
+    show_user(&({
+        let u = make();
+        u
+    }));
+    println!("{}", if c {
+        make().name
+    } else {
+        "lit".to_string()
+    });
+}

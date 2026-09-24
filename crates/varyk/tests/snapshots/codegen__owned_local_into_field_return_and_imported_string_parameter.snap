@@ -1,0 +1,28 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+mod ext;
+
+struct Label {
+    text: String,
+}
+
+fn make() -> String {
+    let s = "made".to_string();
+    s
+}
+
+fn wrap() -> Label {
+    let s = "wrapped".to_string();
+    Label { text: s }
+}
+
+fn main() {
+    let s = "loud".to_string();
+    println!("{}", crate::ext::shout(s));
+    println!("{}", make());
+    println!("{}", wrap().text);
+}

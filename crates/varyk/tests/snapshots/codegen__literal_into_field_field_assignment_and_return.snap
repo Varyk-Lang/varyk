@@ -1,0 +1,31 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"struct Label {\\n    text: string,\\n}\\n\\nfn tail() -> string {\\n    \\\"tail\\\"\\n}\\n\\nfn early(flag: bool) -> string {\\n    if flag {\\n        return \\\"early\\\";\\n    }\\n    \\\"late\\\"\\n}\\n\\nfn relabel(mut label: Label) {\\n    label.text = \\\"b\\\";\\n}\\n\\nfn main() {\\n    let mut label = Label { text: \\\"a\\\" };\\n    relabel(label);\\n    label.text = \\\"c\\\";\\n    println!(\\\"{} {} {}\\\", label.text, tail(), early(true));\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct Label {
+    text: String,
+}
+
+fn tail() -> String {
+    "tail".to_string()
+}
+
+fn early(flag: bool) -> String {
+    if flag {
+        return "early".to_string();
+    }
+    "late".to_string()
+}
+
+fn relabel(label: &mut Label) {
+    label.text = "b".to_string();
+}
+
+fn main() {
+    let mut label = Label { text: "a".to_string() };
+    relabel(&mut label);
+    label.text = "c".to_string();
+    println!("{} {} {}", label.text, tail(), early(true));
+}

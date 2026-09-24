@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let mut s = "a";
+    ext::mix(10, true, s, "x");
+    let r: i32 = ext::mix(10, 2, s, "x");
+}
