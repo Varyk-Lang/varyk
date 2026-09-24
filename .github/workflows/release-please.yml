@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+    # CARGO_REGISTRY_TOKEN is an environment secret of the `release` environment.
+    environment: release
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish varyk-syntax
+        run: cargo publish -p varyk-syntax
+
+      - name: Publish varyk
+        # The index needs a moment to see varyk-syntax; retry a few times.
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if cargo publish -p varyk; then exit 0; fi
+            echo "varyk-syntax not visible yet, retrying in 30s"; sleep 30
+          done
+          exit 1
