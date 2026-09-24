@@ -1,4 +1,4 @@
 {
-  "crates/varyk-syntax": "0.0.0",
-  "crates/varyk": "0.0.0"
+  "crates/varyk-syntax": "0.0.1",
+  "crates/varyk": "0.0.1"
 }
