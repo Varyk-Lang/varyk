@@ -22,6 +22,12 @@ fn keyword_kind(word: &str) -> Option<TokenKind> {
         "break" => TokenKind::Break,
         "continue" => TokenKind::Continue,
         "return" => TokenKind::Return,
+        "enum" => TokenKind::Enum,
+        "impl" => TokenKind::Impl,
+        "match" => TokenKind::Match,
+        "for" => TokenKind::For,
+        "in" => TokenKind::In,
+        "self" => TokenKind::SelfKw,
         "true" => TokenKind::BoolLiteral(true),
         "false" => TokenKind::BoolLiteral(false),
         _ => return None,
@@ -31,10 +37,10 @@ fn keyword_kind(word: &str) -> Option<TokenKind> {
 /// Every other Rust keyword and reserved word, including the 2024-edition
 /// ones.
 const RESERVED_KEYWORDS: &[&str] = &[
-    "as", "async", "await", "const", "crate", "dyn", "enum", "extern", "for", "impl", "in", "loop",
-    "match", "move", "ref", "self", "Self", "static", "super", "trait", "type", "unsafe", "use",
-    "where", "abstract", "become", "box", "do", "final", "gen", "macro", "override", "priv", "try",
-    "typeof", "unsized", "virtual", "yield",
+    "as", "async", "await", "const", "crate", "dyn", "extern", "loop", "move", "ref", "Self",
+    "static", "super", "trait", "type", "unsafe", "use", "where", "abstract", "become", "box",
+    "do", "final", "gen", "macro", "override", "priv", "try", "typeof", "unsized", "virtual",
+    "yield",
 ];
 
 /// Lexes `file` into tokens and any syntax errors found along the way.
@@ -102,6 +108,8 @@ impl<'a> Lexer<'a> {
                     self.chars.next();
                     if self.eat_if('=') {
                         self.push(TokenKind::EqEq, start, start + 2);
+                    } else if self.eat_if('>') {
+                        self.push(TokenKind::FatArrow, start, start + 2);
                     } else {
                         self.push(TokenKind::Eq, start, start + 1);
                     }
@@ -156,11 +164,21 @@ impl<'a> Lexer<'a> {
                 }
                 ';' => self.single(TokenKind::Semi, start),
                 ',' => self.single(TokenKind::Comma, start),
-                '.' => self.single(TokenKind::Dot, start),
+                '.' => {
+                    self.chars.next();
+                    if self.eat_if('.') {
+                        self.push(TokenKind::DotDot, start, start + 2);
+                    } else {
+                        self.push(TokenKind::Dot, start, start + 1);
+                    }
+                }
                 '(' => self.single(TokenKind::LParen, start),
                 ')' => self.single(TokenKind::RParen, start),
                 '{' => self.single(TokenKind::LBrace, start),
                 '}' => self.single(TokenKind::RBrace, start),
+                '[' => self.single(TokenKind::LBracket, start),
+                ']' => self.single(TokenKind::RBracket, start),
+                '?' => self.single(TokenKind::Question, start),
                 other => {
                     self.chars.next();
                     self.unknown_char(start, other);
@@ -384,9 +402,11 @@ impl<'a> Lexer<'a> {
         let span = Span::new(self.file_id, start as u32, (start + c.len_utf8()) as u32);
         let message = match c {
             '#' => "attributes (`#`) are not supported in Varyk yet".to_string(),
-            '[' | ']' => format!("arrays and indexing (`{c}`) are not supported in Varyk yet"),
-            '|' => "closures (`|`) are not supported in Varyk yet".to_string(),
-            '?' => "the `?` operator is not supported in Varyk yet".to_string(),
+            '|' => {
+                "closures (`|`) or alternative patterns (`a | b`) are not supported in Varyk yet"
+                    .to_string()
+            }
+            '@' => "`@` bindings in patterns are not supported in Varyk yet".to_string(),
             c if !c.is_ascii() && c.is_alphanumeric() => {
                 format!("non-ASCII names are not supported in Varyk yet: `{c}`")
             }
@@ -429,6 +449,12 @@ mod tests {
             ("break", TokenKind::Break),
             ("continue", TokenKind::Continue),
             ("return", TokenKind::Return),
+            ("enum", TokenKind::Enum),
+            ("impl", TokenKind::Impl),
+            ("match", TokenKind::Match),
+            ("for", TokenKind::For),
+            ("in", TokenKind::In),
+            ("self", TokenKind::SelfKw),
             ("true", TokenKind::BoolLiteral(true)),
             ("false", TokenKind::BoolLiteral(false)),
         ];
@@ -666,7 +692,7 @@ mod tests {
 
     #[test]
     fn unknown_character_yields_v0001_naming_it_and_continues() {
-        let f = file("a @ b");
+        let f = file("a $ b");
         let (tokens, errors) = lex(&f);
         assert_eq!(
             tokens.iter().map(|t| &t.kind).collect::<Vec<_>>(),
@@ -677,7 +703,7 @@ mod tests {
         );
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].code, V0001);
-        assert_eq!(errors[0].message, "unknown character `@`");
+        assert_eq!(errors[0].message, "unknown character `$`");
     }
 
     #[test]
@@ -709,13 +735,25 @@ mod tests {
     }
 
     #[test]
-    fn lone_pipe_names_closures() {
+    fn lone_pipe_names_closures_and_alternative_patterns() {
         let f = file("|");
         let (tokens, errors) = lex(&f);
         assert!(tokens.is_empty());
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].code, V0001);
         assert!(errors[0].message.contains("closures"));
+        assert!(errors[0].message.contains("alternative patterns"));
+    }
+
+    #[test]
+    fn lone_at_names_pattern_bindings() {
+        let f = file("@");
+        let (tokens, errors) = lex(&f);
+        assert!(tokens.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, V0001);
+        assert!(errors[0].message.contains('@'));
+        assert!(errors[0].message.contains("bindings"));
     }
 
     #[test]
@@ -730,15 +768,29 @@ mod tests {
         );
     }
 
+    // --- Milestone-2 tokens ---------------------------------------------
+
     #[test]
-    fn bracket_names_arrays_and_indexing() {
-        let f = file("[");
-        let (_tokens, errors) = lex(&f);
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].code, V0001);
+    fn brackets_lex_as_tokens() {
         assert_eq!(
-            errors[0].message,
-            "arrays and indexing (`[`) are not supported in Varyk yet"
+            lex_kinds("[ ]"),
+            vec![TokenKind::LBracket, TokenKind::RBracket]
         );
+    }
+
+    #[test]
+    fn question_lexes_as_a_token() {
+        assert_eq!(lex_kinds("?"), vec![TokenKind::Question]);
+    }
+
+    #[test]
+    fn dot_dot_lexes_as_one_token() {
+        assert_eq!(lex_kinds(".."), vec![TokenKind::DotDot]);
+        assert_eq!(lex_kinds("."), vec![TokenKind::Dot]);
+    }
+
+    #[test]
+    fn fat_arrow_lexes_as_one_token() {
+        assert_eq!(lex_kinds("=>"), vec![TokenKind::FatArrow]);
     }
 }

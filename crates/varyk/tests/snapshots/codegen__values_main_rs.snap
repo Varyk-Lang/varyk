@@ -1,0 +1,47 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+mod geo;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Named(String, Option<String>),
+    Point,
+}
+
+struct Inbox {
+    items: Vec<String>,
+    last: Option<Shape>,
+}
+
+fn area(known: bool) -> Result<f64, String> {
+    if known {
+        return Ok(2.5);
+    }
+    Err("no area".to_string())
+}
+
+fn counts(n: usize) -> Vec<usize> {
+    vec![n, 1usize, 2usize]
+}
+
+fn main() {
+    let name = "box".to_string();
+    let label = format!("{} has {} sides", name, 4);
+    println!("{}", label);
+    let shapes: Vec<Shape> = vec![Shape::Circle(1.0), Shape::Rect(2.0, 3.0), Shape::Point];
+    let named = Shape::Named(label, None);
+    let far = crate::geo::Shape::Point;
+    let near = crate::geo::Shape::Circle(0.5);
+    let user = crate::geo::User { name: "Ann".to_string() };
+    let empty: Vec<i32> = vec![];
+    let maybe: Option<i32> = None;
+    let inbox = Inbox { items: vec!["a".to_string(), name], last: Some(named) };
+    let result: Result<f64, String> = area(false);
+    let sizes: Vec<usize> = counts(3usize);
+    println!("{}", format!("{}!", user.name));
+}

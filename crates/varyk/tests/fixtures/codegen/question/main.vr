@@ -1,0 +1,75 @@
+struct User {
+    name: string,
+    age: i32,
+}
+
+fn digit(text: string) -> Result<i32, string> {
+    if text == "one" {
+        return Ok(1);
+    }
+    if text == "two" {
+        return Ok(2);
+    }
+    Err(format!("`{}` is not a digit", text))
+}
+
+fn name_of(id: i32) -> Result<string, string> {
+    if id == 1 {
+        return Ok("Ada");
+    }
+    Err("no such user")
+}
+
+fn load(id: i32) -> Result<User, string> {
+    let name = name_of(id)?;
+    Ok(User { name: name, age: 36 })
+}
+
+fn check(text: string) -> Result<bool, string> {
+    digit(text)?;
+    Ok(true)
+}
+
+fn sum(words: Vec<string>) -> Result<i32, string> {
+    let mut total = 0;
+    for word in words {
+        total = total + digit(word)?;
+    }
+    Ok(total)
+}
+
+fn first_age(id: i32) -> Result<i32, string> {
+    let found = load(id);
+    let user = found?;
+    Ok(user.age + load(id)?.age)
+}
+
+fn describe(id: i32) -> Result<string, string> {
+    let label = match name_of(id) {
+        Ok(name) => name,
+        Err(e) => name_of(1)?,
+    };
+    Ok(format!("{} ({})", label, load(1)?.name))
+}
+
+fn show(result: Result<i32, string>) {
+    match result {
+        Ok(n) => println!("ok {}", n),
+        Err(e) => println!("error: {}", e),
+    }
+}
+
+fn main() {
+    show(sum(vec!["one", "two"]));
+    show(sum(vec!["one", "three"]));
+    show(first_age(1));
+    show(first_age(2));
+    match check("two") {
+        Ok(_) => println!("checked"),
+        Err(e) => println!("error: {}", e),
+    }
+    match describe(5) {
+        Ok(text) => println!("{}", text),
+        Err(e) => println!("error: {}", e),
+    }
+}

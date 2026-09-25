@@ -1,0 +1,41 @@
+mod geo;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Named(string, Option<string>),
+    Point,
+}
+
+struct Inbox {
+    items: Vec<string>,
+    last: Option<Shape>,
+}
+
+fn area(known: bool) -> Result<f64, string> {
+    if known {
+        return Ok(2.5);
+    }
+    Err("no area")
+}
+
+fn counts(n: usize) -> Vec<usize> {
+    vec![n, 1, 2]
+}
+
+fn main() {
+    let name = "box";
+    let label = format!("{} has {} sides", name, 4);
+    println!("{}", label);
+    let shapes = vec![Shape::Circle(1.0), Shape::Rect(2.0, 3.0), Shape::Point];
+    let named = Shape::Named(label, None);
+    let far = geo::Shape::Point;
+    let near = geo::Shape::Circle(0.5);
+    let user = geo::User { name: "Ann" };
+    let empty: Vec<i32> = vec![];
+    let maybe: Option<i32> = None;
+    let inbox = Inbox { items: vec!["a", name], last: Some(named) };
+    let result = area(false);
+    let sizes = counts(3);
+    println!("{}", format!("{}!", user.name));
+}

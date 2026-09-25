@@ -1,0 +1,46 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "main_rs(\"enum Shape {\\n    Circle(f64),\\n    Named(string, Option<string>),\\n    Point,\\n}\\n\\nstruct Counter {\\n    count: i32,\\n}\\n\\nimpl Counter {\\n    fn new() -> Counter {\\n        Counter { count: 0 }\\n    }\\n\\n    fn add(mut self, by: i32) {\\n        self.count = self.count + by;\\n    }\\n}\\n\\nimpl Shape {\\n    fn sides(self) -> usize {\\n        0\\n    }\\n}\\n\\nimpl Counter {\\n    pub fn value(self) -> i32 {\\n        self.count\\n    }\\n}\\n\\nfn tally(v: Vec<usize>, r: Result<Shape, string>, mut c: Counter) -> Option<Vec<string>> {\\n    c.count = 1;\\n    tally(v, r, c)\\n}\\n\\nfn main() {\\n    let mut counter = Counter { count: 1 };\\n    counter.count = 2;\\n    println!(\\\"{}\\\", counter.count);\\n}\\n\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+enum Shape {
+    Circle(f64),
+    Named(String, Option<String>),
+    Point,
+}
+
+struct Counter {
+    count: i32,
+}
+
+impl Counter {
+    fn new() -> Counter {
+        Counter { count: 0 }
+    }
+
+    fn add(&mut self, by: i32) {
+        self.count = self.count + by;
+    }
+
+    pub fn value(&self) -> i32 {
+        self.count
+    }
+}
+
+impl Shape {
+    fn sides(&self) -> usize {
+        0usize
+    }
+}
+
+fn tally(v: &Vec<usize>, r: &Result<Shape, String>, c: &mut Counter) -> Option<Vec<String>> {
+    c.count = 1;
+    tally(v, r, c)
+}
+
+fn main() {
+    let mut counter = Counter { count: 1 };
+    counter.count = 2;
+    println!("{}", counter.count);
+}

@@ -1,0 +1,22 @@
+pub struct Task {
+    id: i32,
+}
+
+struct Hidden {
+    x: i32,
+}
+
+pub enum Shape {
+    Point,
+    Circle(f64),
+}
+
+impl Task {
+    pub fn new() -> Task {
+        Task { id: 0 }
+    }
+
+    fn secret(self) -> i32 {
+        self.id
+    }
+}

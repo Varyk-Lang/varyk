@@ -1,0 +1,100 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct Task {
+    title: String,
+    done: bool,
+}
+
+struct Board {
+    tasks: Vec<Task>,
+}
+
+impl Board {
+    fn open_count(&self) -> i32 {
+        let mut count = 0;
+        for t in &self.tasks {
+            if !t.done {
+                count = count + 1;
+            }
+        }
+        count
+    }
+}
+
+fn make_tasks() -> Vec<Task> {
+    vec![Task { title: "write".to_string(), done: false }, Task { title: "test".to_string(), done: true }]
+}
+
+fn titles(tasks: &Vec<Task>) {
+    for t in tasks {
+        println!("{}", t.title);
+    }
+}
+
+fn finish_all(tasks: &mut Vec<Task>) -> i32 {
+    let mut open = 0;
+    for t in &*tasks {
+        if t.done {
+            continue;
+        }
+        open = open + 1;
+    }
+    for i in 0usize..tasks.len() {
+        tasks[i].done = true;
+    }
+    open
+}
+
+fn sum(values: &Vec<i32>) -> i32 {
+    let mut total = 0;
+    for value in values {
+        let value = *value;
+        total = total + value;
+    }
+    total
+}
+
+fn words() -> Vec<String> {
+    vec!["alpha".to_string(), "beta".to_string()]
+}
+
+fn shout(word: &str) {
+    println!("{}!", word);
+}
+
+fn main() {
+    let numbers: Vec<i32> = vec![3, 4, 5];
+    let mut total = 0;
+    for n in &numbers {
+        let n = *n;
+        if n == 5 {
+            break;
+        }
+        total = total + n;
+    }
+    println!("{} {}", total, sum(&numbers));
+    for i in 0..3 {
+        println!("{}", i);
+    }
+    let mut tasks: Vec<Task> = make_tasks();
+    titles(&tasks);
+    println!("{} open, then {}", finish_all(&mut tasks), finish_all(&mut tasks));
+    let board = Board { tasks: make_tasks() };
+    println!("{}", board.open_count());
+    let names: Vec<String> = words();
+    for name in &names {
+        shout(name);
+    }
+    for word in words() {
+        shout(&word);
+    }
+    let mut kept: Vec<Task> = Vec::new();
+    for t in make_tasks() {
+        kept.push(t);
+    }
+    println!("{}", kept.len());
+}

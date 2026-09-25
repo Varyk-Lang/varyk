@@ -1,4 +1,4 @@
-//! Rust backend snapshot tests: the generated crate for the six
+//! Rust backend snapshot tests: the generated crate for the twelve
 //! examples, and one focused program per row of the spec 4.3 string table
 //! plus the other emission rules of spec 6.3 and 6.4.
 
@@ -51,7 +51,7 @@ fn main_rs(text: &str) -> String {
     file(&generate_str(text), "src/main.rs").to_string()
 }
 
-// --- The six examples -------------------------------------------------------
+// --- The six milestone-1 examples ------------------------------------------
 
 #[test]
 fn hello_main_rs() {
@@ -126,6 +126,76 @@ fn interop_crate_copies_greet_rs_verbatim() {
         .expect("greet.rs should exist");
     assert_eq!(file(&krate, "src/greet.rs"), source);
     insta::assert_snapshot!("interop_main_rs", file(&krate, "src/main.rs"));
+}
+
+// --- The six milestone-2 examples ------------------------------------------
+
+#[test]
+fn enums_main_rs() {
+    let krate = generate_path("examples/enums.vr");
+    insta::assert_snapshot!("enums_main_rs", file(&krate, "src/main.rs"));
+}
+
+#[test]
+fn methods_example_main_rs() {
+    let krate = generate_path("examples/methods.vr");
+    insta::assert_snapshot!("methods_example_main_rs", file(&krate, "src/main.rs"));
+}
+
+#[test]
+fn collections_main_rs() {
+    let krate = generate_path("examples/collections.vr");
+    insta::assert_snapshot!("collections_main_rs", file(&krate, "src/main.rs"));
+}
+
+#[test]
+fn errors_main_rs() {
+    let krate = generate_path("examples/errors.vr");
+    insta::assert_snapshot!("errors_main_rs", file(&krate, "src/main.rs"));
+}
+
+#[test]
+fn strings_main_rs_matches_milestone_2_spec_section_4() {
+    let krate = generate_path("examples/strings.vr");
+    let main = file(&krate, "src/main.rs");
+    let spec_body = "\
+struct User {
+    name: String,
+}
+
+fn name_of(user: &User) -> String {
+    user.name.clone()
+}
+
+fn main() {
+    let user = User { name: \"Alice\".to_string() };
+    let name = name_of(&user);
+    println!(\"{}\", name);
+    let copy = name.clone();
+    println!(\"{}\", copy);
+    println!(\"{}\", format!(\"Hello, {}!\", name));
+    println!(\"{}\", name.len());
+    println!(\"{}\", name == \"Alice\");
+}
+";
+    // Only the crate's `allow` header, before the first blank line, may
+    // differ from the spec.
+    let (header, body) = main
+        .split_once("\n\n")
+        .expect("main.rs should have a header then a blank line");
+    assert!(header.starts_with("#![allow("), "{main}");
+    assert_eq!(body, spec_body);
+    insta::assert_snapshot!("strings_main_rs", main);
+}
+
+#[test]
+fn todo_crate_has_two_files_and_a_mod_line() {
+    let krate = generate_path("examples/todo/main.vr");
+    assert_eq!(paths(&krate), ["src/main.rs", "src/task.rs"]);
+    let main = file(&krate, "src/main.rs");
+    assert!(main.contains("\nmod task;\n"), "{main}");
+    insta::assert_snapshot!("todo_main_rs", main);
+    insta::assert_snapshot!("todo_task_rs", file(&krate, "src/task.rs"));
 }
 
 // --- Spec 4.3 table rows ----------------------------------------------------
@@ -380,4 +450,101 @@ fn changeable_binding_of_text_is_a_mut_string() {
 fn copy_if_lent_to_a_reference_parameter_is_copied_as_a_whole() {
     let krate = generate_path("crates/varyk/tests/fixtures/codegen/copy_to_reference/main.vr");
     insta::assert_snapshot!(file(&krate, "src/main.rs"));
+}
+
+// --- Milestone 2: enums, impl blocks, and generic types -----------------------
+
+#[test]
+fn enum_declaration_and_impl_blocks_with_self_receivers() {
+    insta::assert_snapshot!(main_rs(
+        "enum Shape {\n    Circle(f64),\n    Named(string, Option<string>),\n    Point,\n}\n\nstruct Counter {\n    count: i32,\n}\n\nimpl Counter {\n    fn new() -> Counter {\n        Counter { count: 0 }\n    }\n\n    fn add(mut self, by: i32) {\n        self.count = self.count + by;\n    }\n}\n\nimpl Shape {\n    fn sides(self) -> usize {\n        0\n    }\n}\n\nimpl Counter {\n    pub fn value(self) -> i32 {\n        self.count\n    }\n}\n\nfn tally(v: Vec<usize>, r: Result<Shape, string>, mut c: Counter) -> Option<Vec<string>> {\n    c.count = 1;\n    tally(v, r, c)\n}\n\nfn main() {\n    let mut counter = Counter { count: 1 };\n    counter.count = 2;\n    println!(\"{}\", counter.count);\n}\n"
+    ));
+}
+
+#[test]
+fn values_and_constructors() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/values/main.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(main.contains("crate::geo::Shape::Point"), "{main}");
+    assert!(main.contains("crate::geo::Shape::Circle(0.5)"), "{main}");
+    assert!(
+        main.contains("crate::geo::User { name: \"Ann\".to_string() }"),
+        "{main}"
+    );
+    // A type hole filled by the `let`'s written type keeps it in Rust.
+    assert!(main.contains("let empty: Vec<i32> = vec![];"), "{main}");
+    assert!(main.contains("let maybe: Option<i32> = None;"), "{main}");
+    insta::assert_snapshot!("values_main_rs", main);
+}
+
+#[test]
+fn methods_associated_functions_the_built_in_table_and_indexing() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/methods/main.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(main.contains("crate::tally::Tally::new()"), "{main}");
+    assert!(
+        main.contains("let mut tasks: Vec<Task> = Vec::new();"),
+        "{main}"
+    );
+    assert!(main.contains("Task::new(\"write\")"), "{main}");
+    assert!(main.contains("tasks[0usize].complete();"), "{main}");
+    assert!(main.contains("tasks[i].is_done()"), "{main}");
+    assert!(main.contains("let first = &tasks[0usize];"), "{main}");
+    // `clone` on a `&str` is spelled `.to_string()` (spec 3.5).
+    assert!(main.contains("lit.to_string()"), "{main}");
+    assert!(main.contains("self.label.clone()"), "{main}");
+    insta::assert_snapshot!("methods_main_rs", main);
+}
+
+#[test]
+fn match_on_places_and_temporaries() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/matching/main.vr");
+    let main = file(&krate, "src/main.rs");
+    // A place is matched through a shared reference of the right shape.
+    assert!(main.contains("match &self.status {"), "{main}");
+    assert!(main.contains("match status {"), "{main}");
+    assert!(main.contains("match &*status {"), "{main}");
+    assert!(main.contains("match &tasks[0usize].status {"), "{main}");
+    assert!(main.contains("match &maybe {"), "{main}");
+    assert!(main.contains("match &picked {"), "{main}");
+    // A temporary is matched as it is.
+    assert!(main.contains("match parse(\"one\") {"), "{main}");
+    // A Copy value bound through a reference is copied first.
+    assert!(main.contains("let n = *n;"), "{main}");
+    assert!(main.contains("let k = *k;"), "{main}");
+    assert!(main.contains("crate::geo::Shape::Circle(r) => {"), "{main}");
+    insta::assert_snapshot!("matching_main_rs", main);
+}
+
+#[test]
+fn for_over_ranges_places_and_temporaries() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/loops/main.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(main.contains("for i in 0usize..tasks.len() {"), "{main}");
+    assert!(main.contains("for i in 0..3 {"), "{main}");
+    // A place is looped over through a shared reference of the right shape.
+    assert!(main.contains("for t in &self.tasks {"), "{main}");
+    assert!(main.contains("for t in tasks {"), "{main}");
+    assert!(main.contains("for t in &*tasks {"), "{main}");
+    assert!(main.contains("for n in &numbers {"), "{main}");
+    assert!(main.contains("for name in &names {"), "{main}");
+    // A temporary is looped over as it is.
+    assert!(main.contains("for word in words() {"), "{main}");
+    assert!(main.contains("for t in make_tasks() {"), "{main}");
+    // A Copy element reached through a reference is copied first.
+    assert!(main.contains("let n = *n;"), "{main}");
+    assert!(main.contains("let value = *value;"), "{main}");
+    insta::assert_snapshot!("loops_main_rs", main);
+}
+
+#[test]
+fn question_emits_as_written() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/question/main.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(main.contains("let name = name_of(id)?;"), "{main}");
+    assert!(main.contains("digit(text)?;"), "{main}");
+    assert!(main.contains("total = total + digit(word)?;"), "{main}");
+    // An owned local is moved into `?`.
+    assert!(main.contains("let user = found?;"), "{main}");
+    insta::assert_snapshot!("question_main_rs", main);
 }

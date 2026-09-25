@@ -789,11 +789,12 @@ Recorded, deliberately unanswered.
   functions? `move` is a candidate. The async runtime decision depends on it.
 - How should owned versus borrowed return values be expressed and inferred?
 - How should an explicit string copy be spelled, once method calls exist?
+  Answered in milestone 2: `s.clone()`.
 - How should lifetime inference work across function boundaries?
 - How should Rust traits, generics, and attributes map into Varyk while
   keeping Go-like simplicity?
 - Should serde derivation be automatic for every struct, or declared with
-  attribute syntax? Milestone 3 is gated on this.
+  attribute syntax? Milestone 5 (batteries) is gated on this.
 - Multi-threaded or current-thread async runtime, and how do `Send` and `Sync`
   failures surface to a writer who never sees those bounds?
 - Which Rust spellings, such as `&x` at a call site, should be accepted with a
@@ -801,7 +802,11 @@ Recorded, deliberately unanswered.
   with a fix-it.
 - What error-handling ergonomics beyond `Result` and `?` are worth adding?
 - Should Rust enums and generic types from `.rs` modules be imported
-  automatically, as structs will be in milestone 2?
+  automatically, as structs will be in milestone 3?
+- Should `match` on an owned local move it, as in Rust, so that its parts
+  can be taken out without a copy? Milestone 2 borrows every place it
+  matches on, so an owned `Option<Task>` local can only be opened by
+  matching on the call that produced it.
 
 ## 10. Decisions log
 
@@ -811,7 +816,7 @@ Recorded, deliberately unanswered.
 | Extension | `.vr` | short, "var" mnemonic, unclaimed |
 | String type | `string`, lowercase, one type | newcomer first; owned versus borrowed is a compiler decision |
 | String allocation | only a literal into an owned slot converts, at that line | one predictable allocation, visible in `--emit-rust`; no hidden copies |
-| Borrowed places | cannot flow into owned slots in milestone 1 | the alternative is a hidden clone; lifetime inference comes in milestone 2 |
+| Borrowed places | cannot flow into owned slots in milestone 1 | the alternative is a hidden clone; lifetime inference was planned for milestone 2, moved to milestone 4 on 2026-09-25 |
 | Assignment | Rust move semantics; `string` never `Copy` | preserves Rust's model; diagnostics carry the burden |
 | Parameter passing | borrow by default, `mut` for mutable borrow | the central idea (section 1) |
 | Copy types | `Owned` mode, passed by value | observably identical to a borrow, no indirection |
@@ -820,10 +825,14 @@ Recorded, deliberately unanswered.
 | Manifest | `Cargo.toml` | reuse Cargo entirely; no Varyk manifest |
 | Build orchestration | `varyk` drives `cargo` first, `build.rs` later | diagnostics stay under Varyk's control |
 | Generated code formatting | backend emits readable code; rustfmt only for display | builds must not depend on rustfmt |
-| Rust-layer errors | passed through as is in milestone 1, mapped to Varyk source in milestone 2 | the six examples never hit them; mapping is real work and not needed to prove the idea |
-| rustc warnings | silenced crate-wide in milestone 1, per file in milestone 2 | generated code warns routinely; per-file filtering is not MVP |
+| Rust-layer errors | passed through as is in milestone 1, mapped to Varyk source in milestone 3 (moved from 2 on 2026-09-25) | the six examples never hit them; mapping is real work and not needed to prove the idea |
+| rustc warnings | silenced crate-wide in milestone 1, per file in milestone 3 (moved from 2 on 2026-09-25) | generated code warns routinely; per-file filtering is not MVP |
 | Diagnostics renderer | `annotate-snippets` | maintained by the Rust project; no renderer to own |
 | Concurrency | Rust async, JavaScript surface, built-in runtime | ecosystem is already async |
 | License | MIT or Apache-2.0 | Rust ecosystem convention |
 | Learnability | designed to be learnable without a programming background; plain-word diagnostics | the audience Varyk is meant to grow, not only Rust or JavaScript developers |
 | AI agents | first-class writers, humans win on conflicts | Rust knowledge transfers; the removed syntax is where models fail; structured diagnostics close the loop |
+| Milestone 2 scope | language core only; packages, closures, and tooling later (2026-09-25) | four independent areas do not fit one MVP; the full log is section 9 of `2026-09-25-milestone-2-design.md` |
+| String copy | `s.clone()`, strings only (2026-09-25) | Rust's own spelling; the cost is visible at the call |
+| Borrowed returns | deferred to milestone 4; `.clone()` is the milestone 2 answer (2026-09-25) | a performance feature, not a capability; kept out of the MVP |
+| String joining | `format!` only; `+` rejected with a fix-it (2026-09-25) | one spelling, allocation visible at the call |

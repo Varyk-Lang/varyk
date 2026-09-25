@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0205]: `Shape::Rect` holds 2 values, so its pattern needs 2 positions, but this one has 1
+  --> crates/varyk/tests/fixtures/errors/v0205_wrong_arity/main.vr:10:9
+   |
+10 |         Shape::Rect(w) => w * w,
+   |         ^^^^^^^^^^^^^^ `Shape::Rect` holds 2 values, so its pattern needs 2 positions, but this one has 1
+   |
+   = note: in Rust terms, a tuple variant's pattern has one sub-pattern per field

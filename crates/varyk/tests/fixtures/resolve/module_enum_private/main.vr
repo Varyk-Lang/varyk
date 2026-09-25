@@ -1,0 +1,5 @@
+mod m;
+
+fn main() {
+    let h = m::Hidden::A;
+}

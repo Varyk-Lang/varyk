@@ -1,0 +1,4 @@
+pub enum Shape {
+    Circle(f64),
+    Point,
+}

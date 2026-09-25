@@ -42,6 +42,13 @@ pub(crate) struct Parser<'a> {
     /// block, not a struct literal `Name { ... }` — the same ambiguity
     /// Rust resolves the same way.
     in_condition: bool,
+    /// Set right before parsing a `for` loop's head starts, and consumed
+    /// by the very next `(` reached as a primary expression (`parse_primary`),
+    /// if any: it never survives past that first primary. Lets a range
+    /// found directly inside that group (`for i in (0..3)`) get a message
+    /// naming the parentheses themselves, rather than the generic "only in
+    /// the head of a `for` loop" one, since this group IS the head.
+    for_head_leading_paren: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -52,6 +59,7 @@ impl<'a> Parser<'a> {
             file,
             errors: Vec::new(),
             in_condition: false,
+            for_head_leading_paren: false,
         }
     }
 
@@ -165,7 +173,10 @@ impl<'a> Parser<'a> {
 
     /// Consumes an [`crate::token::TokenKind::Identifier`], recording
     /// `V0002` and returning `Err` for anything else, or `V0001` for a
-    /// reserved Rust keyword (spec 4.1).
+    /// reserved Rust keyword (spec 4.1) or for `self` (spec 2.5): `self` is
+    /// a keyword everywhere except a method's own receiver position, which
+    /// `item.rs`'s `parse_self_receiver` reads before this function ever
+    /// sees it.
     fn expect_identifier(&mut self, what: &str) -> Result<crate::ast::Ident, ()> {
         match self.peek() {
             Some(TokenKind::ReservedKeyword(word)) => {
@@ -174,6 +185,16 @@ impl<'a> Parser<'a> {
                 let span = self.current_span();
                 self.bump();
                 self.push_error(V0001, span, message);
+                Err(())
+            }
+            Some(TokenKind::SelfKw) => {
+                let span = self.current_span();
+                self.bump();
+                self.push_error(
+                    V0001,
+                    span,
+                    "`self` is a keyword and can only be used as a method's first parameter",
+                );
                 Err(())
             }
             Some(TokenKind::Identifier(_)) => {

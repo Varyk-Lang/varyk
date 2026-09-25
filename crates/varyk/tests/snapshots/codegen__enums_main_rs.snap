@@ -1,0 +1,33 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Point,
+}
+
+fn area(shape: &Shape) -> f64 {
+    match shape {
+        Shape::Circle(radius) => {
+            let radius = *radius;
+            3.14 * radius * radius
+        }
+        Shape::Rect(w, h) => {
+            let w = *w;
+            let h = *h;
+            w * h
+        }
+        Shape::Point => 0.0,
+    }
+}
+
+fn main() {
+    let shapes: Vec<Shape> = vec![Shape::Circle(1.0), Shape::Rect(2.0, 3.0), Shape::Point];
+    for shape in &shapes {
+        println!("{}", area(shape));
+    }
+}

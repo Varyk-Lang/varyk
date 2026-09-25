@@ -13,8 +13,9 @@ mod span;
 mod token;
 
 pub use ast::{
-    BinaryOp, Block, Expr, ExprKind, FieldDecl, Function, Ident, Item, ModDecl, Param, Program,
-    Stmt, StructDecl, TypeExpr, UnaryOp,
+    BinaryOp, Block, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, ForHead, Function, Ident,
+    ImplBlock, Item, MatchArm, ModDecl, Param, Pattern, Program, SelfMode, Stmt, StructDecl,
+    SubPattern, TypeExpr, UnaryOp, VariantPattern,
 };
 pub use error::{FixIt, SyntaxError, V0001, V0002, V0003, V0010, V0011, V0012};
 pub use lexer::lex;

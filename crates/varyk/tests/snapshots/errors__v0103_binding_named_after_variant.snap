@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0103]: the name `Point` is already taken by a variant of `Shape`
+ --> crates/varyk/tests/fixtures/errors/v0103_binding_named_after_variant/main.vr:9:9
+  |
+9 |         Point => 0.0,
+  |         ^^^^^ the name `Point` is already taken by a variant of `Shape`
+  |
+  = note: pick another name; to match the variant, write `Shape::Point`

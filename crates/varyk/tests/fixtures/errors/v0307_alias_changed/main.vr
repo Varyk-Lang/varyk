@@ -1,0 +1,15 @@
+struct User {
+    name: string,
+    age: i32,
+}
+
+fn birthday(mut user: User) {
+    user.age = user.age + 1;
+}
+
+fn main() {
+    let mut user = User { name: "Alice", age: 30 };
+    let name = user.name;
+    birthday(user);
+    println!("{}", name);
+}

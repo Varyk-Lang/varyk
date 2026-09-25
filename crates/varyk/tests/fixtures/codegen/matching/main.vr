@@ -1,0 +1,83 @@
+mod geo;
+
+enum Status {
+    Open,
+    Done,
+    Named(string),
+    Count(i32),
+}
+
+struct Task {
+    title: string,
+    status: Status,
+}
+
+impl Task {
+    fn reopen(mut self) {
+        match self.status {
+            Status::Done => {
+                self.status = Status::Open;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn describe(status: Status) -> string {
+    match status {
+        Status::Open => "open",
+        Status::Done => "done",
+        Status::Named(name) => name.clone(),
+        Status::Count(n) => format!("{} left", n),
+    }
+}
+
+fn bump(mut status: Status) {
+    match status {
+        Status::Count(n) => {
+            status = Status::Count(n + 1);
+        }
+        other => println!("not a count"),
+    }
+}
+
+fn area(shape: geo::Shape) -> f64 {
+    match shape {
+        geo::Shape::Circle(r) => 3.0 * r * r,
+        geo::Shape::Point => 0.0,
+    }
+}
+
+fn parse(text: string) -> Result<i32, string> {
+    if text == "one" {
+        return Ok(1);
+    }
+    Err("unknown")
+}
+
+fn main() {
+    let mut tasks = vec![Task { title: "write", status: Status::Done }];
+    tasks[0].reopen();
+    match tasks[0].status {
+        Status::Open => println!("open"),
+        _ => println!("not open"),
+    }
+    let maybe = Some(3);
+    let n = match maybe {
+        Some(k) => k,
+        None => 0,
+    };
+    match parse("one") {
+        Ok(value) => println!("{}", value),
+        Err(message) => println!("{}", message),
+    }
+    let picked = Some(Task { title: "pick", status: Status::Named("x") });
+    let title = match picked {
+        Some(task) => task.title,
+        None => "none",
+    };
+    let mut count = Status::Count(2);
+    bump(count);
+    println!("{} {} {} {}", describe(tasks[0].status), n, title, describe(count));
+    println!("{}", area(geo::Shape::Circle(1.0)));
+}

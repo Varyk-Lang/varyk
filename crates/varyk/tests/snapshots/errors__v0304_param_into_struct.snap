@@ -8,4 +8,6 @@ error[V0304]: `name` belongs to the caller of this function, so it cannot be sto
 6 |     User { name: name }
   |                  ^^^^ `name` belongs to the caller of this function, so it cannot be stored in field `name` of `User`
   |
-  = note: milestone 2 will allow this; in Rust terms, a borrowed value cannot move into a place that owns it
+  = note: this function can read `name` but not keep it; make a new value here instead, or keep it where the caller made it
+  = note: in Rust terms, a borrowed value cannot move into a place that owns it
+help: insert `.clone()` after `name`

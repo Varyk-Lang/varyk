@@ -1,0 +1,5 @@
+mod m;
+
+fn take(t: Task) {}
+
+fn main() {}

@@ -1,6 +1,6 @@
 //! Token kinds produced by the lexer.
 
-/// The kind of a lexical token. Keywords that are part of the milestone-1
+/// The kind of a lexical token. Keywords that are part of the Varyk
 /// surface (spec 4.1) each get their own variant; every other Rust keyword
 /// and reserved word, including the 2024-edition ones, lexes as
 /// [`TokenKind::ReservedKeyword`] carrying its text, so the parser can report
@@ -21,6 +21,14 @@ pub enum TokenKind {
     Break,
     Continue,
     Return,
+    Enum,
+    Impl,
+    Match,
+    For,
+    In,
+    /// `self`, spec 2.1. `Self` is unrelated and still lexes as
+    /// [`TokenKind::ReservedKeyword`]: milestone 2 has no way to write it.
+    SelfKw,
 
     /// Any other Rust keyword or reserved word, carrying its text.
     ReservedKeyword(String),
@@ -60,11 +68,16 @@ pub enum TokenKind {
     Semi,
     Comma,
     Dot,
+    DotDot,
     LParen,
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Arrow,
+    FatArrow,
+    Question,
 }
 
 /// A single lexical token: its kind plus the span it came from.

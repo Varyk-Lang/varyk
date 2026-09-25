@@ -1,23 +1,9 @@
-# Milestone 1 follow-ups
+# Milestone 1 and 2 follow-ups
 
-Items found during milestone 1's reviews that were deliberately left for
-milestone 2. None affects the six example programs. Ordered by value.
-
-## Do first in milestone 2
-
-- Record the final per-local Rust representation in borrow analysis and have
-  the backend read it, instead of the backend re-deriving it (`scan_block`,
-  `scan_expr`, `let_repr` in `backend/rust_expr.rs`). Add `module` to
-  `HirFunction` and keep functions in one `Vec` indexed by `FnId`, removing
-  the three ways of finding a function by id. Borrowed returns will multiply
-  representation decisions, so do this before them.
-- Alias bindings: a `let` made from a parameter or a field is another name
-  for the same value. `varyk check` accepts programs that use the original
-  and the alias together, and rustc then rejects them (E0502, E0505). Add an
-  invalidation check reusing the move-checker state.
-- A field of a call result as a branch of a string `if`
-  (`if c { mk().name } else { "x" }`) gets past the mixed-text rule,
-  because the backend treats every field access as a place.
+Items found during the reviews of milestones 1 and 2 that were deliberately
+left for later. None affects the example programs. Ordered by value within
+each section. Milestone 2 absorbed the representation refactor, the alias
+rule, the reserved names, and the `.clone()` fix-it for V0304.
 
 ## Programs that pass `check` and fail in rustc (each rare)
 
@@ -29,10 +15,6 @@ milestone 2. None affects the six example programs. Ordered by value.
   `mut` parameter is rejected although Rust accepts two different fields,
   and it counts a `let`, an assignment, or a struct field inside a block
   argument as giving the value away even where Rust would only borrow it.
-- A local named `None`, `Some`, `Ok`, or `Err`, or a struct named `String`
-  or after a primitive (`struct u8`), passes check and rustc rejects it,
-  because the generated code then shadows Rust's own names. Reserve them.
-
 - A copied `.rs` module is compiled as edition 2024, so a file that uses a
   2024 keyword such as `gen` as a name fails in rustc; `r#match` in a `.rs`
   module is reported as an unsupported attribute, which misleads.
@@ -60,20 +42,14 @@ milestone 2. None affects the six example programs. Ordered by value.
   rejected with V0304 and a "store it with `let`" hint; harsher than needed.
 - `let fn = 1;` gives V0002, not the "Rust keyword" V0001, because milestone
   keywords are separate tokens from reserved words.
-- V0304 and V0305 do not say what to change, since milestone 1 has no
-  explicit copy spelling to suggest.
+- V0305 does not say what to change; for text it could suggest
+  `.clone()`, as V0304 does.
 - A long message is repeated as the caret label; consider a shorter label
   text.
 - V0010 and V0012 keep the spec's "infers references" and "lifetimes are
   inferred" wording, which section 2 of the spec would rather avoid.
 - `-> &str`, `&T` in a field type, and `&T` in a `let` annotation get a
   generic V0002 instead of a Rust-habit diagnostic.
-
-## Documentation
-
-- A literal mixed with a call result in an `if` passed to a `string`
-  parameter allocates (`.to_string()` on the literal); add to the allocation
-  list.
 
 ## Small code items
 
@@ -98,3 +74,62 @@ milestone 2. None affects the six example programs. Ordered by value.
   cost of rewriting the interop unit tests.
 - No automated test proves `run -- args` forwarding or exit-code forwarding,
   since no milestone-1 program reads arguments or exits non-zero.
+
+## Found in milestone 2
+
+Programs `check` handles wrongly or harshly:
+
+- `f()?;` where `f` returns a `Result` whose value is itself a `Result`
+  drops the inner error with only rustc's `unused_must_use` warning, which
+  the generated crate silences.
+- `Ok(x)?` written directly is V0207, since the operand of `?` has no
+  expected type.
+- Over-strict, never unsound: a `let mut` once assigned a borrowed place
+  keeps that root for the whole function; a `for` over a place holds its
+  root, so writing a different field inside a `mut self` method is V0307;
+  a `match` value mixing an owned string binding with another new value is
+  V0304; an owned binding from a matched temporary passed to a `mut`
+  parameter through a `match` value is V0303.
+- A `pub fn` in an `impl` of a non-`pub` struct whose signature names the
+  struct is V0105 ("used by a public item but is not public"), though rustc
+  accepts it.
+
+Diagnostics wording:
+
+- V0204 names a module enum's variant without its module path.
+- V0303 and V0307 can both fire on one statement.
+- V0207's suggested shapes hard-code the binding names `x`, `v`, and `r`.
+- The bare-`return` arm-body V0001 carries its fix as message text, not a
+  structured fix-it a JSON consumer can apply.
+- `mut self: T` is reported as `self: T`; tuple and reference patterns are
+  called literal patterns; `0..10..2` in a `for` head gets a generic V0002;
+  the `while let` message repeats itself.
+- A struct path used as a value gets the "associated functions" message.
+
+Tests:
+
+- No soundness case loops over a `&Vec` or `&mut Vec` head of Copy
+  elements; the `match` and `for` copy wording is not pinned by a test.
+- No span assertions for `MatchArm`, `Pattern`, `VariantPattern`, or the
+  `format!` intrinsic; several rejection tests check only the code.
+- The cargo-invoking example tests may contend on the shared cache; one
+  unrepeated `run_hello` failure was seen.
+- `docs/language.md` does not say `usize` is 64 bits on the supported
+  targets.
+
+Code:
+
+- `parser/item.rs`, `parser/expr.rs`, `resolve.rs`, and `types/check.rs`
+  are large; match parsing could move to `parser/pattern.rs`, `for` typing
+  to `types/check/loops.rs`, and the resolver's tests and cycle check to
+  their own files.
+- The backend re-derives the parameter mode (`repr()` in `rust_expr.rs`)
+  and `MethodRef` modes instead of reading them; "is a pattern binding" has
+  two representations (a borrow-analysis side table and `strings.rs`).
+- `skip_brace_group` duplicates `skip_generic_args`; built-in variant names
+  are mapped to strings in three places; V0203's struct and enum branches
+  could merge on `is_compound`; `reserved_type_name` is `pub(crate)` with no outside
+  caller; `Origin::Local` is recorded but the alias rule reads roots from
+  `refers`.
+- `typecheck` relies on diagnostics being non-empty to keep `FnId` indexes
+  aligned; a `debug_assert` would make a mismatch loud.

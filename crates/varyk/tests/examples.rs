@@ -1,6 +1,6 @@
 //! End-to-end tests for `varyk build` and `varyk run`: every
-//! example builds through cargo and prints its expected output (spec
-//! section 5). These invoke cargo, so they are slower than the rest.
+//! example builds through cargo and prints its expected output (milestone-1
+//! spec section 5, milestone-2 spec section 4). These invoke cargo, so they are slower than the rest.
 
 mod common;
 
@@ -58,6 +58,42 @@ fn run_modules() {
 #[test]
 fn run_interop() {
     assert_runs("examples/interop/main.vr", "Hello from Rust, Varyk!\n");
+}
+
+#[test]
+fn run_enums() {
+    assert_runs("examples/enums.vr", "3.14\n6\n0\n");
+}
+
+#[test]
+fn run_methods() {
+    assert_runs("examples/methods.vr", "0\n3\n");
+}
+
+#[test]
+fn run_collections() {
+    assert_runs("examples/collections.vr", "3\n10\n20\n30\n60\n2\n");
+}
+
+#[test]
+fn run_errors() {
+    assert_runs("examples/errors.vr", "84\nnot a number: abc\nnone\n");
+}
+
+#[test]
+fn run_strings() {
+    assert_runs(
+        "examples/strings.vr",
+        "Alice\nAlice\nHello, Alice!\n5\ntrue\n",
+    );
+}
+
+#[test]
+fn run_todo() {
+    assert_runs(
+        "examples/todo/main.vr",
+        "[ ] Buy milk\n[ ] Write spec\n[x] Buy milk\n[ ] Write spec\n1 of 2 done\n",
+    );
 }
 
 #[test]

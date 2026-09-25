@@ -1,0 +1,29 @@
+// expected output:
+// 3
+// 10
+// 20
+// 30
+// 60
+// 2
+
+fn sum(values: Vec<i32>) -> i32 {
+    let mut total = 0;
+    for value in values {
+        total = total + value;
+    }
+    total
+}
+
+fn main() {
+    let mut values: Vec<i32> = Vec::new();
+    values.push(10);
+    values.push(20);
+    values.push(30);
+    println!("{}", values.len());
+    for i in 0..values.len() {
+        println!("{}", values[i]);
+    }
+    println!("{}", sum(values));
+    values.pop();
+    println!("{}", values.len());
+}

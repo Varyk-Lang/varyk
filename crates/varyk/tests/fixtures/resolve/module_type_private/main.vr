@@ -1,0 +1,5 @@
+mod m;
+
+fn take(h: m::Hidden) {}
+
+fn main() {}

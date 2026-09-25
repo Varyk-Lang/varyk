@@ -1,30 +1,39 @@
-//! String representation (spec 4.3): which `string` locals are `&str` and
-//! which are `String` in the generated Rust, plus the `let`-as-owned-slot
-//! case of V0304.
+//! String representation (spec 4.3): whether each `string` local is a
+//! `&str`, a `String`, a `&String`, or a `&mut String` in the generated
+//! Rust, plus the `let`-as-owned-slot case of V0304.
 //!
 //! A `let` that is not a borrowed place (a *free* `let`) needs to be owned
-//! if any value assigned to it is owned (a call result or an owned free
-//! `let`), if it is passed to a `mut string` parameter, or if it flows into
-//! an owned slot: a struct field, storage written through a borrowed place,
-//! a return value, an imported parameter taken by value, or another free
-//! `let` that needs to be owned. Value flows between free `let`s therefore
-//! link them both ways, and [`infer`] computes the owned set by fixed-point
-//! iteration over those links. A `let` that is a changeable borrowed place
-//! is a `&mut String`, so every free `let` it may refer to is owned too.
+//! if any value assigned to it is owned (a call or method call result, a
+//! `clone` included, a `format!`, or an owned free `let`), if it is passed to
+//! a `mut string` parameter, or if it flows into an owned slot: a struct
+//! field, a variant payload, a `Some`, `Ok`, or `Err` argument, a `vec!`
+//! element, `push`'s argument, storage written through a borrowed place (a
+//! `Vec` element included), a return value, an imported parameter taken by
+//! value, or another free `let` that needs to be owned. Value flows between free
+//! `let`s therefore link them both ways, and [`infer`] computes the owned
+//! set by fixed-point iteration over those links. A `let` that is a
+//! changeable borrowed place is a `&mut String`, so every free `let` it may
+//! refer to is owned too. A `match` pattern binding or a `for` variable is
+//! a `&String` into a place matched on or looped over, or an owned `String`
+//! moved out of a temporary (spec 3.5).
 //!
 //! Assigning a free `let` text that is gone after the assignment (a field
 //! of a temporary, or of a local declared inside the assigned block) is
-//! V0304 whatever the `let`'s representation.
+//! V0304 whatever the `let`'s representation. Scope is lexical, by
+//! declaration span: a `match` binding's scope is its arm, and a `for`
+//! variable's is its loop, so text from one over a temporary cannot be
+//! kept in a `let` outside it.
 
 use varyk_syntax::Span;
 
 use super::{
-    Context, GONE_NOTE, MILESTONE_2_NOTE, Refers, dangling, gone_message, owner_text, place_info,
+    Assigned, BORROWED_NOTE, Context, GONE_NOTE, Refers, clone_fix_it, dangling, gone_message,
+    owner_text, place_info, push_unique, what_to_do,
 };
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
-    HirBlock, HirExpr, HirExprKind, HirFunction, HirStmt, LocalId, LocalInfo, Origin, StringRepr,
-    declared_inside, field_root, leaves,
+    HirBlock, HirExpr, HirExprKind, HirForHead, HirFunction, HirStmt, LocalId, LocalInfo, Origin,
+    StringRepr, declared_inside, field_root, is_block_like, leaves,
 };
 use crate::types::{ParamMode, Ty};
 
@@ -37,18 +46,23 @@ pub(super) fn infer(
     function: &mut HirFunction,
     reported: &[bool],
     refers: &Refers,
+    assigned: &Assigned,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut flows = Flows {
         cx,
         refers,
+        assigned,
         locals: &function.locals,
         param_count: function.params.len(),
         owned: vec![false; function.locals.len()],
         links: Vec::new(),
         borrowed_into: Vec::new(),
         gone: Vec::new(),
+        gone_copies: Vec::new(),
         mixed: Vec::new(),
+        str_leaves: vec![None; function.locals.len()],
+        pattern_refs: vec![false; function.locals.len()],
         blocks: Vec::new(),
     };
     flows.block(&function.body);
@@ -62,7 +76,10 @@ pub(super) fn infer(
         links,
         borrowed_into,
         gone,
+        gone_copies,
         mixed,
+        str_leaves,
+        pattern_refs,
         ..
     } = flows;
 
@@ -81,31 +98,65 @@ pub(super) fn infer(
 
     let param_count = function.params.len();
     let locals = &function.locals;
-    let mut reprs = vec![None; locals.len()];
+    // In `LocalId` order: the locals a binding's initializer may evaluate
+    // to are declared before it, so their representation is known.
+    let mut reprs: Vec<Option<StringRepr>> = vec![None; locals.len()];
     for (index, local) in locals.iter().enumerate() {
         if local.ty != Ty::String {
             continue;
         }
-        let owned_repr = if index < param_count {
-            local.mutable
-        } else if local.place.borrowed {
-            match local.place.origin {
-                Some(Origin::Param(param)) => locals[param.0 as usize].mutable,
-                Some(Origin::Struct(_)) => true,
-                None => false,
+        reprs[index] = Some(if index < param_count {
+            if local.mutable {
+                StringRepr::MutOwned
+            } else {
+                StringRepr::Str
             }
+        } else if !local.place.borrowed {
+            if owned[index] {
+                StringRepr::Owned
+            } else {
+                StringRepr::Str
+            }
+        } else if local.place.mutable {
+            // It may change what it refers to, which a `&str` cannot.
+            StringRepr::MutOwned
+        } else if pattern_refs[index] {
+            // A `String` inside the value a `match` or a `for` looks at
+            // (spec 3.5).
+            StringRepr::RefOwned
         } else {
-            owned[index]
-        };
-        reprs[index] = Some(if owned_repr {
-            StringRepr::Owned
-        } else {
-            StringRepr::Borrowed
+            // A reference, except that one to a non-`mut` parameter's
+            // `&str`, or one whose initializer may evaluate to a `&str`,
+            // is a `&str` itself, so every branch has one type. Without an
+            // origin it is an element of a temporary `Vec`, a `String`
+            // borrowed as `&v()[i]` so that the temporary lives on.
+            let to_str = match local.place.origin {
+                Some(Origin::Param(param)) => !locals[param.0 as usize].mutable,
+                Some(Origin::Struct(_) | Origin::Local(_)) | None => false,
+            };
+            let str_leaf = str_leaves[index].as_ref().is_some_and(|(literal, ids)| {
+                *literal
+                    || ids
+                        .iter()
+                        .any(|id| reprs[id.0 as usize] == Some(StringRepr::Str))
+            });
+            if to_str || str_leaf {
+                StringRepr::Str
+            } else {
+                StringRepr::RefOwned
+            }
         });
     }
 
     for (local, span, message) in gone {
         if !reported[local.0 as usize] {
+            diagnostics.push(Diagnostic::new(codes::V0304, span, message).with_note(GONE_NOTE));
+        }
+    }
+    // A `String` copied in is moved, not borrowed; a `String` assigned a
+    // borrowed place is reported where that happens.
+    for (source, local, span, message) in gone_copies {
+        if !owned[source.0 as usize] && !reported[local.0 as usize] {
             diagnostics.push(Diagnostic::new(codes::V0304, span, message).with_note(GONE_NOTE));
         }
     }
@@ -120,11 +171,11 @@ pub(super) fn infer(
             "`{name}` needs its own copy of its text, because elsewhere it is given new text, \
              passed to a `mut string` parameter, or stored or returned"
         );
-        diagnostics.push(
-            Diagnostic::new(codes::V0304, span, message)
-                .with_note(why)
-                .with_note(MILESTONE_2_NOTE),
-        );
+        let diagnostic = Diagnostic::new(codes::V0304, span, message)
+            .with_note(why)
+            .with_note(what_to_do(cx, locals, origin))
+            .with_note(BORROWED_NOTE);
+        diagnostics.push(clone_fix_it(diagnostic, span, &Ty::String));
     };
     for (local, span, origin) in borrowed_into {
         if owned[local.0 as usize] {
@@ -151,7 +202,7 @@ struct Mixed {
     local: LocalId,
     /// The borrowed leaves: where V0304 points.
     borrowed: Vec<(Span, Option<Origin>)>,
-    /// Some leaf is a `string` call result.
+    /// Some leaf is new text: a `string` call result or a `format!`.
     owned_call: bool,
     /// Free `let`s among the leaves: owned ones make the binding need to be
     /// owned too.
@@ -162,6 +213,7 @@ struct Mixed {
 struct Flows<'a> {
     cx: &'a Context<'a>,
     refers: &'a Refers,
+    assigned: &'a Assigned,
     locals: &'a [LocalInfo],
     param_count: usize,
     /// Per local: directly known to need an owned `String`.
@@ -174,8 +226,22 @@ struct Flows<'a> {
     /// assignment (a field of a temporary, or of a local declared inside
     /// the assigned value), with its message: always an error.
     gone: Vec<(LocalId, Span, String)>,
+    /// A free `let` (the first) copied into another free `let` (the
+    /// second) that outlives what its text may refer to, with its span and
+    /// message: an error unless the first is an owned `String`.
+    gone_copies: Vec<(LocalId, LocalId, Span, String)>,
     mixed: Vec<Mixed>,
-    /// The blocks enclosing the statement being visited, outermost first.
+    /// Per borrowed-place `string` `let`: whether its initializer may
+    /// evaluate to a literal, and the locals it may evaluate to, which
+    /// decide whether it is a `&str`.
+    str_leaves: Vec<Option<(bool, Vec<LocalId>)>>,
+    /// Per local: a `string` a `match` pattern or a `for` binds on a
+    /// place, a reference to the `String` inside what is matched on or
+    /// looped over.
+    pattern_refs: Vec<bool>,
+    /// The scopes enclosing the statement being visited, outermost first:
+    /// blocks, and the `match` arms and `for` statements whose bindings
+    /// live only inside them.
     blocks: Vec<Span>,
 }
 
@@ -234,6 +300,24 @@ impl Flows<'_> {
                 self.expr(cond);
                 self.block(body);
             }
+            HirStmt::For {
+                local,
+                head,
+                body,
+                span,
+            } => {
+                match head {
+                    HirForHead::Range { start, end } => {
+                        self.expr(start);
+                        self.expr(end);
+                    }
+                    HirForHead::Vec(vec) => self.expr(vec),
+                }
+                self.blocks.push(*span);
+                self.binding(*local);
+                self.block(body);
+                self.blocks.pop();
+            }
             HirStmt::Break { .. } | HirStmt::Continue { .. } => {}
         }
     }
@@ -246,17 +330,22 @@ impl Flows<'_> {
             | HirExprKind::String(_)
             | HirExprKind::Local(_) => {}
             HirExprKind::Call { callee, args } => {
-                let (_, modes, imported) = self.cx.callee(*callee);
-                for (arg, mode) in args.iter().zip(modes) {
-                    self.expr(arg);
-                    match mode {
-                        ParamMode::MutableBorrow => self.owned_slot(arg),
-                        ParamMode::Owned if imported => self.owned_slot(arg),
-                        ParamMode::Owned | ParamMode::SharedBorrow => {}
-                    }
-                }
+                let (_, modes, keeps) = self.cx.callee(*callee);
+                self.call(args.iter(), &modes, keeps);
+            }
+            HirExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                let (_, modes, keeps) = self.cx.method(*method);
+                self.call(std::iter::once(&**receiver).chain(args), &modes, keeps);
             }
             HirExprKind::Field { base, .. } => self.expr(base),
+            HirExprKind::Index { base, index } => {
+                self.expr(base);
+                self.expr(index);
+            }
             HirExprKind::StructLit { fields, .. } => {
                 for (_, value) in fields {
                     self.expr(value);
@@ -276,10 +365,64 @@ impl Flows<'_> {
                     self.block(else_);
                 }
             }
-            HirExprKind::Println { args, .. } => {
+            HirExprKind::Println { args, .. } | HirExprKind::Format { args, .. } => {
                 for arg in args {
                     self.expr(arg);
                 }
+            }
+            HirExprKind::Try(operand) => {
+                self.expr(operand);
+                self.owned_slot(operand);
+            }
+            HirExprKind::EnumLit { args, .. } | HirExprKind::VecLit(args) => {
+                for arg in args {
+                    self.expr(arg);
+                    self.owned_slot(arg);
+                }
+            }
+            HirExprKind::Match { scrutinee, arms } => {
+                self.expr(scrutinee);
+                for arm in arms {
+                    self.blocks.push(arm.span);
+                    for (local, _) in arm.pattern.bindings() {
+                        self.binding(local);
+                    }
+                    self.expr(&arm.body);
+                    self.blocks.pop();
+                }
+            }
+        }
+    }
+
+    /// `local`, bound by a `match` pattern or a `for`: a `string` one
+    /// refers into a place matched on or looped over, and owns its text
+    /// moved out of a temporary (spec 3.5).
+    fn binding(&mut self, local: LocalId) {
+        let index = local.0 as usize;
+        if self.locals[index].ty != Ty::String {
+            return;
+        }
+        if self.locals[index].place.borrowed {
+            self.pattern_refs[index] = true;
+        } else {
+            self.owned[index] = true;
+        }
+    }
+
+    /// The arguments of a call: one lent to a `mut` parameter, or kept by
+    /// an `Owned` one when `keeps`, is an owned slot.
+    fn call<'e>(
+        &mut self,
+        args: impl Iterator<Item = &'e HirExpr>,
+        modes: &[ParamMode],
+        keeps: bool,
+    ) {
+        for (arg, mode) in args.zip(modes) {
+            self.expr(arg);
+            match mode {
+                ParamMode::MutableBorrow => self.owned_slot(arg),
+                ParamMode::Owned if keeps => self.owned_slot(arg),
+                ParamMode::Owned | ParamMode::SharedBorrow => {}
             }
         }
     }
@@ -304,6 +447,18 @@ impl Flows<'_> {
         if info.ty != Ty::String || (local.0 as usize) < self.param_count {
             return;
         }
+        let leaves_of_value = leaves(value);
+        let literal = leaves_of_value
+            .iter()
+            .any(|leaf| matches!(leaf.kind, HirExprKind::String(_)));
+        let ids = leaves_of_value
+            .iter()
+            .filter_map(|leaf| match leaf.kind {
+                HirExprKind::Local(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        self.str_leaves[local.0 as usize] = Some((literal, ids));
         // A binding that may change what it refers to is a `&mut String`
         // (never a `&str`, which cannot change its text), so every `let`
         // it may refer to must be a `String`.
@@ -321,7 +476,7 @@ impl Flows<'_> {
         for leaf in leaves(value) {
             if let Some(id) = self.free_leaf(leaf) {
                 mix.free.push(id);
-            } else if matches!(leaf.kind, HirExprKind::Call { .. }) {
+            } else if is_new_text(leaf) {
                 mix.owned_call = true;
             } else if let Some(place) = place_info(self.locals, leaf) {
                 if place.borrowed {
@@ -339,14 +494,25 @@ impl Flows<'_> {
         for leaf in leaves(value) {
             if let Some(id) = self.free_leaf(leaf) {
                 self.links.push((id, local));
-            } else if matches!(leaf.kind, HirExprKind::Call { .. }) {
+                if let Some(root) = self.gone_copy(id, local) {
+                    let message = format!(
+                        "`{}` holds text from `{}`, which only exists inside this block, so \
+                         it cannot be kept in `{}`",
+                        self.locals[id.0 as usize].name,
+                        self.locals[root.0 as usize].name,
+                        self.locals[local.0 as usize].name,
+                    );
+                    self.gone_copies.push((id, local, leaf.span, message));
+                }
+            } else if is_new_text(leaf) {
+                // A call result or a `format!` is a new `String` (spec 3.5).
                 self.owned[local.0 as usize] = true;
             } else if let Some(place) = place_info(self.locals, leaf) {
                 if place.borrowed && (self.gone(leaf, value) || self.gone_at_block_end(leaf, local))
                 {
                     let name = &self.locals[local.0 as usize].name;
                     let consequence = format!("it cannot be kept in `{name}`");
-                    let message = gone_message(self.cx, self.locals, leaf, &consequence);
+                    let message = gone_message(self.cx, self.locals, leaf, value, &consequence);
                     self.gone.push((local, leaf.span, message));
                 } else if place.borrowed {
                     self.borrowed_into.push((local, leaf.span, place.origin));
@@ -363,6 +529,13 @@ impl Flows<'_> {
         let HirExprKind::Local(id) = field_root(leaf).kind else {
             return false;
         };
+        self.root_gone(id, local)
+    }
+
+    /// Whether `id` is declared in an enclosing scope that `local` is not
+    /// declared in, and owns its value there (or refers to something gone
+    /// there).
+    fn root_gone(&self, id: LocalId, local: LocalId) -> bool {
         let info = &self.locals[id.0 as usize];
         let target = &self.locals[local.0 as usize];
         self.blocks
@@ -372,6 +545,28 @@ impl Flows<'_> {
                 declared_inside(info, block)
                     && (!info.place.borrowed || dangling(self.locals, self.refers, id, block))
             })
+    }
+
+    /// A local rooting the borrowed places `source`, a free `let`, may hold
+    /// (directly or through the free `let`s copied into it) that is gone
+    /// while `local`, which `source` is copied into, lives on.
+    fn gone_copy(&self, source: LocalId, local: LocalId) -> Option<LocalId> {
+        let mut seen = vec![source];
+        let mut index = 0;
+        while let Some(&at) = seen.get(index) {
+            index += 1;
+            let at = at.0 as usize;
+            if let Some(&root) = self.assigned.roots[at]
+                .iter()
+                .find(|&&root| self.root_gone(root, local))
+            {
+                return Some(root);
+            }
+            for &copied in &self.assigned.copies[at] {
+                push_unique(&mut seen, copied);
+            }
+        }
+        None
     }
 
     /// Whether the place `leaf`, which `whole` evaluates to, is gone once
@@ -387,10 +582,23 @@ impl Flows<'_> {
                 declared_inside(info, whole.span)
                     && (!info.place.borrowed || dangling(self.locals, self.refers, *id, whole.span))
             }
-            HirExprKind::If { .. } | HirExprKind::Block(_) => leaves(base)
+            _ if is_block_like(base) => leaves(base)
                 .into_iter()
                 .any(|inner| self.gone(inner, whole)),
             _ => true,
         }
     }
+}
+
+/// Whether `leaf`, a `string` value, is new text: a call or method call
+/// result (a `clone` included), a `format!` (spec 3.5), or the value of a
+/// `?`, taken out of an owned `Result`.
+fn is_new_text(leaf: &HirExpr) -> bool {
+    matches!(
+        leaf.kind,
+        HirExprKind::Call { .. }
+            | HirExprKind::MethodCall { .. }
+            | HirExprKind::Format { .. }
+            | HirExprKind::Try(_)
+    )
 }

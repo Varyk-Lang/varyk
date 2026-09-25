@@ -1,0 +1,8 @@
+pub enum Shape {
+    Circle(f64),
+    Point,
+}
+
+pub struct User {
+    name: string,
+}

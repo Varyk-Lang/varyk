@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0207]: the type of `None` cannot be worked out here; write the type, as in `let x: Option<i32> = None;`
+ --> crates/varyk/tests/fixtures/errors/v0207_none_needs_type/main.vr:2:19
+  |
+2 |     let nothing = None;
+  |                   ^^^^ the type of `None` cannot be worked out here; write the type, as in `let x: Option<i32> = None;`
+  |
+  = note: such a value takes its type from where it goes: a `let` with a written type, a parameter, a return value, a field, or a `vec!` element after one whose type is known; in Rust terms, the type cannot be inferred here

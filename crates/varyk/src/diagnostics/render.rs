@@ -99,7 +99,8 @@ fn render_one(diagnostic: &Diagnostic, sources: &[SourceFile], renderer: &Render
         let help = if fix_it.replacement.is_empty() {
             format!("remove `{old}`")
         } else if old.is_empty() {
-            insertion_help(&fix_it.replacement, &file.text[fix_it.span.end as usize..])
+            let (before, after) = file.text.split_at(fix_it.span.end as usize);
+            insertion_help(fix_it.replacement.trim_start(), before, after)
         } else {
             format!("replace `{old}` with `{}`", fix_it.replacement)
         };
@@ -110,16 +111,20 @@ fn render_one(diagnostic: &Diagnostic, sources: &[SourceFile], renderer: &Render
 }
 
 /// The help text for an insertion fix-it (an empty span): "insert `mut `
-/// before `user`", naming the word that follows the insertion point, or
-/// just "insert `mut `" when no word follows.
-fn insertion_help(inserted: &str, after: &str) -> String {
-    let word: String = after
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
-    if word.is_empty() {
+/// before `user`", naming the word that follows the insertion point, else
+/// "insert `.clone()` after `name`", naming the word that precedes it, or
+/// just "insert `mut `" when neither is a word.
+fn insertion_help(inserted: &str, before: &str, after: &str) -> String {
+    let is_word = |c: &char| c.is_alphanumeric() || *c == '_';
+    let next: String = after.chars().take_while(is_word).collect();
+    if !next.is_empty() {
+        return format!("insert `{inserted}` before `{next}`");
+    }
+    let previous: String = before.chars().rev().take_while(is_word).collect();
+    let previous: String = previous.chars().rev().collect();
+    if previous.is_empty() {
         format!("insert `{inserted}`")
     } else {
-        format!("insert `{inserted}` before `{word}`")
+        format!("insert `{inserted}` after `{previous}`")
     }
 }

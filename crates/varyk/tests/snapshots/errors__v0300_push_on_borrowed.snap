@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0300]: this function only reads `scores`; to change it, add `mut` to the parameter
+ --> crates/varyk/tests/fixtures/errors/v0300_push_on_borrowed/main.vr:2:5
+  |
+1 | fn add_score(scores: Vec<i32>) {
+  |              ------ `scores` is declared here without `mut`
+2 |     scores.push(10);
+  |     ^^^^^^ this function only reads `scores`; to change it, add `mut` to the parameter
+  |
+help: insert `mut ` before `scores`

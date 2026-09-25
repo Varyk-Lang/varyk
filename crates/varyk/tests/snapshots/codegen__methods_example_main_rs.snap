@@ -1,0 +1,30 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct Counter {
+    count: i32,
+}
+
+impl Counter {
+    fn new() -> Counter {
+        Counter { count: 0 }
+    }
+
+    fn add(&mut self, by: i32) {
+        self.count = self.count + by;
+    }
+
+    fn value(&self) -> i32 {
+        self.count
+    }
+}
+
+fn main() {
+    let mut counter = Counter::new();
+    println!("{}", counter.value());
+    counter.add(3);
+    println!("{}", counter.value());
+}

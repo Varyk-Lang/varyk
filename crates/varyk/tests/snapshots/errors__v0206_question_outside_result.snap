@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0206]: `?` needs a function that returns a `Result`, but `main` returns nothing (this value is `Result<i32, string>`)
+ --> crates/varyk/tests/fixtures/errors/v0206_question_outside_result/main.vr:9:13
+  |
+9 |     let n = parse("one")?;
+  |             ^^^^^^^^^^^^^ `?` needs a function that returns a `Result`, but `main` returns nothing (this value is `Result<i32, string>`)
+  |
+  = note: on an error, `?` returns it from the function at once, so the function must return a `Result`; `main` never does, so use `?` in a helper function and `match` on that function's result
+  = note: in Rust terms, `?` returns early with the `Err`, so the function's return type must be a `Result` with the same error type

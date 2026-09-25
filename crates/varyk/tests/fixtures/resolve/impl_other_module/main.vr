@@ -1,0 +1,7 @@
+mod m;
+
+impl Task {
+    fn f() {}
+}
+
+fn main() {}

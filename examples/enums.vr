@@ -1,0 +1,25 @@
+// expected output:
+// 3.14
+// 6
+// 0
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Point,
+}
+
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Shape::Circle(radius) => 3.14 * radius * radius,
+        Shape::Rect(w, h) => w * h,
+        Shape::Point => 0.0,
+    }
+}
+
+fn main() {
+    let shapes = vec![Shape::Circle(1.0), Shape::Rect(2.0, 3.0), Shape::Point];
+    for shape in shapes {
+        println!("{}", area(shape));
+    }
+}

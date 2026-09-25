@@ -2,8 +2,8 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0001]: `for` is not supported in Varyk yet
+error[V0001]: `loop` is not supported in Varyk yet
  --> crates/varyk/tests/fixtures/errors/v0001_unsupported_construct/main.vr:2:5
   |
-2 |     for n in 0..3 {
-  |     ^^^ `for` is not supported in Varyk yet
+2 |     loop { }
+  |     ^^^^ `loop` is not supported in Varyk yet
