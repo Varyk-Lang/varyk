@@ -13,7 +13,7 @@ fn make() -> String {
 }
 
 fn same(user: &User, other: &str) -> bool {
-    user.name.as_str() == make().as_str() && other != user.name.as_str() && other == "x"
+    user.name == make() && other != user.name && other == "x"
 }
 
 fn main() {

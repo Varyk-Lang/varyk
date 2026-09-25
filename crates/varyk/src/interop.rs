@@ -46,6 +46,7 @@ pub enum RustTy {
     U16,
     U32,
     U64,
+    Usize,
     F32,
     F64,
     /// `&str`.
@@ -228,8 +229,9 @@ fn bare_ident(ty: &Type, shadowed: &HashSet<String>) -> Option<String> {
 /// type by spelling: the primitives, `String`, and `str` (only meaningful
 /// inside `&str`). A glob `use` can bring in a same-named item from
 /// anywhere, so its presence makes all of these conservatively shadowed.
-const MAPPED_TYPE_NAMES: [&str; 13] = [
-    "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "String", "str",
+const MAPPED_TYPE_NAMES: [&str; 14] = [
+    "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "String",
+    "str",
 ];
 
 /// Rejects, anywhere in `items` (recursing into inline modules), what the
@@ -462,6 +464,7 @@ fn primitive_ty(ty: &Type, shadowed: &HashSet<String>) -> Option<RustTy> {
         "u16" => RustTy::U16,
         "u32" => RustTy::U32,
         "u64" => RustTy::U64,
+        "usize" => RustTy::Usize,
         "f32" => RustTy::F32,
         "f64" => RustTy::F64,
         _ => return None,
@@ -581,6 +584,16 @@ mod tests {
                 RustTy::U64,
             ]
         );
+    }
+
+    #[test]
+    fn param_usize() {
+        let f = one("pub fn f(n: usize, r: &usize) -> usize { n }");
+        assert_eq!(
+            f.params,
+            vec![RustTy::Usize, RustTy::Ref(Box::new(RustTy::Usize))]
+        );
+        assert_eq!(f.ret, RustTy::Usize);
     }
 
     #[test]

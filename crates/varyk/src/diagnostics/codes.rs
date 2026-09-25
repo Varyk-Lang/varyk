@@ -36,6 +36,18 @@ pub const V0201: &str = "V0201";
 pub const V0202: &str = "V0202";
 /// `{}` or `==` applied to a struct.
 pub const V0203: &str = "V0203";
+/// A `match` that does not handle every variant, naming one it misses.
+pub const V0204: &str = "V0204";
+/// A pattern that does not fit the value matched on: a variant of another
+/// type, the wrong number of positions, a catch-all that is not the last
+/// arm, or a value that is not an enum, `Option`, or `Result`.
+pub const V0205: &str = "V0205";
+/// `?` in a function that does not return `Result`, or on a value that is
+/// not a `Result` with the function's error type.
+pub const V0206: &str = "V0206";
+/// A value whose type cannot be worked out where it is written (`None`,
+/// an empty `vec![]`, `Ok`, `Err`); the type must be written.
+pub const V0207: &str = "V0207";
 /// Mutation through a non-`mut` parameter.
 pub const V0300: &str = "V0300";
 /// Assignment to an immutable `let` binding.
@@ -51,3 +63,6 @@ pub const V0305: &str = "V0305";
 /// The same value passed by reference twice to one call, once to a `mut`
 /// parameter.
 pub const V0306: &str = "V0306";
+/// A place changed or given away while another name for part of it is
+/// still used later.
+pub const V0307: &str = "V0307";

@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0307]: this loop goes over `scores`, so `scores` cannot be changed inside it
+ --> crates/varyk/tests/fixtures/errors/v0307_push_in_for/main.vr:4:9
+  |
+3 |     for score in scores {
+  |                  ------ the loop goes over this until it ends
+4 |         scores.push(1);
+  |         ^^^^^^ this loop goes over `scores`, so `scores` cannot be changed inside it
+  |
+  = note: in Rust terms, the `for` loop borrows `scores` until it ends, and a value cannot be changed while it is borrowed

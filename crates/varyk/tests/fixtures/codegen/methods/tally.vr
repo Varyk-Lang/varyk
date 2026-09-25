@@ -1,0 +1,17 @@
+pub struct Tally {
+    count: i32,
+}
+
+impl Tally {
+    pub fn new() -> Tally {
+        Tally { count: 0 }
+    }
+
+    pub fn add(mut self, by: i32) {
+        self.count = self.count + by;
+    }
+
+    pub fn value(self) -> i32 {
+        self.count
+    }
+}

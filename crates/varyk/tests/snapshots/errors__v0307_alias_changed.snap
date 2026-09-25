@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0307]: `name` is another name for part of `user`, so `user` cannot be changed until `name` is no longer needed
+  --> crates/varyk/tests/fixtures/errors/v0307_alias_changed/main.vr:13:14
+   |
+13 |     birthday(user);
+   |              ^^^^ `name` is another name for part of `user`, so `user` cannot be changed until `name` is no longer needed
+14 |     println!("{}", name);
+   |                    ---- `name` is used here later
+   |
+   = note: in Rust terms, `name` is a reference that borrows `user`, and a value cannot be changed while it is borrowed

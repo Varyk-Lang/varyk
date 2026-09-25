@@ -10,10 +10,10 @@ use varyk_syntax::{BinaryOp, UnaryOp};
 
 use super::rust::{item_path, struct_path};
 use crate::hir::{
-    HirBlock, HirExpr, HirExprKind, HirFunction, HirProgram, HirStmt, LocalId, StringRepr,
-    declared_inside, field_root, is_block_like, leaves,
+    HirArm, HirExpr, HirExprKind, HirFunction, HirPattern, HirProgram, LocalId, MethodRef,
+    StringRepr, VariantRef, declared_inside, field_root, is_block_like, is_place, leaves,
 };
-use crate::resolve::{Callee, ModuleId};
+use crate::resolve::{Callee, ModuleId, UserType};
 use crate::types::{FloatKind, IntKind, ParamMode, Ty};
 
 /// What a local is in the generated Rust.
@@ -63,142 +63,46 @@ pub(super) struct FnEmitter<'a> {
     pub(super) program: &'a HirProgram,
     /// The module being emitted.
     pub(super) module: ModuleId,
-    /// Every Varyk function's module, indexed by `FnId`.
-    pub(super) fn_modules: &'a [ModuleId],
     pub(super) function: &'a HirFunction,
-    /// Indexed by `LocalId`.
-    pub(super) reprs: Vec<Repr>,
 }
 
 impl<'a> FnEmitter<'a> {
-    pub(super) fn new(
-        program: &'a HirProgram,
-        module: ModuleId,
-        fn_modules: &'a [ModuleId],
-        function: &'a HirFunction,
-    ) -> Self {
-        let mut emitter = FnEmitter {
+    pub(super) fn new(program: &'a HirProgram, function: &'a HirFunction) -> Self {
+        FnEmitter {
             program,
-            module,
-            fn_modules,
+            module: function.module,
             function,
-            reprs: vec![Repr::Owned; function.locals.len()],
-        };
-        for param in &function.params {
-            emitter.reprs[param.local.0 as usize] = match (param.mode, param.ty) {
-                (ParamMode::Owned, _) => Repr::Owned,
-                (ParamMode::SharedBorrow, Ty::String) => Repr::Str,
-                (ParamMode::SharedBorrow, _) => Repr::Ref { mutable: false },
-                (ParamMode::MutableBorrow, _) => Repr::Ref { mutable: true },
-            };
         }
-        emitter.scan_block(&function.body);
-        emitter
     }
 
     // --- Local representations ----------------------------------------------
 
-    fn scan_block(&mut self, block: &HirBlock) {
-        for stmt in &block.stmts {
-            match stmt {
-                HirStmt::Let { local, value, .. } => {
-                    self.scan_expr(value);
-                    self.reprs[local.0 as usize] = self.let_repr(*local, value);
-                }
-                HirStmt::Assign { target, value, .. } => {
-                    self.scan_expr(target);
-                    self.scan_expr(value);
-                }
-                HirStmt::Expr { expr, .. } => self.scan_expr(expr),
-                HirStmt::Return { value, .. } => {
-                    if let Some(value) = value {
-                        self.scan_expr(value);
-                    }
-                }
-                HirStmt::While { cond, body, .. } => {
-                    self.scan_expr(cond);
-                    self.scan_block(body);
-                }
-                HirStmt::Break { .. } | HirStmt::Continue { .. } => {}
+    /// The representation of `local`, read from what borrow analysis
+    /// recorded: a `string` local's [`StringRepr`], else its place info. A
+    /// `mut` parameter is a `&mut T`, a Copy value otherwise owned, and a
+    /// borrowed place a reference.
+    pub(super) fn repr(&self, local: LocalId) -> Repr {
+        let index = local.0 as usize;
+        let info = &self.function.locals[index];
+        match info.repr {
+            Some(StringRepr::Str) => Repr::Str,
+            Some(StringRepr::Owned) => Repr::Owned,
+            Some(StringRepr::RefOwned) => Repr::Ref { mutable: false },
+            Some(StringRepr::MutOwned) => Repr::Ref { mutable: true },
+            None if index < self.function.params.len() && info.mutable => {
+                Repr::Ref { mutable: true }
             }
-        }
-        if let Some(tail) = &block.tail {
-            self.scan_expr(tail);
-        }
-    }
-
-    /// Visits the blocks nested in `expr`, which may declare locals.
-    fn scan_expr(&mut self, expr: &HirExpr) {
-        match &expr.kind {
-            HirExprKind::Block(block) => self.scan_block(block),
-            HirExprKind::If { cond, then, else_ } => {
-                self.scan_expr(cond);
-                self.scan_block(then);
-                if let Some(else_) = else_ {
-                    self.scan_block(else_);
-                }
-            }
-            HirExprKind::Call { args, .. } | HirExprKind::Println { args, .. } => {
-                for arg in args {
-                    self.scan_expr(arg);
-                }
-            }
-            HirExprKind::Field { base, .. } => self.scan_expr(base),
-            HirExprKind::StructLit { fields, .. } => {
-                for (_, value) in fields {
-                    self.scan_expr(value);
-                }
-            }
-            HirExprKind::Unary { operand, .. } => self.scan_expr(operand),
-            HirExprKind::Binary { lhs, rhs, .. } => {
-                self.scan_expr(lhs);
-                self.scan_expr(rhs);
-            }
-            HirExprKind::Int(_)
-            | HirExprKind::Float(_)
-            | HirExprKind::Bool(_)
-            | HirExprKind::String(_)
-            | HirExprKind::Local(_) => {}
-        }
-    }
-
-    /// The representation of `let local = value`.
-    fn let_repr(&self, local: LocalId, value: &HirExpr) -> Repr {
-        let info = &self.function.locals[local.0 as usize];
-        if info.ty.is_copy() {
-            return Repr::Owned;
-        }
-        if !info.place.borrowed {
-            return match info.repr {
-                Some(StringRepr::Borrowed) => Repr::Str,
-                _ => Repr::Owned,
-            };
-        }
-        // A borrowed place is a reference, except that a `string` one whose
-        // pointee is a `&str`, or whose branches include a `&str`, is a
-        // `&str` itself, so every branch agrees on one type. A mutable one
-        // stays a `&mut String`, so changing it changes what it refers to:
-        // a literal branch then converts (borrow analysis makes every `let`
-        // it may refer to a `String`).
-        let str_leaf = leaves(value)
-            .into_iter()
-            .any(|leaf| self.have(leaf) == Have::Str);
-        if info.ty == Ty::String
-            && !info.place.mutable
-            && (info.repr == Some(StringRepr::Borrowed) || str_leaf)
-        {
-            Repr::Str
-        } else {
-            Repr::Ref {
+            None if !info.ty.is_copy() && info.place.borrowed => Repr::Ref {
                 mutable: info.place.mutable,
-            }
+            },
+            None => Repr::Owned,
         }
     }
 
     /// What a `let` initializer of (or a plain assignment to) `local` must
     /// produce.
     pub(super) fn binding_need(&self, local: LocalId) -> Need {
-        match self.reprs[local.0 as usize] {
+        match self.repr(local) {
             Repr::Owned => Need::Value,
             Repr::Str => Need::Str,
             Repr::Ref { mutable: false } => Need::Shared { binding: true },
@@ -215,12 +119,12 @@ impl<'a> FnEmitter<'a> {
     fn have(&self, expr: &HirExpr) -> Have {
         match &expr.kind {
             HirExprKind::String(_) => Have::Str,
-            HirExprKind::Local(id) => match self.reprs[id.0 as usize] {
+            HirExprKind::Local(id) => match self.repr(*id) {
                 Repr::Owned => Have::Place,
                 Repr::Ref { mutable } => Have::Ref { mutable },
                 Repr::Str => Have::Str,
             },
-            HirExprKind::Field { .. } => Have::Place,
+            HirExprKind::Field { .. } | HirExprKind::Index { .. } => Have::Place,
             _ => Have::Temp,
         }
     }
@@ -259,10 +163,15 @@ impl<'a> FnEmitter<'a> {
                 out
             }
             HirExprKind::Block(block) => self.block(block, self.branch_need(expr, need), indent),
-            // A field lent mutably reaches it mutably through an `if` or
-            // block base too.
-            HirExprKind::Field { .. } if matches!(need, Need::Mut { .. }) => {
-                let text = self.field(expr, true, indent);
+            HirExprKind::Match { scrutinee, arms } => {
+                self.match_expr(scrutinee, arms, self.branch_need(expr, need), indent)
+            }
+            // A field or element lent mutably reaches it mutably through an
+            // `if` or block base too.
+            HirExprKind::Field { .. } | HirExprKind::Index { .. }
+                if matches!(need, Need::Mut { .. }) =>
+            {
+                let text = self.place(expr, true, indent);
                 self.bridge(expr, text, need)
             }
             _ => {
@@ -303,16 +212,18 @@ impl<'a> FnEmitter<'a> {
     /// result, a struct literal, an operator result, a literal other than
     /// a string one unless it is borrowed mutably), a field of one, or a
     /// local declared inside `whole` that holds its value rather than a
-    /// reference (or a field of one). Mirrors borrow analysis's `Leaf`.
+    /// reference (or a field of one). Mirrors borrow analysis's `Leaf`: a
+    /// non-`Copy` element of a new `Vec` is new here, and borrow analysis
+    /// lets it through only where a `let` keeps that `Vec` alive.
     fn is_new(&self, leaf: &HirExpr, whole: &HirExpr, mutable: bool) -> bool {
         let base = field_root(leaf);
         match &base.kind {
             HirExprKind::String(_) => mutable,
             HirExprKind::Local(id) => {
                 declared_inside(&self.function.locals[id.0 as usize], whole.span)
-                    && self.reprs[id.0 as usize] == Repr::Owned
+                    && self.repr(*id) == Repr::Owned
             }
-            HirExprKind::If { .. } | HirExprKind::Block(_) => false,
+            _ if is_block_like(base) => false,
             _ => true,
         }
     }
@@ -333,8 +244,8 @@ impl<'a> FnEmitter<'a> {
                     // reference a value that dies with it (E0716). Emit
                     // the branches as plain values instead; otherwise every
                     // branch is a place, borrowed so that it is not moved.
-                    Ty::Struct(_) if leaves(expr).iter().all(new) => Need::Value,
-                    Ty::Struct(_) => Need::Shared { binding: true },
+                    ref ty if ty.is_compound() && leaves(expr).iter().all(new) => Need::Value,
+                    ref ty if ty.is_compound() => Need::Shared { binding: true },
                     _ => Need::Value,
                 }
             }
@@ -394,21 +305,16 @@ impl<'a> FnEmitter<'a> {
             HirExprKind::Local(id) => self.local_name(*id).to_string(),
             HirExprKind::Call { callee, args } => {
                 let (path, modes) = self.callee(*callee);
-                let args: Vec<String> = args
-                    .iter()
-                    .zip(modes)
-                    .map(|(arg, mode)| {
-                        let need = match mode {
-                            ParamMode::SharedBorrow => Need::Shared { binding: false },
-                            ParamMode::MutableBorrow => Need::Mut { binding: false },
-                            ParamMode::Owned => Need::Value,
-                        };
-                        self.expr(arg, need, indent)
-                    })
-                    .collect();
-                format!("{path}({})", args.join(", "))
+                format!("{path}({})", self.args(args, &modes, indent))
             }
-            HirExprKind::Field { .. } => self.field(expr, false, indent),
+            HirExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => self.method_call(receiver, *method, args, indent),
+            HirExprKind::Field { .. } | HirExprKind::Index { .. } => {
+                self.place(expr, false, indent)
+            }
             HirExprKind::StructLit { id, fields } => {
                 let path = struct_path(self.program, *id, self.module);
                 if fields.is_empty() {
@@ -435,33 +341,218 @@ impl<'a> FnEmitter<'a> {
                 format!("{op}{}", self.operand(operand, None, Need::Value, indent))
             }
             HirExprKind::Binary { op, lhs, rhs } => {
-                // String operands (of `==` and the other comparisons) are
-                // normalized to `&str`.
-                let need = if lhs.ty == Ty::String {
-                    Need::Str
-                } else {
-                    Need::Value
+                // String operands (of `==` and `!=`) are normalized to
+                // `&str` only as needed: a `String` and a `&str` compare
+                // in any mix, a `&String` or a block-like one does not.
+                let need = |operand: &HirExpr| {
+                    if operand.ty != Ty::String {
+                        Need::Value
+                    } else if is_block_like(operand)
+                        || matches!(self.have(operand), Have::Ref { .. })
+                    {
+                        Need::Str
+                    } else {
+                        Need::AsIs
+                    }
                 };
                 format!(
                     "{} {} {}",
-                    self.operand(lhs, Some((*op, false)), need, indent),
+                    self.operand(lhs, Some((*op, false)), need(lhs), indent),
                     op.as_str(),
-                    self.operand(rhs, Some((*op, true)), need, indent)
+                    self.operand(rhs, Some((*op, true)), need(rhs), indent)
                 )
             }
             HirExprKind::Println { format, args } => {
-                let mut out = format!("println!(\"{format}\"");
-                for arg in args {
-                    out.push_str(", ");
-                    out.push_str(&self.expr(arg, Need::AsIs, indent));
-                }
-                out.push(')');
-                out
+                self.format_call("println", format, args, indent)
             }
-            HirExprKind::Block(_) | HirExprKind::If { .. } => {
-                unreachable!("`expr` emits blocks and `if`s itself")
+            HirExprKind::Format { format, args } => {
+                self.format_call("format", format, args, indent)
+            }
+            HirExprKind::EnumLit { variant, args } => {
+                let path = self.variant_path(*variant);
+                if args.is_empty() {
+                    return path;
+                }
+                let args: Vec<String> = args
+                    .iter()
+                    .map(|arg| self.expr(arg, Need::Value, indent))
+                    .collect();
+                format!("{path}({})", args.join(", "))
+            }
+            // The operand is an owned slot: moved or a temporary (spec 3.4).
+            HirExprKind::Try(operand) => {
+                let text = self.expr(operand, Need::Value, indent);
+                format!("{}?", postfix(operand, text))
+            }
+            HirExprKind::VecLit(elements) => {
+                let elements: Vec<String> = elements
+                    .iter()
+                    .map(|element| self.expr(element, Need::Value, indent))
+                    .collect();
+                format!("vec![{}]", elements.join(", "))
+            }
+            HirExprKind::Block(_) | HirExprKind::If { .. } | HirExprKind::Match { .. } => {
+                unreachable!("`expr` emits blocks, `if`s, and `match`es itself")
             }
         }
+    }
+
+    /// `match head { arms }` (spec 5): a place is matched through a shared
+    /// reference (`&v` for an owned place, `v` for a `&T`, `&*v` for a
+    /// `&mut T`), a temporary as it is. A Copy value bound through that
+    /// reference is copied at the start of its arm with `let n = *n;`,
+    /// which makes an expression arm a block. Each arm's value is emitted
+    /// as `need` says.
+    fn match_expr(&self, head: &HirExpr, arms: &[HirArm], need: Need, indent: usize) -> String {
+        let by_reference = is_place(head);
+        let head_need = if by_reference {
+            Need::Shared { binding: true }
+        } else {
+            Need::Value
+        };
+        let inner = indent + 1;
+        let pad = "    ".repeat(inner);
+        let mut out = format!("match {} {{\n", self.expr(head, head_need, indent));
+        for arm in arms {
+            let copies: Vec<String> = arm
+                .pattern
+                .bindings()
+                .into_iter()
+                .filter(|(local, _)| {
+                    by_reference && self.function.locals[local.0 as usize].ty.is_copy()
+                })
+                .map(|(local, _)| {
+                    let name = self.local_name(local);
+                    format!("let {name} = *{name};")
+                })
+                .collect();
+            let body = match &arm.body.kind {
+                HirExprKind::Block(block) => self.block_after(block, &copies, need, inner),
+                _ if copies.is_empty() => format!("{},", self.expr(&arm.body, need, inner)),
+                _ => {
+                    let body_pad = "    ".repeat(inner + 1);
+                    let mut body = String::from("{\n");
+                    for copy in &copies {
+                        body.push_str(&format!("{body_pad}{copy}\n"));
+                    }
+                    let value = self.expr(&arm.body, need, inner + 1);
+                    body.push_str(&format!("{body_pad}{value}\n{pad}}}"));
+                    body
+                }
+            };
+            out.push_str(&format!("{pad}{} => {body}\n", self.pattern(&arm.pattern)));
+        }
+        out.push_str(&"    ".repeat(indent));
+        out.push('}');
+        out
+    }
+
+    /// A pattern: variants spelled as in a value, by their path from this
+    /// module.
+    fn pattern(&self, pattern: &HirPattern) -> String {
+        match pattern {
+            HirPattern::Wildcard => "_".to_string(),
+            HirPattern::Binding(local) => self.local_name(*local).to_string(),
+            HirPattern::Variant { variant, bindings } => {
+                let path = self.variant_path(*variant);
+                if bindings.is_empty() {
+                    return path;
+                }
+                let names: Vec<&str> = bindings
+                    .iter()
+                    .map(|binding| binding.map_or("_", |local| self.local_name(local)))
+                    .collect();
+                format!("{path}({})", names.join(", "))
+            }
+        }
+    }
+
+    /// A variant's path from this module: `Shape::Point`,
+    /// `crate::geo::Shape::Point`, or `Some`.
+    fn variant_path(&self, variant: VariantRef) -> String {
+        match variant {
+            VariantRef::User(id, index) => {
+                let e = &self.program.enums[id.0 as usize];
+                let owner = item_path(self.program, e.module, self.module, &e.name);
+                format!("{owner}::{}", e.variants[index].0)
+            }
+            VariantRef::Some => "Some".to_string(),
+            VariantRef::None => "None".to_string(),
+            VariantRef::Ok => "Ok".to_string(),
+            VariantRef::Err => "Err".to_string(),
+        }
+    }
+
+    /// Call arguments, each as its parameter's mode requires.
+    fn args(&self, args: &[HirExpr], modes: &[ParamMode], indent: usize) -> String {
+        let args: Vec<String> = args
+            .iter()
+            .zip(modes)
+            .map(|(arg, mode)| {
+                let need = match mode {
+                    ParamMode::SharedBorrow => Need::Shared { binding: false },
+                    ParamMode::MutableBorrow => Need::Mut { binding: false },
+                    ParamMode::Owned => Need::Value,
+                };
+                self.expr(arg, need, indent)
+            })
+            .collect();
+        args.join(", ")
+    }
+
+    /// `receiver.name(args)`. Rust's method call borrows the receiver as
+    /// the method's `self` needs, so a place receiver is written as it is
+    /// (never moved); a string receiver that is a `&str` has `clone`
+    /// spelled `.to_string()`, since cloning a `&str` copies only the
+    /// reference (spec 3.5).
+    fn method_call(
+        &self,
+        receiver: &HirExpr,
+        method: MethodRef,
+        args: &[HirExpr],
+        indent: usize,
+    ) -> String {
+        let (name, modes): (&str, Vec<ParamMode>) = match method {
+            MethodRef::Varyk(id) => {
+                let function = self.program.function(id);
+                let modes = function.params.iter().map(|p| p.mode).collect();
+                (&function.name, modes)
+            }
+            MethodRef::Builtin(id) => (id.get().name, id.modes()),
+        };
+        let args = self.args(args, &modes[1..], indent);
+        if receiver.ty != Ty::String {
+            let mutable = modes[0] == ParamMode::MutableBorrow;
+            let receiver = self.field_base(receiver, mutable, indent);
+            return format!("{receiver}.{name}({args})");
+        }
+        let (receiver, is_str) = if is_block_like(receiver) {
+            (
+                format!("({})", self.expr(receiver, Need::Str, indent)),
+                true,
+            )
+        } else if self.have(receiver) == Have::Str {
+            (self.raw(receiver, indent), true)
+        } else {
+            (self.field_base(receiver, false, indent), false)
+        };
+        if name == "clone" && is_str {
+            format!("{receiver}.to_string()")
+        } else {
+            format!("{receiver}.{name}({args})")
+        }
+    }
+
+    /// `println!` or `format!` (`name`): every argument as it is, since
+    /// the format machinery borrows it.
+    fn format_call(&self, name: &str, format: &str, args: &[HirExpr], indent: usize) -> String {
+        let mut out = format!("{name}!(\"{format}\"");
+        for arg in args {
+            out.push_str(", ");
+            out.push_str(&self.expr(arg, Need::AsIs, indent));
+        }
+        out.push(')');
+        out
     }
 
     /// An operator operand, parenthesized when it is a binary expression
@@ -483,27 +574,40 @@ impl<'a> FnEmitter<'a> {
                 inner < outer || (inner == outer && (right || inner == COMPARISON))
             }),
             // Already wrapped when bridged as a whole: `(if ..).as_str()`.
-            HirExprKind::If { .. } | HirExprKind::Block(_) => !text.starts_with('('),
+            _ if is_block_like(expr) => !text.starts_with('('),
             _ => false,
         };
         if wrap { format!("({text})") } else { text }
     }
 
-    /// The field access `expr`, its base reached mutably when `mutable`.
-    fn field(&self, expr: &HirExpr, mutable: bool, indent: usize) -> String {
-        let HirExprKind::Field { base, name } = &expr.kind else {
-            unreachable!("`field` emits field accesses")
-        };
-        format!("{}.{name}", self.field_base(base, mutable, indent))
+    /// The field access or element `expr`, its base reached mutably when
+    /// `mutable`.
+    pub(super) fn place(&self, expr: &HirExpr, mutable: bool, indent: usize) -> String {
+        match &expr.kind {
+            HirExprKind::Field { base, name } => {
+                format!("{}.{name}", self.field_base(base, mutable, indent))
+            }
+            HirExprKind::Index { base, index } => format!(
+                "{}[{}]",
+                self.field_base(base, mutable, indent),
+                self.expr(index, Need::Value, indent)
+            ),
+            _ => unreachable!("`place` emits field accesses and elements"),
+        }
     }
 
-    /// The base of a field access or a field assignment target: a place
-    /// reached through auto-deref, never moved; reached mutably when
-    /// `mutable`.
+    /// The base of a field access, an element, a method call, or an
+    /// assignment target of one of those: a place reached through
+    /// auto-deref, never moved; reached mutably when `mutable`.
     pub(super) fn field_base(&self, base: &HirExpr, mutable: bool, indent: usize) -> String {
         match &base.kind {
-            HirExprKind::Field { .. } => self.field(base, mutable, indent),
-            HirExprKind::Local(_) | HirExprKind::Call { .. } => self.raw(base, indent),
+            HirExprKind::Field { .. } | HirExprKind::Index { .. } => {
+                self.place(base, mutable, indent)
+            }
+            HirExprKind::Local(_)
+            | HirExprKind::Call { .. }
+            | HirExprKind::MethodCall { .. }
+            | HirExprKind::Try(_) => self.raw(base, indent),
             // A block or `if` base is read by reference rather than by
             // value: field access auto-derefs, so this keeps a place leaf
             // (a local or field ending a branch) unmoved. Each branch
@@ -511,7 +615,7 @@ impl<'a> FnEmitter<'a> {
             // would reborrow a `&mut` local instead of moving it. A base
             // whose branches are new values borrows the whole completed
             // value instead (see `borrows_new_value`).
-            HirExprKind::Block(_) | HirExprKind::If { .. } => {
+            _ if is_block_like(base) => {
                 let need = if mutable {
                     Need::Mut { binding: false }
                 } else {
@@ -535,8 +639,19 @@ impl<'a> FnEmitter<'a> {
         match callee {
             Callee::Varyk(id) => {
                 let function = self.program.function(id);
-                let module = self.fn_modules[id.0 as usize];
-                let path = item_path(self.program, module, self.module, &function.name);
+                // An associated function is reached through its type.
+                let path = match function.owner {
+                    None => item_path(self.program, function.module, self.module, &function.name),
+                    Some(owner) => {
+                        let type_name = match owner {
+                            UserType::Struct(id) => &self.program.structs[id.0 as usize].name,
+                            UserType::Enum(id) => &self.program.enums[id.0 as usize].name,
+                        };
+                        let owner =
+                            item_path(self.program, function.module, self.module, type_name);
+                        format!("{owner}::{}", function.name)
+                    }
+                };
                 (path, function.params.iter().map(|p| p.mode).collect())
             }
             Callee::Imported(id) => {
@@ -544,6 +659,7 @@ impl<'a> FnEmitter<'a> {
                 let path = item_path(self.program, sig.module, self.module, &sig.name);
                 (path, sig.params.iter().map(|(_, mode)| *mode).collect())
             }
+            Callee::Builtin(id) => (id.path(), id.modes()),
         }
     }
 }
@@ -552,9 +668,8 @@ impl<'a> FnEmitter<'a> {
 /// binary or block-like expression.
 fn prefix(expr: &HirExpr, text: String) -> String {
     match expr.kind {
-        HirExprKind::Binary { .. } | HirExprKind::If { .. } | HirExprKind::Block(_) => {
-            format!("({text})")
-        }
+        HirExprKind::Binary { .. } => format!("({text})"),
+        _ if is_block_like(expr) => format!("({text})"),
         _ => text,
     }
 }
@@ -563,10 +678,8 @@ fn prefix(expr: &HirExpr, text: String) -> String {
 /// operator or block-like expression.
 fn postfix(expr: &HirExpr, text: String) -> String {
     match expr.kind {
-        HirExprKind::Binary { .. }
-        | HirExprKind::Unary { .. }
-        | HirExprKind::If { .. }
-        | HirExprKind::Block(_) => format!("({text})"),
+        HirExprKind::Binary { .. } | HirExprKind::Unary { .. } => format!("({text})"),
+        _ if is_block_like(expr) => format!("({text})"),
         _ => text,
     }
 }

@@ -1,0 +1,33 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+mod task;
+
+fn count_done(tasks: &Vec<crate::task::Task>) -> usize {
+    let mut done = 0usize;
+    for t in tasks {
+        if t.is_done() {
+            done = done + 1usize;
+        }
+    }
+    done
+}
+
+fn print_all(tasks: &Vec<crate::task::Task>) {
+    for t in tasks {
+        println!("{}", t.label());
+    }
+}
+
+fn main() {
+    let mut tasks: Vec<crate::task::Task> = Vec::new();
+    tasks.push(crate::task::Task::new("Buy milk"));
+    tasks.push(crate::task::Task::new("Write spec"));
+    print_all(&tasks);
+    tasks[0usize].complete();
+    print_all(&tasks);
+    println!("{} of {} done", count_done(&tasks), tasks.len());
+}

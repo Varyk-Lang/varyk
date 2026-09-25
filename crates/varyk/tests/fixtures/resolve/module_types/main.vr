@@ -1,0 +1,14 @@
+mod m;
+
+fn take(t: m::Task, s: m::Shape) -> i32 {
+    t.id
+}
+
+fn make() -> m::Task {
+    m::Task { id: 1 }
+}
+
+fn main() {
+    let t: m::Task = make();
+    println!("{}", t.id);
+}

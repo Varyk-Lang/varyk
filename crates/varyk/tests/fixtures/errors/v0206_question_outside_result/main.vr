@@ -1,0 +1,11 @@
+fn parse(text: string) -> Result<i32, string> {
+    if text == "one" {
+        return Ok(1);
+    }
+    Err("not a number")
+}
+
+fn main() {
+    let n = parse("one")?;
+    println!("{}", n);
+}

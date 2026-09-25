@@ -1,0 +1,47 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn parse_answer(text: &str) -> Result<i32, String> {
+    if text == "42" {
+        Ok(42)
+    } else {
+        Err(format!("not a number: {}", text))
+    }
+}
+
+fn doubled(text: &str) -> Result<i32, String> {
+    let value = parse_answer(text)?;
+    Ok(value * 2)
+}
+
+fn describe(result: &Result<i32, String>) -> String {
+    match result {
+        Ok(value) => {
+            let value = *value;
+            format!("{}", value)
+        }
+        Err(message) => message.clone(),
+    }
+}
+
+fn first_even(values: &Vec<i32>) -> Option<i32> {
+    for value in values {
+        let value = *value;
+        if value % 2 == 0 {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn main() {
+    println!("{}", describe(&doubled("42")));
+    println!("{}", describe(&doubled("abc")));
+    match first_even(&vec![1, 3, 5]) {
+        Some(value) => println!("{}", value),
+        None => println!("none"),
+    }
+}

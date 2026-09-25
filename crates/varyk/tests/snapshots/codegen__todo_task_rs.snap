@@ -1,0 +1,39 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/task.rs\")"
+---
+pub enum Status {
+    Open,
+    Done,
+}
+
+pub struct Task {
+    pub title: String,
+    pub status: Status,
+}
+
+impl Task {
+    pub fn new(title: &str) -> Task {
+        Task { title: title.to_string(), status: Status::Open }
+    }
+
+    pub fn complete(&mut self) {
+        self.status = Status::Done;
+    }
+
+    pub fn is_done(&self) -> bool {
+        match &self.status {
+            Status::Done => true,
+            Status::Open => false,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        let mark = if self.is_done() {
+            "x"
+        } else {
+            " "
+        };
+        format!("[{}] {}", mark, self.title)
+    }
+}

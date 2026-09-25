@@ -12,11 +12,12 @@ Recorded, deliberately unanswered.
   functions? `move` is a candidate. The async runtime decision depends on it.
 - How should owned versus borrowed return values be expressed and inferred?
 - How should an explicit string copy be spelled, once method calls exist?
+  Answered in milestone 2: `s.clone()`.
 - How should lifetime inference work across function boundaries?
 - How should Rust traits, generics, and attributes map into Varyk while
   keeping Go-like simplicity?
 - Should serde derivation be automatic for every struct, or declared with
-  attribute syntax? Milestone 3 is gated on this.
+  attribute syntax? Milestone 5 (batteries) is gated on this.
 - Multi-threaded or current-thread async runtime, and how do `Send` and `Sync`
   failures surface to a writer who never sees those bounds?
 - Which Rust spellings, such as `&x` at a call site, should be accepted with a
@@ -24,4 +25,8 @@ Recorded, deliberately unanswered.
   with a fix-it.
 - What error-handling ergonomics beyond `Result` and `?` are worth adding?
 - Should Rust enums and generic types from `.rs` modules be imported
-  automatically, as structs will be in milestone 2?
+  automatically, as structs will be in milestone 3?
+- Should `match` on an owned local move it, as in Rust, so that its parts
+  can be taken out without a copy? Milestone 2 borrows every place it
+  matches on, so an owned `Option<Task>` local can only be opened by
+  matching on the call that produced it.

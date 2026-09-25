@@ -2,8 +2,8 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0002]: `break` is only allowed inside a `while` loop
+error[V0002]: `break` is only allowed inside a `while` or `for` loop
  --> crates/varyk/tests/fixtures/errors/v0002_break_outside_loop/main.vr:4:9
   |
 4 |         break;
-  |         ^^^^^ `break` is only allowed inside a `while` loop
+  |         ^^^^^ `break` is only allowed inside a `while` or `for` loop

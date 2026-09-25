@@ -1,0 +1,28 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+fn sum(values: &Vec<i32>) -> i32 {
+    let mut total = 0;
+    for value in values {
+        let value = *value;
+        total = total + value;
+    }
+    total
+}
+
+fn main() {
+    let mut values: Vec<i32> = Vec::new();
+    values.push(10);
+    values.push(20);
+    values.push(30);
+    println!("{}", values.len());
+    for i in 0usize..values.len() {
+        println!("{}", values[i]);
+    }
+    println!("{}", sum(&values));
+    values.pop();
+    println!("{}", values.len());
+}

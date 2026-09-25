@@ -1,0 +1,100 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+mod geo;
+
+enum Status {
+    Open,
+    Done,
+    Named(String),
+    Count(i32),
+}
+
+struct Task {
+    title: String,
+    status: Status,
+}
+
+impl Task {
+    fn reopen(&mut self) {
+        match &self.status {
+            Status::Done => {
+                self.status = Status::Open;
+            }
+            _ => {
+            }
+        }
+    }
+}
+
+fn describe(status: &Status) -> String {
+    match status {
+        Status::Open => "open".to_string(),
+        Status::Done => "done".to_string(),
+        Status::Named(name) => name.clone(),
+        Status::Count(n) => {
+            let n = *n;
+            format!("{} left", n)
+        }
+    }
+}
+
+fn bump(status: &mut Status) {
+    match &*status {
+        Status::Count(n) => {
+            let n = *n;
+            *status = Status::Count(n + 1);
+        }
+        other => println!("not a count"),
+    }
+}
+
+fn area(shape: &crate::geo::Shape) -> f64 {
+    match shape {
+        crate::geo::Shape::Circle(r) => {
+            let r = *r;
+            3.0 * r * r
+        }
+        crate::geo::Shape::Point => 0.0,
+    }
+}
+
+fn parse(text: &str) -> Result<i32, String> {
+    if text == "one" {
+        return Ok(1);
+    }
+    Err("unknown".to_string())
+}
+
+fn main() {
+    let mut tasks: Vec<Task> = vec![Task { title: "write".to_string(), status: Status::Done }];
+    tasks[0usize].reopen();
+    match &tasks[0usize].status {
+        Status::Open => println!("open"),
+        _ => println!("not open"),
+    }
+    let maybe: Option<i32> = Some(3);
+    let n = match &maybe {
+        Some(k) => {
+            let k = *k;
+            k
+        }
+        None => 0,
+    };
+    match parse("one") {
+        Ok(value) => println!("{}", value),
+        Err(message) => println!("{}", message),
+    }
+    let picked: Option<Task> = Some(Task { title: "pick".to_string(), status: Status::Named("x".to_string()) });
+    let title = match &picked {
+        Some(task) => task.title.as_str(),
+        None => "none",
+    };
+    let mut count = Status::Count(2);
+    bump(&mut count);
+    println!("{} {} {} {}", describe(&tasks[0usize].status), n, title, describe(&count));
+    println!("{}", area(&crate::geo::Shape::Circle(1.0)));
+}

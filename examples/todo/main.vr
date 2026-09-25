@@ -1,0 +1,34 @@
+// expected output:
+// [ ] Buy milk
+// [ ] Write spec
+// [x] Buy milk
+// [ ] Write spec
+// 1 of 2 done
+
+mod task;
+
+fn count_done(tasks: Vec<task::Task>) -> usize {
+    let mut done: usize = 0;
+    for t in tasks {
+        if t.is_done() {
+            done = done + 1;
+        }
+    }
+    done
+}
+
+fn print_all(tasks: Vec<task::Task>) {
+    for t in tasks {
+        println!("{}", t.label());
+    }
+}
+
+fn main() {
+    let mut tasks: Vec<task::Task> = Vec::new();
+    tasks.push(task::Task::new("Buy milk"));
+    tasks.push(task::Task::new("Write spec"));
+    print_all(tasks);
+    tasks[0].complete();
+    print_all(tasks);
+    println!("{} of {} done", count_done(tasks), tasks.len());
+}

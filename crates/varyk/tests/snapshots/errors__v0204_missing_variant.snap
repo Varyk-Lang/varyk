@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0204]: this `match` does not handle `Shape::Point`
+ --> crates/varyk/tests/fixtures/errors/v0204_missing_variant/main.vr:8:5
+  |
+8 |     match shape {
+  |     ^^^^^^^^^^^ this `match` does not handle `Shape::Point`
+  |
+  = note: add an arm for each missing variant, or end with `_ => ...` to handle every other value; in Rust terms, the patterns are not exhaustive

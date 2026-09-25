@@ -1,0 +1,16 @@
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Point,
+}
+
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Shape::Circle(r) => 3.14 * r * r,
+        Shape::Rect(w, h) => w * h,
+    }
+}
+
+fn main() {
+    println!("{}", area(Shape::Point));
+}

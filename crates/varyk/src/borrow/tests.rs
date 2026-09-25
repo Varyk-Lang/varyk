@@ -4,7 +4,7 @@ use varyk_syntax::{FileId, SourceFile, Span};
 
 use super::analyze;
 use crate::diagnostics::{Diagnostic, codes};
-use crate::hir::{HirFunction, HirProgram, Origin, PlaceInfo, StringRepr};
+use crate::hir::{HirFunction, HirProgram, LocalId, Origin, PlaceInfo, StringRepr};
 use crate::resolve::resolve;
 use crate::types::typecheck;
 
@@ -13,7 +13,7 @@ use crate::types::typecheck;
 fn check_source(entry: SourceFile) -> (Result<HirProgram, Vec<Diagnostic>>, Vec<SourceFile>) {
     let mut sources = Vec::new();
     let result = resolve(entry, &mut sources)
-        .and_then(typecheck)
+        .and_then(|resolved| typecheck(resolved, &sources))
         .and_then(analyze);
     (result, sources)
 }
@@ -168,6 +168,50 @@ fn assigning_through_a_let_bound_from_a_field_of_a_non_mut_parameter_is_v0300() 
     ));
     assert_eq!(d.code, codes::V0300);
     assert_mut_fix_it(&d, &sources, "fn f(p: P)", "p: P");
+    assert!(
+        has_note(
+            &d,
+            "`n` is another name for a field of `p`; to keep your own copy, write `let mut n = p.name.clone();`"
+        ),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn assigning_through_a_let_mut_bound_from_a_whole_non_mut_string_parameter_is_v0300() {
+    let (d, sources) = one_error(
+        "fn f(a: string, b: string) {\n    let mut r = a;\n    r = b;\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0300);
+    assert_mut_fix_it(&d, &sources, "fn f(a: string, b: string)", "a: string");
+    assert!(
+        has_note(
+            &d,
+            "`r` is another name for `a`; to keep your own copy, write `let mut r = a.clone();`"
+        ),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn assigning_through_a_let_mut_bound_from_an_element_of_a_non_mut_parameter_is_v0300() {
+    let (d, sources) = one_error(
+        "fn f(words: Vec<string>) {\n    let mut best = words[0];\n    best = words[1];\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0300);
+    assert_mut_fix_it(
+        &d,
+        &sources,
+        "fn f(words: Vec<string>)",
+        "words: Vec<string>",
+    );
+    assert!(
+        has_note(
+            &d,
+            "`best` is another name for an element of `words`; to keep your own copy, write `let mut best = words[0].clone();`"
+        ),
+        "{d:#?}"
+    );
 }
 
 #[test]
@@ -178,6 +222,33 @@ fn assigning_through_mut_parameters_and_let_mut_is_accepted() {
     ok(&with_p(
         "fn g(p: P) {\n    let mut x = p.x;\n    x = 5;\n    let mut local = P { x: 1, name: \"a\" };\n    local.name = \"b\";\n    local = P { x: 2, name: \"c\" };\n}\n",
     ));
+}
+
+#[test]
+fn assigning_a_field_of_self_in_a_non_mut_self_method_is_v0300() {
+    let (d, sources) = one_error(&with_p(
+        "impl P {\n    fn reset(self) {\n        self.x = 0;\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0300);
+    assert_eq!(d.span, span_of(&sources, "self.x"));
+    assert!(d.message.contains("`self`"), "{d:#?}");
+    assert_mut_fix_it(&d, &sources, "fn reset(self)", "self)");
+}
+
+#[test]
+fn assigning_a_field_of_self_in_a_mut_self_method_is_accepted() {
+    let program = ok(&with_p(
+        "impl P {\n    fn bump(mut self, by: i32) {\n        self.x = self.x + by;\n        self.name = \"n\";\n    }\n}\n",
+    ));
+    let bump = function(&program, "bump");
+    assert_eq!(
+        place(bump, "self"),
+        PlaceInfo {
+            borrowed: true,
+            mutable: true,
+            origin: Some(Origin::Param(LocalId(0))),
+        }
+    );
 }
 
 // --- V0301: assignment to an immutable `let` --------------------------------
@@ -218,6 +289,20 @@ fn passing_an_immutable_let_to_a_mut_parameter_is_v0302() {
     assert_eq!(d.span, part_of(&sources, "g(q)", "q"));
     assert!(d.message.contains("`q`"), "{d:#?}");
     assert_mut_fix_it(&d, &sources, "let q = P", "q = P");
+}
+
+#[test]
+fn passing_an_immutable_let_to_a_mut_parameter_inside_a_range_for_uses_its_own_name() {
+    // A range-`for`'s own variable never gets the V0302 wording (it is a
+    // `for` variable, V0303's business); the `let` blamed here is a
+    // different local, `j`, and the message must name it, not the loop's
+    // own variable.
+    let (d, _) = one_error(
+        "fn change(mut n: i32) {\n}\nfn main() {\n    let j = 1;\n    for i in 0..3 {\n        change(j);\n    }\n}\n",
+    );
+    assert_eq!(d.code, codes::V0302, "{d:#?}");
+    assert!(d.message.contains("`j`"), "{d:#?}");
+    assert!(!d.message.contains("`i`"), "{d:#?}");
 }
 
 #[test]
@@ -277,7 +362,8 @@ fn assert_v0304(d: &Diagnostic, span: Span, names: &str) {
     assert_eq!(d.code, codes::V0304, "{d:#?}");
     assert_eq!(d.span, span, "{d:#?}");
     assert!(d.message.contains(names), "{d:#?}");
-    assert!(has_note(d, "milestone 2 will allow this"), "{d:#?}");
+    assert!(!has_note(d, "milestone"), "{d:#?}");
+    assert!(has_note(d, "in Rust terms"), "{d:#?}");
 }
 
 #[test]
@@ -314,6 +400,25 @@ fn a_binding_of_a_borrowed_place_keeps_its_origin() {
         "fn f(user: P) -> P {\n    let u = user;\n    u\n}\n",
     ));
     assert_v0304(&d, part_of(&sources, "    u\n}", "u"), "`user`");
+}
+
+#[test]
+fn a_binding_of_a_field_of_an_owned_local_has_that_local_as_its_origin() {
+    let text = format!(
+        "{P}fn f() -> string {{\n    let local = P {{ x: 1, name: \"a\" }};\n    let n = local.name;\n    n\n}}\n{MAIN}"
+    );
+    let (d, sources) = one_error(&text);
+    assert_v0304(&d, part_of(&sources, "    n\n}", "n"), "`local`");
+
+    let program = ok(&with_p(
+        "fn f() {\n    let local = P { x: 1, name: \"a\" };\n    let n = local.name;\n}\n",
+    ));
+    let f = function(&program, "f");
+    let local = f.locals.iter().position(|l| l.name == "local").unwrap();
+    assert_eq!(
+        place(f, "n").origin,
+        Some(Origin::Local(LocalId(local as u32)))
+    );
 }
 
 #[test]
@@ -454,8 +559,8 @@ fn a_literal_let_that_is_only_read_stays_borrowed() {
         "fn f() -> bool {\n    let s = \"x\";\n    read(s);\n    println!(\"{}\", s);\n    let same = s == \"y\";\n    let t = s;\n    same\n}\n",
     ));
     let f = function(&program, "f");
-    assert_eq!(repr(f, "s"), Some(StringRepr::Borrowed));
-    assert_eq!(repr(f, "t"), Some(StringRepr::Borrowed));
+    assert_eq!(repr(f, "s"), Some(StringRepr::Str));
+    assert_eq!(repr(f, "t"), Some(StringRepr::Str));
 }
 
 #[test]
@@ -520,13 +625,13 @@ fn parameters_and_borrowed_bindings_get_their_representation() {
         "fn f(s: string, mut t: string, n: i32, p: P) {\n    let a = s;\n    let b = t;\n    let c = p.name;\n    let q = p;\n}\n",
     ));
     let f = function(&program, "f");
-    assert_eq!(repr(f, "s"), Some(StringRepr::Borrowed));
-    assert_eq!(repr(f, "t"), Some(StringRepr::Owned));
+    assert_eq!(repr(f, "s"), Some(StringRepr::Str));
+    assert_eq!(repr(f, "t"), Some(StringRepr::MutOwned));
     assert_eq!(repr(f, "n"), None);
     assert_eq!(repr(f, "p"), None);
-    assert_eq!(repr(f, "a"), Some(StringRepr::Borrowed));
-    assert_eq!(repr(f, "b"), Some(StringRepr::Owned));
-    assert_eq!(repr(f, "c"), Some(StringRepr::Owned));
+    assert_eq!(repr(f, "a"), Some(StringRepr::Str));
+    assert_eq!(repr(f, "b"), Some(StringRepr::RefOwned));
+    assert_eq!(repr(f, "c"), Some(StringRepr::RefOwned));
     assert_eq!(repr(f, "q"), None);
 }
 
@@ -535,11 +640,90 @@ fn representation_of_the_examples() {
     let program = check_path("examples/interop/main.vr").0.unwrap();
     assert_eq!(
         repr(function(&program, "main"), "name"),
-        Some(StringRepr::Borrowed)
+        Some(StringRepr::Str)
     );
     let program = check_path("examples/borrowing.vr").0.unwrap();
     assert_eq!(repr(function(&program, "main"), "user"), None);
     assert_eq!(repr(function(&program, "rename"), "user"), None);
+}
+
+/// One case per row of the M1 section 4.3 table that binds a `string`
+/// local, with the representation recorded for it. The rows for a literal
+/// into an owned slot, a field to a `string` or `mut string` parameter,
+/// and a borrowed place into an owned slot (rejected) bind none.
+#[test]
+fn representation_of_each_string_table_row() {
+    use StringRepr::{MutOwned, Owned, RefOwned, Str};
+    /// The row, the function `f`, and each local's expected representation.
+    type Case = (
+        &'static str,
+        &'static str,
+        &'static [(&'static str, StringRepr)],
+    );
+    let cases: [Case; 11] = [
+        (
+            "literal bound by `let`, binding stays borrowed",
+            "fn f() {\n    let s = \"x\";\n    read(s);\n}\n",
+            &[("s", Str)],
+        ),
+        (
+            "literal bound by `let`, binding needs to be owned",
+            "fn f() -> string {\n    let s = \"x\";\n    s\n}\n",
+            &[("s", Owned)],
+        ),
+        (
+            "owned local into a field",
+            "fn f() {\n    let s = mk();\n    let p = P { x: 1, name: s };\n}\n",
+            &[("s", Owned)],
+        ),
+        (
+            "borrowed local to a `string` parameter",
+            "fn f(s: string) {\n    let t = s;\n    read(t);\n}\n",
+            &[("s", Str), ("t", Str)],
+        ),
+        (
+            "owned local to a `string` parameter",
+            "fn f() {\n    let s = mk();\n    read(s);\n}\n",
+            &[("s", Owned)],
+        ),
+        (
+            "owned local to a `mut string` parameter",
+            "fn f() {\n    let mut s = \"x\";\n    fill(s);\n}\n",
+            &[("s", Owned)],
+        ),
+        (
+            "`let` from a field",
+            "fn f(p: P) {\n    let n = p.name;\n}\n",
+            &[("n", RefOwned)],
+        ),
+        (
+            "changeable `let` from a field of a mutable place",
+            "fn f(mut p: P) {\n    let mut n = p.name;\n    n = \"y\";\n}\n",
+            &[("n", MutOwned)],
+        ),
+        (
+            "`let` from a field or a literal",
+            "fn f(p: P, c: bool) {\n    let n = if c { p.name } else { \"x\" };\n}\n",
+            &[("n", Str)],
+        ),
+        (
+            "assignment through a `mut string` parameter",
+            "fn f(mut name: string) {\n    name = \"x\";\n    let b = name;\n}\n",
+            &[("name", MutOwned), ("b", RefOwned)],
+        ),
+        (
+            "`==` between any two strings",
+            "fn f() -> bool {\n    let a = \"x\";\n    let b = mk();\n    a == b\n}\n",
+            &[("a", Str), ("b", Owned)],
+        ),
+    ];
+    for (row, body, expected) in cases {
+        let program = ok(&with_strs(body));
+        let f = function(&program, "f");
+        for &(name, want) in expected {
+            assert_eq!(repr(f, name), Some(want), "{row}: `{name}`");
+        }
+    }
 }
 
 // --- V0304: borrowed places into owned `let`s -------------------------------
@@ -811,6 +995,48 @@ fn assigning_a_field_of_a_block_local_to_an_outer_let_is_v0304() {
     ok(&with_blocks(
         "fn f(c: bool) {\n    if c {\n        let mut s = \"a\";\n        let t = mkp();\n        s = t.name;\n        read(s);\n    }\n}\n",
     ));
+}
+
+#[test]
+fn a_part_of_a_match_or_for_binding_over_a_temporary_kept_outside_is_v0304() {
+    const HEADS: &str = "fn mkps() -> Vec<P> {\n    vec![mkp()]\n}\nfn op() -> Option<P> {\n    None\n}\nfn mkv() -> Vec<string> {\n    vec![\"v\"]\n}\n";
+    let program = |body: &str| {
+        with_blocks(&format!(
+            "{HEADS}fn f() {{\n    let mut s = \"a\";\n    {body}\n    read(s);\n}}\n"
+        ))
+    };
+    for (body, stmt, leaf) in [
+        ("for t in mkps() { s = t.name; }", "s = t.name;", "t.name"),
+        (
+            "match op() { Some(t) => { s = t.name; } None => {} }",
+            "s = t.name;",
+            "t.name",
+        ),
+        ("for t in mkps() { let u = t.name; s = u; }", "s = u;", "u"),
+        (
+            "for v in vec![mkps()] { s = v[0].name; }",
+            "s = v[0].name;",
+            "v[0].name",
+        ),
+        (
+            "match op() { Some(t) => { let mut z = \"z\"; z = t.name; s = z; } None => {} }",
+            "s = z;",
+            "z",
+        ),
+    ] {
+        let (d, sources) = one_error(&program(body));
+        assert_gone(&d, part_of(&sources, stmt, leaf), "only exists inside this");
+    }
+    // Over a place, the binding's roots outlive the loop or arm; an owned
+    // `String` moved out of a temporary is moved on.
+    for body in [
+        "let ps = mkps();\n    for t in ps { s = t.name; }",
+        "let o = op();\n    match o { Some(t) => { s = t.name; } None => {} }",
+        "let ps = mkps();\n    for t in ps { let u = t.name; s = u; }",
+        "for n in mkv() { s = n; }",
+    ] {
+        ok(&program(body));
+    }
 }
 
 #[test]
@@ -1145,6 +1371,21 @@ fn a_third_consuming_use_still_points_at_the_first_move() {
     );
 }
 
+#[test]
+fn using_an_enum_or_a_vec_after_let_moves_it_is_v0305() {
+    for ty in ["E", "Vec<i32>"] {
+        let (d, sources) = one_error(&format!(
+            "enum E {{\n    A,\n}}\nfn make(x: {ty}) -> {ty} {{\n    make(x)\n}}\nfn f(x: {ty}) {{\n    let a = make(x);\n    let b = a;\n    let c = a;\n}}\nfn main() {{}}\n"
+        ));
+        assert_v0305(
+            &d,
+            part_of(&sources, "let c = a", "a"),
+            part_of(&sources, "let b = a", "a"),
+            "a",
+        );
+    }
+}
+
 // --- V0306: one value passed twice to a call, once to `mut` -------------------
 
 const TWICE: &str =
@@ -1285,6 +1526,58 @@ fn two_copy_reads_of_the_same_local_are_accepted() {
     ok("fn h(a: i32, b: i32) {}\nfn main() {\n    let x = 1;\n    h(x, x);\n}\n");
 }
 
+#[test]
+fn changing_method_with_a_copy_element_of_the_receiver_argument_notes_a_plain_let() {
+    let (d, _) = one_error(
+        "fn main() {\n    let mut v: Vec<i32> = Vec::new();\n    v.push(1);\n    v.push(v[0]);\n}\n",
+    );
+    assert_eq!(d.code, codes::V0306);
+    assert!(
+        has_note(&d, "store it with `let` first, as in `let x = v[0];`"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn changing_method_with_a_struct_element_of_the_receiver_argument_notes_looping_by_index() {
+    let (d, _) = one_error(
+        "struct Item {\n    n: i32,\n}\nstruct Bag {\n    items: Vec<Item>,\n}\nimpl Bag {\n    fn add(mut self, item: Item) {}\n}\nfn main() {\n    let mut b = Bag { items: Vec::new() };\n    b.items.push(Item { n: 1 });\n    b.add(b.items[0]);\n}\n",
+    );
+    assert_eq!(d.code, codes::V0306);
+    assert!(
+        has_note(
+            &d,
+            "store a copy first, or loop by index and change the element in place"
+        ),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn changing_method_with_a_struct_field_of_the_receiver_argument_never_mentions_a_loop() {
+    let (d, _) = one_error(
+        "struct Item {\n    n: i32,\n}\nstruct Bag {\n    current: Item,\n}\nimpl Bag {\n    fn add(mut self, item: Item) {}\n}\nfn main() {\n    let mut b = Bag { current: Item { n: 1 } };\n    b.add(b.current);\n}\n",
+    );
+    assert_eq!(d.code, codes::V0306);
+    assert!(has_note(&d, "store a copy first"), "{d:#?}");
+    assert!(!has_note(&d, "loop"), "{d:#?}");
+}
+
+#[test]
+fn changing_method_with_a_string_element_of_the_receiver_argument_notes_the_clone_fix() {
+    let (d, _) = one_error(
+        "struct Bag {\n    items: Vec<string>,\n}\nimpl Bag {\n    fn add(mut self, item: string) {}\n}\nfn main() {\n    let mut b = Bag { items: Vec::new() };\n    b.items.push(\"a\");\n    b.add(b.items[0]);\n}\n",
+    );
+    assert_eq!(d.code, codes::V0306);
+    assert!(
+        has_note(
+            &d,
+            "store this value with `let` first, as in `let x = b.items[0].clone();`"
+        ),
+        "{d:#?}"
+    );
+}
+
 // --- V0306: println! arguments ------------------------------------------------
 
 #[test]
@@ -1354,4 +1647,1008 @@ fn call_argument_that_assigns_a_copy_local_read_earlier_is_accepted() {
         "fn f(a: i32, b: i32) {}\nfn main() {\n    let mut x = 0;\n    \
          f(x, { x = 1; 2 });\n}\n",
     );
+}
+
+// --- V0307: a place changed while another name for it is still used ---------
+
+const ALIASES: &str = "struct P {\n    s: string,\n    n: i32,\n}\nfn read_s(s: string) {}\nfn read_p(p: P) {}\nfn change_p(mut p: P) {\n    p.n = 5;\n}\n";
+
+fn with_aliases(body: &str) -> String {
+    format!("{ALIASES}{body}{MAIN}")
+}
+
+/// Asserts `d` is V0307 at `changed`, naming `root` and `alias`, with a
+/// label at `used` and a note giving the Rust term.
+fn assert_v0307(d: &Diagnostic, changed: Span, used: Span, root: &str, alias: &str) {
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.span, changed, "{d:#?}");
+    assert!(d.message.contains(&format!("`{root}`")), "{d:#?}");
+    assert!(d.message.contains(&format!("`{alias}`")), "{d:#?}");
+    assert!(
+        d.labels
+            .iter()
+            .any(|l| l.span == used && l.text.contains(&format!("`{alias}`"))),
+        "{d:#?}"
+    );
+    assert!(has_note(d, "in Rust terms"), "{d:#?}");
+}
+
+#[test]
+fn changing_the_root_of_an_alias_used_later_is_v0307() {
+    let (d, sources) = one_error(&with_aliases(
+        "fn f(mut p: P) {\n    let n = p.s;\n    change_p(p);\n    read_s(n);\n}\n",
+    ));
+    assert_v0307(
+        &d,
+        part_of(&sources, "(p);\n    read_s(n)", "p"),
+        part_of(&sources, "read_s(n);\n}", "n"),
+        "p",
+        "n",
+    );
+}
+
+#[test]
+fn changing_the_root_after_the_alias_is_last_used_is_accepted() {
+    ok(&with_aliases(
+        "fn f(mut p: P) {\n    let n = p.s;\n    read_s(n);\n    change_p(p);\n}\n",
+    ));
+}
+
+#[test]
+fn using_the_root_of_a_mutable_alias_used_later_is_v0307() {
+    let (d, sources) = one_error(&with_aliases(
+        "fn f(mut p: P) {\n    let mut m = p.s;\n    read_p(p);\n    m = \"x\";\n}\n",
+    ));
+    assert_v0307(
+        &d,
+        part_of(&sources, "(p);\n    m", "p"),
+        part_of(&sources, "m = \"x\"", "m"),
+        "p",
+        "m",
+    );
+}
+
+#[test]
+fn an_alias_used_only_before_the_root_changes_is_accepted() {
+    ok(&with_aliases(
+        "fn f(mut p: P) {\n    let n = p.s;\n    read_s(n);\n    let mut m = p.s;\n    m = \"y\";\n    read_s(m);\n    change_p(p);\n    read_p(p);\n    p.n = 2;\n}\n",
+    ));
+}
+
+#[test]
+fn changing_the_root_of_an_alias_made_by_assignment_is_v0307() {
+    let (d, sources) = one_error(&with_aliases(
+        "fn f() {\n    let mut lp = P { s: \"p\", n: 1 };\n    let mut x = \"a\";\n    x = lp.s;\n    change_p(lp);\n    read_s(x);\n}\n",
+    ));
+    assert_v0307(
+        &d,
+        part_of(&sources, "(lp);\n    read_s(x)", "lp"),
+        part_of(&sources, "read_s(x);\n}", "x"),
+        "lp",
+        "x",
+    );
+}
+
+#[test]
+fn an_alias_made_by_assignment_used_only_before_the_change_is_accepted() {
+    ok(&with_aliases(
+        "fn f() {\n    let mut lp = P { s: \"p\", n: 1 };\n    let mut x = \"a\";\n    change_p(lp);\n    x = lp.s;\n    read_s(x);\n    change_p(lp);\n}\n",
+    ));
+}
+
+#[test]
+fn a_copy_of_an_alias_made_by_assignment_is_an_alias_too() {
+    for copy in ["let z = x;", "let mut z = \"b\";\n    z = x;"] {
+        let (d, sources) = one_error(&with_aliases(&format!(
+            "fn f() {{\n    let mut lp = P {{ s: \"p\", n: 1 }};\n    let mut x = \"a\";\n    x = lp.s;\n    {copy}\n    x = \"c\";\n    change_p(lp);\n    read_s(z);\n}}\n"
+        )));
+        assert_v0307(
+            &d,
+            part_of(&sources, "(lp);\n    read_s(z)", "lp"),
+            part_of(&sources, "read_s(z);\n}", "z"),
+            "lp",
+            "z",
+        );
+    }
+    ok(&with_aliases(
+        "fn f() {\n    let mut x = \"a\";\n    let z = x;\n    x = \"c\";\n    read_s(z);\n    read_s(x);\n}\n",
+    ));
+}
+
+// --- Values and constructors: owned slots (spec 3.4) and `format!` --------
+
+const E: &str = "enum E {\n    A(string),\n    B(P),\n}\n";
+
+fn with_e(body: &str) -> String {
+    format!("{P}{E}{STRS}{body}{MAIN}")
+}
+
+#[test]
+fn a_payload_of_a_borrowed_field_is_v0304() {
+    let (d, sources) = one_error(&with_e("fn f(p: P) -> E {\n    E::A(p.name)\n}\n"));
+    assert_v0304(&d, span_of(&sources, "p.name"), "`P`");
+    assert!(d.message.contains("`E::A`"), "{d:#?}");
+}
+
+#[test]
+fn every_constructor_argument_and_vec_element_is_an_owned_slot() {
+    for (value, at) in [("E::B(p)", "p)"), ("Some(p)", "p)"), ("vec![p]", "p]")] {
+        let text = with_e(&format!("fn f(p: P) {{\n    let v = {value};\n}}\n"));
+        let (d, sources) = one_error(&text);
+        assert_v0304(&d, part_of(&sources, at, "p"), "`p`");
+    }
+    for value in ["Ok(s)", "Err(s)"] {
+        let text = with_e(&format!(
+            "fn f(s: string) -> Result<string, string> {{\n    let r: Result<string, string> = {value};\n    r\n}}\n"
+        ));
+        let (d, sources) = one_error(&text);
+        assert_v0304(&d, part_of(&sources, "(s)", "s"), "`s`");
+    }
+}
+
+#[test]
+fn an_owned_local_moves_into_a_payload_or_an_element() {
+    for value in ["Some(s)", "E::A(s)", "vec![s]"] {
+        let text = with_e(&format!(
+            "fn f() {{\n    let s = mk();\n    let v = {value};\n    read(s);\n}}\n"
+        ));
+        let (d, _) = one_error(&text);
+        assert_eq!(d.code, codes::V0305, "{value}: {d:#?}");
+    }
+    let (d, _) = one_error(&with_e(
+        "fn f() {\n    let p = P { x: 1, name: \"a\" };\n    let v = vec![p, p];\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+}
+
+#[test]
+fn a_literal_let_flowing_into_a_payload_or_an_element_is_owned() {
+    let program = ok(&with_e(
+        "fn f() {\n    let a = \"a\";\n    let b = \"b\";\n    let c = \"c\";\n    let x = Some(a);\n    let y = E::A(b);\n    let z = vec![c];\n    let lit = Some(\"d\");\n}\n",
+    ));
+    let f = function(&program, "f");
+    for name in ["a", "b", "c"] {
+        assert_eq!(repr(f, name), Some(StringRepr::Owned), "{name}");
+    }
+}
+
+#[test]
+fn a_let_holding_a_format_result_is_owned() {
+    let program = ok(&with_e(
+        "fn f() {\n    let s = format!(\"{}\", 1);\n    let mut t = \"a\";\n    t = format!(\"{}!\", s);\n    read(t);\n}\n",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(repr(f, "s"), Some(StringRepr::Owned));
+    assert_eq!(repr(f, "t"), Some(StringRepr::Owned));
+}
+
+#[test]
+fn a_format_argument_changed_by_a_later_one_is_v0306() {
+    let (d, _) = one_error(&with_takers(
+        "fn f() {\n    let mut n = 1;\n    let s = format!(\"{} {}\", n, { inc(n); 2 });\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0306, "{d:#?}");
+}
+
+#[test]
+fn giving_away_the_root_of_an_alias_into_a_payload_is_v0307() {
+    let (d, _) = one_error(&with_e(
+        "fn f() {\n    let p = P { x: 1, name: \"a\" };\n    let n = p.name;\n    let e = E::B(p);\n    read(n);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+}
+
+// --- Methods, the built-in table, and indexing (spec 2.5, 2.6, 3.1) ---------
+
+const TASK: &str = "struct Task {\n    label: string,\n    done: bool,\n}\nimpl Task {\n    fn new(label: string) -> Task {\n        Task { label: label.clone(), done: false }\n    }\n\n    fn complete(mut self) {\n        self.done = true;\n    }\n\n    fn label(self) -> string {\n        self.label.clone()\n    }\n}\nfn read(s: string) {}\nfn show(t: Task) {}\nfn mk() -> Task {\n    Task::new(\"m\")\n}\n";
+
+fn with_task(body: &str) -> String {
+    format!("{TASK}{body}{MAIN}")
+}
+
+#[test]
+fn an_index_that_changes_the_vec_it_reads_is_v0306() {
+    let (d, sources) = one_error(
+        "fn g(mut v: Vec<i32>) -> usize {\n    0\n}\nfn main() {\n    let mut v = vec![1];\n    let x = v[g(v)];\n}\n",
+    );
+    assert_eq!(d.code, codes::V0306, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "g(v)", "v"));
+    assert!(d.message.contains("`v` is changed in this index"), "{d:#?}");
+    let (d, _) = one_error(
+        "struct S {\n    v: Vec<string>,\n}\nimpl S {\n    fn idx(mut self) -> usize {\n        0\n    }\n}\nfn main() {\n    let mut s = S { v: vec![\"a\"] };\n    println!(\"{}\", s.v[s.idx()]);\n}\n",
+    );
+    assert_eq!(d.code, codes::V0306, "{d:#?}");
+    // Reading the `Vec` in its own index is fine.
+    ok("fn main() {\n    let v = vec![1];\n    let x = v[v.len() - 1];\n}\n");
+}
+
+#[test]
+fn a_mut_self_method_on_a_let_binding_is_v0302_with_its_fix_it() {
+    let (d, sources) = one_error(&with_task(
+        "fn f() {\n    let t = mk();\n    t.complete();\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0302, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "t.complete()", "t"));
+    assert!(d.message.contains("`complete`"), "{d:#?}");
+    assert_mut_fix_it(&d, &sources, "let t = mk()", "t = mk()");
+}
+
+#[test]
+fn a_mut_self_method_on_a_non_mut_parameter_is_v0303() {
+    let (d, sources) = one_error(&with_task("fn f(t: Task) {\n    t.complete();\n}\n"));
+    assert_eq!(d.code, codes::V0303, "{d:#?}");
+    assert_mut_fix_it(&d, &sources, "fn f(t: Task)", "t: Task");
+}
+
+#[test]
+fn a_changing_built_in_on_a_non_mut_place_is_v0300_or_v0301() {
+    let (d, sources) = one_error("fn f(v: Vec<i32>) {\n    v.push(1);\n}\nfn main() {}\n");
+    assert_eq!(d.code, codes::V0300, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "v.push", "v"));
+    assert_mut_fix_it(&d, &sources, "fn f(v: Vec<i32>)", "v: Vec");
+
+    let (d, sources) =
+        one_error("fn main() {\n    let v: Vec<i32> = vec![];\n    let x = v.pop();\n}\n");
+    assert_eq!(d.code, codes::V0301, "{d:#?}");
+    assert_mut_fix_it(&d, &sources, "let v: Vec", "v: Vec");
+}
+
+#[test]
+fn reading_methods_and_changes_on_mutable_places_are_accepted() {
+    ok(&with_task(
+        "fn f(t: Task, v: Vec<Task>, mut w: Vec<Task>) {\n    read(t.label());\n    let n = v.len();\n    w.push(mk());\n    w[0].complete();\n    mk().complete();\n    let mut tasks = vec![mk()];\n    tasks[0].complete();\n    tasks.push(Task::new(\"b\"));\n    let last = tasks.pop();\n}\n",
+    ));
+}
+
+#[test]
+fn an_element_let_is_an_alias_of_its_vec_unless_copy() {
+    let program = ok(&with_task(
+        "fn f(v: Vec<Task>) {\n    let mut tasks = vec![mk()];\n    let first = tasks[0];\n    show(first);\n    let mut second = tasks[0];\n    second.complete();\n    let from_param = v[0];\n    let ns = vec![1, 2];\n    let n = ns[1];\n    show(from_param);\n}\n",
+    ));
+    let f = function(&program, "f");
+    let tasks = f
+        .locals
+        .iter()
+        .position(|l| l.name == "tasks")
+        .expect("tasks");
+    let tasks = LocalId(tasks as u32);
+    assert_eq!(
+        place(f, "first"),
+        PlaceInfo {
+            borrowed: true,
+            mutable: false,
+            origin: Some(Origin::Local(tasks)),
+        }
+    );
+    assert_eq!(
+        place(f, "second"),
+        PlaceInfo {
+            borrowed: true,
+            mutable: true,
+            origin: Some(Origin::Local(tasks)),
+        }
+    );
+    assert_eq!(
+        place(f, "from_param").origin,
+        Some(Origin::Param(LocalId(0)))
+    );
+    assert!(!place(f, "n").borrowed);
+}
+
+#[test]
+fn an_element_is_changed_only_through_a_mutable_vec() {
+    let (d, _) = one_error(&with_task(
+        "fn f(v: Vec<Task>) {\n    v[0].complete();\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0303, "{d:#?}");
+    let (d, _) = one_error("fn main() {\n    let v = vec![1];\n    v[0] = 2;\n}\n");
+    assert_eq!(d.code, codes::V0301, "{d:#?}");
+}
+
+#[test]
+fn an_element_is_an_owned_slot_when_assigned() {
+    let (d, sources) = one_error(&with_task(
+        "fn f(t: Task) {\n    let mut v = vec![mk()];\n    v[0] = t;\n}\n",
+    ));
+    assert_v0304(&d, part_of(&sources, "= t;", "t"), "`t`");
+    let program = ok(&with_task(
+        "fn f() {\n    let s = \"a\";\n    let mut v = vec![\"x\"];\n    v[0] = s;\n}\n",
+    ));
+    assert_eq!(repr(function(&program, "f"), "s"), Some(StringRepr::Owned));
+}
+
+#[test]
+fn push_takes_an_owned_slot() {
+    let (d, sources) = one_error(&with_task(
+        "fn f(t: Task) {\n    let mut v = vec![mk()];\n    v.push(t);\n}\n",
+    ));
+    assert_v0304(&d, part_of(&sources, "push(t)", "t"), "`t`");
+
+    let (d, _) = one_error(&with_task(
+        "fn f() {\n    let t = mk();\n    let mut v = vec![mk()];\n    v.push(t);\n    show(t);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+
+    let program = ok(&with_task(
+        "fn f() {\n    let s = \"a\";\n    let mut v: Vec<string> = Vec::new();\n    v.push(s);\n    v.push(\"b\");\n}\n",
+    ));
+    assert_eq!(repr(function(&program, "f"), "s"), Some(StringRepr::Owned));
+}
+
+#[test]
+fn a_clone_is_new_text() {
+    let program = ok(&with_task(
+        "fn f(s: string) {\n    let t = s.clone();\n    let u = \"lit\".clone();\n}\n",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(repr(f, "t"), Some(StringRepr::Owned));
+    assert_eq!(repr(f, "u"), Some(StringRepr::Owned));
+}
+
+#[test]
+fn changing_a_vec_while_an_element_alias_is_used_later_is_v0307() {
+    for change in ["tasks[0].complete();", "tasks.push(mk());"] {
+        let (d, sources) = one_error(&with_task(&format!(
+            "fn f() {{\n    let mut tasks = vec![mk(), mk()];\n    let first = tasks[1];\n    {change}\n    read(first.label());\n}}\n"
+        )));
+        assert_eq!(d.code, codes::V0307, "{change}: {d:#?}");
+        assert!(d.message.contains("`tasks`"), "{d:#?}");
+        assert_eq!(d.labels[0].span, part_of(&sources, "read(first", "first"));
+    }
+}
+
+#[test]
+fn using_the_receiver_inside_a_changing_call_is_v0306() {
+    let (d, sources) =
+        one_error("fn main() {\n    let mut v: Vec<usize> = vec![];\n    v.push(v.len());\n}\n");
+    assert_eq!(d.code, codes::V0306, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "(v.len", "v"));
+    assert!(d.message.contains("`v`"), "{d:#?}");
+    assert!(d.message.contains("`push`"), "{d:#?}");
+    assert!(d.message.contains("`let`"), "{d:#?}");
+}
+
+#[test]
+fn a_v0304_on_a_string_value_carries_the_clone_fix_it() {
+    let (d, sources) = one_error(&with_p("fn f(user: P) -> string {\n    user.name\n}\n"));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    let end = span_of(&sources, "user.name").end;
+    let fix = d.fix_it.as_ref().expect("a `.clone()` fix-it");
+    assert_eq!(fix.span, Span::new(FileId(0), end, end));
+    assert_eq!(fix.replacement, ".clone()");
+
+    // Not for a struct value, which has no `clone`.
+    let (d, _) = one_error(&with_p("fn f(user: P) -> P {\n    user\n}\n"));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert!(d.fix_it.is_none(), "{d:#?}");
+}
+
+#[test]
+fn an_index_using_its_vec_in_a_changing_place_is_v0306() {
+    for (stmts, at) in [
+        (
+            "let mut ln = vec![1, 2];\n    ln[ln.len() - 1] = 2;",
+            "ln.len",
+        ),
+        (
+            "let mut ws = vec![\"a\"];\n    ws[ws.len() - 1] = \"b\";",
+            "ws.len",
+        ),
+        (
+            "let mut tasks = vec![mk()];\n    tasks[tasks.len() - 1].complete();",
+            "tasks.len",
+        ),
+        (
+            "let mut tasks = vec![mk()];\n    change(tasks[tasks.len() - 1]);",
+            "tasks.len",
+        ),
+        (
+            "let mut tasks = vec![mk()];\n    let mut t = tasks[tasks.len() - 1];\n    t.complete();",
+            "tasks.len",
+        ),
+    ] {
+        let (d, sources) = one_error(&with_task(&format!(
+            "fn change(mut t: Task) {{}}\nfn f() {{\n    {stmts}\n}}\n"
+        )));
+        assert_eq!(d.code, codes::V0306, "{stmts}: {d:#?}");
+        let root = at.split('.').next().expect("root");
+        assert_eq!(d.span, part_of(&sources, at, root), "{stmts}");
+        assert!(d.message.contains("index"), "{d:#?}");
+        assert!(d.message.contains("`let`"), "{d:#?}");
+    }
+    // Reading such an element, or storing the index first, is fine.
+    ok(&with_task(
+        "fn f() {\n    let mut tasks = vec![mk()];\n    let n = tasks[tasks.len() - 1].label();\n    let i = tasks.len() - 1;\n    tasks[i].complete();\n}\n",
+    ));
+}
+
+#[test]
+fn a_string_element_of_a_temporary_vec_bound_by_let_is_a_reference_to_a_string() {
+    let program = ok(&with_task(
+        "fn mk_vs() -> Vec<string> {\n    vec![\"a\"]\n}\nfn f() {\n    let s = mk_vs()[0];\n    read(s);\n}\n",
+    ));
+    assert_eq!(
+        repr(function(&program, "f"), "s"),
+        Some(StringRepr::RefOwned)
+    );
+}
+
+// --- `match`: bindings borrow from a place, own from a temporary (3.2) ---
+
+const MATCHING: &str = "enum Status {\n    Open,\n    Done,\n    Named(string),\n    Count(i32),\n    Held(Task),\n}\nstruct Board {\n    status: Status,\n}\nimpl Board {\n    fn reopen(mut self) {\n        match self.status {\n            Status::Done => {\n                self.status = Status::Open;\n            }\n            Status::Count(n) => {\n                self.status = Status::Open;\n                println!(\"{}\", n);\n            }\n            _ => {}\n        }\n    }\n}\nfn mk_o() -> Option<Task> {\n    Some(mk())\n}\nfn mk_os() -> Option<string> {\n    None\n}\nfn change_i(mut n: i32) {}\nfn change_t(mut t: Task) {}\n";
+
+fn with_matching(body: &str) -> String {
+    format!("{TASK}{MATCHING}{body}{MAIN}")
+}
+
+/// The id of the last local called `name` in `function`.
+fn local_id(function: &HirFunction, name: &str) -> LocalId {
+    let index = function
+        .locals
+        .iter()
+        .rposition(|local| local.name == name)
+        .unwrap_or_else(|| panic!("no local {name}"));
+    LocalId(index as u32)
+}
+
+#[test]
+fn bindings_on_a_place_are_read_only_aliases_and_on_a_temporary_owned() {
+    let program = ok(&with_matching(
+        "fn f(b: Board, o: Option<Task>) {\n    let lo = mk_o();\n    match lo {\n        Some(a) => show(a),\n        None => {}\n    }\n    match o {\n        Some(p) => show(p),\n        None => {}\n    }\n    match b.status {\n        Status::Held(h) => show(h),\n        Status::Count(n) => println!(\"{}\", n),\n        _ => {}\n    }\n    match mk_o() {\n        Some(t) => show(t),\n        None => {}\n    }\n}\n",
+    ));
+    let f = function(&program, "f");
+    let alias = |origin| PlaceInfo {
+        borrowed: true,
+        mutable: false,
+        origin: Some(origin),
+    };
+    assert_eq!(place(f, "a"), alias(Origin::Local(local_id(f, "lo"))));
+    assert_eq!(place(f, "p"), alias(Origin::Param(local_id(f, "o"))));
+    assert!(
+        matches!(place(f, "h").origin, Some(Origin::Struct(_))),
+        "{:?}",
+        place(f, "h")
+    );
+    assert!(place(f, "h").borrowed && !place(f, "h").mutable);
+    for owned in ["n", "t"] {
+        assert_eq!(place(f, owned), PlaceInfo::default(), "{owned}");
+    }
+}
+
+#[test]
+fn a_string_binding_refers_to_the_string_in_a_place_and_owns_one_from_a_temporary() {
+    let program = ok(&with_matching(
+        "fn f(o: Option<string>, s: Status) {\n    match o {\n        Some(a) => read(a),\n        None => {}\n    }\n    match s {\n        Status::Named(b) => read(b),\n        _ => {}\n    }\n    match mk_os() {\n        Some(c) => read(c),\n        None => {}\n    }\n}\n",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(repr(f, "a"), Some(StringRepr::RefOwned));
+    assert_eq!(repr(f, "b"), Some(StringRepr::RefOwned));
+    assert_eq!(repr(f, "c"), Some(StringRepr::Owned));
+}
+
+#[test]
+fn a_binding_of_a_matched_owned_local_pushed_into_a_vec_is_v0304_saying_to_match_on_the_call() {
+    // `found` holds a call result in a `let`, so matching on `found` and
+    // pushing its binding is V0304; matching on the call directly is fine.
+    let (d, sources) = one_error(&with_matching(
+        "fn f() {\n    let mut tasks: Vec<Task> = Vec::new();\n    let found = mk_o();\n    match found {\n        Some(task) => tasks.push(task),\n        None => {}\n    }\n}\n",
+    ));
+    assert_v0304(&d, part_of(&sources, "push(task)", "task"), "`found`");
+    assert!(
+        has_note(&d, "`match` on the call that made `found`"),
+        "{d:#?}"
+    );
+    ok(&with_matching(
+        "fn f() {\n    let mut tasks: Vec<Task> = Vec::new();\n    match mk_o() {\n        Some(task) => tasks.push(task),\n        None => {}\n    }\n}\n",
+    ));
+}
+
+#[test]
+fn a_binding_used_after_its_root_is_assigned_in_the_arm_is_v0307() {
+    let (d, sources) = one_error(&with_matching(
+        "fn f() {\n    let mut lo = mk_o();\n    match lo {\n        Some(t) => {\n            lo = None;\n            show(t);\n        }\n        None => {}\n    }\n}\n",
+    ));
+    assert_v0307(
+        &d,
+        part_of(&sources, "lo = None", "lo"),
+        part_of(&sources, "show(t)", "t"),
+        "lo",
+        "t",
+    );
+}
+
+#[test]
+fn an_arm_may_change_the_root_when_no_alias_from_the_pattern_is_used_after() {
+    // `Board::reopen` in the prelude: a unit pattern, and a Copy binding.
+    ok(&with_matching(
+        "fn f() {\n    let mut s = Status::Count(1);\n    match s {\n        Status::Count(n) => {\n            s = Status::Open;\n            println!(\"{}\", n);\n        }\n        Status::Held(t) => {\n            show(t);\n            s = Status::Done;\n        }\n        _ => {}\n    }\n}\n",
+    ));
+}
+
+#[test]
+fn a_match_read_as_a_value_follows_the_if_rule() {
+    let program = ok(&with_matching(
+        "fn f(o: Option<Task>, d: Task) {\n    let x = match o {\n        Some(t) => t,\n        None => d,\n    };\n    show(x);\n    let y = match mk_o() {\n        Some(t) => t,\n        None => mk(),\n    };\n    show(y);\n}\n",
+    ));
+    let f = function(&program, "f");
+    assert!(place(f, "x").borrowed, "{:?}", place(f, "x"));
+    assert!(!place(f, "y").borrowed, "{:?}", place(f, "y"));
+
+    let (d, _) = one_error(&with_matching(
+        "fn f(o: Option<string>) {\n    let x = match o {\n        Some(s) => s,\n        None => format!(\"none\"),\n    };\n    read(x);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    let (d, sources) = one_error(&with_matching(
+        "fn f(o: Option<Task>) {\n    show(match o {\n        Some(t) => t,\n        None => mk(),\n    });\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span.start, span_of(&sources, "match o").start, "{d:#?}");
+}
+
+#[test]
+fn changing_a_binding_is_v0301_or_v0303_worded_for_what_it_is() {
+    // An alias: change the original, no `mut` to add.
+    for (body, code) in [
+        (
+            "Some(t) => {\n            t.done = true;\n        }",
+            codes::V0301,
+        ),
+        ("Some(t) => change_t(t),", codes::V0303),
+    ] {
+        let (d, _) = one_error(&with_matching(&format!(
+            "fn f() {{\n    let mut lo = mk_o();\n    match lo {{\n        {body}\n        None => {{}}\n    }}\n}}\n"
+        )));
+        assert_eq!(d.code, code, "{body}: {d:#?}");
+        assert!(d.message.contains("change `lo` itself"), "{d:#?}");
+        assert!(d.fix_it.is_none(), "{d:#?}");
+    }
+    // A copy or an owned value: `let mut n = n;` first.
+    for (head, body, code, name) in [
+        (
+            "s",
+            "Status::Count(n) => {\n            n = 2;\n        }\n        _ => {}",
+            codes::V0301,
+            "n",
+        ),
+        (
+            "mk_o()",
+            "Some(t) => {\n            change_t(t);\n        }\n        None => {}",
+            codes::V0303,
+            "t",
+        ),
+    ] {
+        let (d, sources) = one_error(&with_matching(&format!(
+            "fn f(s: Status) {{\n    match {head} {{\n        {body}\n    }}\n}}\n"
+        )));
+        assert_eq!(d.code, code, "{body}: {d:#?}");
+        let fix = format!("let mut {name} = {name};");
+        assert!(d.message.contains(&fix), "{d:#?}");
+        // The arm in `f`, after the prelude's.
+        let arm = format!("({name}) => {{\n");
+        let brace = (sources[0].text.rfind(&arm).expect("the arm") + arm.len() - 1) as u32;
+        let fix_it = d.fix_it.as_ref().expect("fix-it");
+        assert_eq!(fix_it.span, Span::new(FileId(0), brace, brace), "{d:#?}");
+        assert_eq!(fix_it.replacement, format!(" {fix}"));
+    }
+}
+
+#[test]
+fn a_temporary_matched_on_gives_its_bindings_away_and_a_moved_head_cannot_be_matched() {
+    let (d, _) = one_error(&with_matching(
+        "fn f() {\n    let mut tasks: Vec<Task> = Vec::new();\n    match mk_o() {\n        Some(t) => {\n            tasks.push(t);\n            show(t);\n        }\n        None => {}\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    let (d, _) = one_error(&with_matching(
+        "fn f() {\n    let lo = mk_o();\n    let other = lo;\n    match lo {\n        _ => {}\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+}
+
+// --- `for`: the variable borrows from a place, owns from a temporary (3.1, 3.2)
+
+const LOOPS: &str = "fn change_t(mut t: Task) {}\nfn change_i(mut n: i32) {}\nfn all() -> Vec<Task> {\n    vec![mk()]\n}\nfn words() -> Vec<string> {\n    vec![\"a\"]\n}\n";
+
+fn with_loops(body: &str) -> String {
+    format!("{TASK}{LOOPS}{body}{MAIN}")
+}
+
+/// Asserts `d` is the V0307 of a `for` holding `root` for the whole loop:
+/// at `changed`, with a label at `head`, where the loop starts.
+fn assert_held(d: &Diagnostic, changed: Span, head: Span, root: &str) {
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.span, changed, "{d:#?}");
+    assert!(d.message.contains(&format!("`{root}`")), "{d:#?}");
+    assert!(d.message.contains("loop"), "{d:#?}");
+    assert!(
+        d.labels.iter().any(|l| l.span == head),
+        "a label at the head: {d:#?}"
+    );
+    assert!(has_note(d, "in Rust terms"), "{d:#?}");
+}
+
+#[test]
+fn changing_the_vec_looped_over_is_v0307_even_when_the_variable_is_unused() {
+    // The loop holds `v` for the whole loop even though `x` is never read,
+    // so changing `v` inside the body is still rejected.
+    let (d, sources) = one_error(&with_loops(
+        "fn f() {\n    let mut v = vec![1, 2];\n    for x in v {\n        v.push(1);\n    }\n}\n",
+    ));
+    assert_held(
+        &d,
+        part_of(&sources, "v.push(1)", "v"),
+        part_of(&sources, "in v {", "v"),
+        "v",
+    );
+    // A non-Copy element, a change before `break`, a field of a parameter,
+    // and giving the `Vec` away are all rejected too.
+    for body in [
+        "    let mut tasks = vec![mk()];\n    for t in tasks {\n        tasks.push(mk());\n    }\n",
+        "    let mut tasks = vec![mk()];\n    for t in tasks {\n        tasks = all();\n        break;\n    }\n",
+        "    let v = vec![1];\n    for x in v {\n        let w = v;\n        break;\n    }\n",
+        "    let mut tasks = vec![mk()];\n    for t in tasks {\n        tasks[0].complete();\n        show(t);\n    }\n",
+    ] {
+        let (d, _) = one_error(&with_loops(&format!("fn f() {{\n{body}}}\n")));
+        assert_eq!(d.code, codes::V0307, "{body}: {d:#?}");
+    }
+}
+
+#[test]
+fn an_alias_made_through_a_mutable_alias_keeps_its_root_from_being_used() {
+    // A `let` of a part, a `match` binding, and a loop over the mutable
+    // alias all reborrow it, so its root cannot be read while they are used.
+    let (d, sources) = one_error(&with_loops(
+        "fn f(mut ts: Vec<Task>) {\n    let mut a = ts[0];\n    let s = a.label;\n    println!(\"{} {}\", ts.len(), s);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "ts.len()", "ts"));
+    assert!(
+        d.message.contains("part of `a`, which can change `ts`"),
+        "{d:#?}"
+    );
+    let (d, _) = one_error(&with_loops(
+        "fn f(mut v: Vec<Option<string>>) {\n    let mut a = v[0];\n    match a {\n        Some(s) => println!(\"{} {}\", v.len(), s),\n        None => {}\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    let (d, sources) = one_error(&with_loops(
+        "fn f(mut rows: Vec<Vec<i32>>) {\n    let mut row = rows[0];\n    for t in row {\n        println!(\"{}\", rows.len());\n    }\n}\n",
+    ));
+    assert_held(
+        &d,
+        part_of(&sources, "rows.len()", "rows"),
+        part_of(&sources, "in row {", "row"),
+        "rows",
+    );
+    assert!(
+        d.message.contains(
+            "this loop goes over `row`, which can change `rows`, so `rows` cannot be used inside it"
+        ),
+        "{d:#?}"
+    );
+    // Reading the mutable alias itself while its reborrow is used is fine.
+    ok(&with_loops(
+        "fn f(mut ts: Vec<Task>) {\n    let mut a = ts[0];\n    let s = a.label;\n    println!(\"{} {}\", a.done, s);\n}\n",
+    ));
+}
+
+#[test]
+fn a_mutable_alias_made_through_a_mutable_alias_leaves_it_usable_once_done() {
+    // `s` reborrows `a`, so `a` may change once `s` is no longer used.
+    ok(&with_aliases(
+        "fn f(mut ps: Vec<P>) {\n    let mut a = ps[0];\n    let mut s = a.s;\n    s = \"x\";\n    change_p(a);\n}\n",
+    ));
+    let (d, sources) = one_error(&with_aliases(
+        "fn f(mut ps: Vec<P>) {\n    let mut a = ps[0];\n    let mut s = a.s;\n    change_p(a);\n    s = \"x\";\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    let call = span_of(&sources, "change_p(a)");
+    assert_eq!(
+        d.span,
+        Span::new(call.file, call.start + 9, call.start + 10),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn the_vec_looped_over_may_change_after_the_loop_or_when_it_is_a_temporary() {
+    ok(&with_loops(
+        "fn f() {\n    let mut v = vec![1, 2];\n    for x in v {\n        println!(\"{}\", x);\n    }\n    v.push(3);\n    let mut w = vec![1];\n    for y in all() {\n        w.push(1);\n    }\n    for i in 0..v.len() {\n        v[i] = 0;\n    }\n}\n",
+    ));
+}
+
+#[test]
+fn a_for_variable_is_an_alias_a_copy_or_an_owned_value() {
+    let program = ok(&with_loops(
+        "fn f(tasks: Vec<Task>) {\n    let mine = all();\n    for t in tasks {\n        show(t);\n    }\n    for m in mine {\n        show(m);\n    }\n    for o in all() {\n        show(o);\n    }\n    let ns = vec![1];\n    for n in ns {\n        println!(\"{}\", n);\n    }\n    for i in 0..3 {\n        println!(\"{}\", i);\n    }\n}\n",
+    ));
+    let f = function(&program, "f");
+    let alias = |origin| PlaceInfo {
+        borrowed: true,
+        mutable: false,
+        origin: Some(origin),
+    };
+    assert_eq!(place(f, "t"), alias(Origin::Param(local_id(f, "tasks"))));
+    assert_eq!(place(f, "m"), alias(Origin::Local(local_id(f, "mine"))));
+    for owned in ["o", "n", "i"] {
+        assert_eq!(place(f, owned), PlaceInfo::default(), "{owned}");
+    }
+}
+
+#[test]
+fn a_string_for_variable_refers_into_a_place_and_owns_from_a_temporary() {
+    let program = ok(&with_loops(
+        "fn f(names: Vec<string>) {\n    for a in names {\n        read(a);\n    }\n    for b in words() {\n        read(b);\n    }\n}\n",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(repr(f, "a"), Some(StringRepr::RefOwned));
+    assert_eq!(repr(f, "b"), Some(StringRepr::Owned));
+}
+
+#[test]
+fn reading_through_a_for_variable_passes() {
+    ok(&with_loops(
+        "fn f(tasks: Vec<Task>, values: Vec<i32>) -> i32 {\n    for t in tasks {\n        t.label();\n    }\n    let mut total = 0;\n    for value in values {\n        total = total + value;\n    }\n    total\n}\n",
+    ));
+}
+
+#[test]
+fn a_for_variable_over_a_place_cannot_be_kept_and_one_over_a_temporary_can() {
+    let (d, sources) = one_error(&with_loops(
+        "fn f(tasks: Vec<Task>) {\n    let mut out: Vec<Task> = Vec::new();\n    for t in tasks {\n        out.push(t);\n    }\n}\n",
+    ));
+    assert_v0304(&d, part_of(&sources, "push(t)", "t"), "`tasks`");
+    ok(&with_loops(
+        "fn f() {\n    let mut out: Vec<Task> = Vec::new();\n    for t in all() {\n        out.push(t);\n    }\n}\n",
+    ));
+}
+
+#[test]
+fn changing_a_for_variable_is_v0301_or_v0303_worded_for_what_it_is() {
+    // An alias: change the original, no `mut` to add.
+    for (stmt, code) in [
+        ("t.label = \"x\";", codes::V0301),
+        ("change_t(t);", codes::V0303),
+    ] {
+        let (d, _) = one_error(&with_loops(&format!(
+            "fn f(mut tasks: Vec<Task>) {{\n    for t in tasks {{\n        {stmt}\n    }}\n}}\n"
+        )));
+        assert_eq!(d.code, code, "{stmt}: {d:#?}");
+        assert!(d.message.contains("change `tasks` itself"), "{d:#?}");
+        assert!(d.message.contains("`for`"), "{d:#?}");
+        assert!(d.fix_it.is_none(), "{d:#?}");
+    }
+    // A copy or an owned value: `let mut n = n;` first.
+    for (head, stmt, code, name) in [
+        ("n in ns", "n = 2;", codes::V0301, "n"),
+        ("i in 0..3", "change_i(i);", codes::V0303, "i"),
+        ("t in all()", "t.complete();", codes::V0303, "t"),
+    ] {
+        let (d, sources) = one_error(&with_loops(&format!(
+            "fn f() {{\n    let ns = vec![1];\n    for {head} {{\n        {stmt}\n    }}\n}}\n"
+        )));
+        assert_eq!(d.code, code, "{stmt}: {d:#?}");
+        let fix = format!("let mut {name} = {name};");
+        assert!(d.message.contains(&fix), "{d:#?}");
+        let brace = span_of(&sources, &format!("{head} {{")).end - 1;
+        let fix_it = d.fix_it.as_ref().expect("fix-it");
+        assert_eq!(
+            fix_it.span,
+            Span::new(FileId(0), brace + 1, brace + 1),
+            "{d:#?}"
+        );
+        assert_eq!(fix_it.replacement, format!(" {fix}"));
+    }
+}
+
+#[test]
+fn a_for_variable_passed_to_a_mut_parameter_suggests_looping_by_index() {
+    let (d, _) = one_error(&with_loops(
+        "fn f(mut tasks: Vec<Task>) {\n    for t in tasks {\n        change_t(t);\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0303, "{d:#?}");
+    assert!(
+        d.message.ends_with(
+            "change `tasks` itself instead, for example by looping with `for i in \
+             0..tasks.len()` and using `tasks[i]`"
+        ),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_for_variable_assigned_to_suggests_looping_by_index() {
+    let (d, _) = one_error(&with_loops(
+        "fn f(mut tasks: Vec<Task>) {\n    for t in tasks {\n        t.label = \"x\";\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0301, "{d:#?}");
+    assert!(
+        d.message.ends_with(
+            "change `tasks` itself instead, for example by looping with `for i in \
+             0..tasks.len()` and using `tasks[i]`"
+        ),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_for_body_follows_itself_for_moves_and_aliases() {
+    // Given away in one round, used in the next.
+    let (d, _) = one_error(&with_loops(
+        "fn f() {\n    let t = mk();\n    let mut out: Vec<Task> = Vec::new();\n    for i in 0..3 {\n        out.push(t);\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    assert!(has_note(&d, "previous time through the loop"), "{d:#?}");
+    // An alias used in one round after its root changed in the last.
+    let (d, sources) = one_error(&with_loops(
+        "fn f() {\n    let mut tasks = vec![mk()];\n    let first = tasks[0];\n    for i in 0..3 {\n        show(first);\n        tasks.push(mk());\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.labels[0].span, part_of(&sources, "show(first)", "first"));
+    // An owned variable given away, then used in the same round.
+    let (d, _) = one_error(&with_loops(
+        "fn f() {\n    let mut out: Vec<Task> = Vec::new();\n    for t in all() {\n        out.push(t);\n        show(t);\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    // A `Vec` given away before the loop.
+    let (d, _) = one_error(&with_loops(
+        "fn f() {\n    let v = vec![1];\n    let w = v;\n    for x in v {}\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+}
+
+// --- `?`: the operand is an owned slot (spec 3.4) -----------------------------
+
+/// `body` after a `parse` returning `Result<i32, string>` and a struct `H`
+/// holding one, with an empty `main`.
+fn with_parse(body: &str) -> String {
+    format!(
+        "struct H {{\n    r: Result<i32, string>,\n}}\n\nfn parse() -> Result<i32, string> {{\n    Ok(1)\n}}\n\n{body}\nfn main() {{}}\n"
+    )
+}
+
+#[test]
+fn question_moves_an_owned_local_so_a_second_one_is_v0305() {
+    let (d, sources) = one_error(&with_parse(
+        "fn run() -> Result<i32, string> {\n    let r = parse();\n    let v = r?;\n    let w = r?;\n    Ok(v + w)\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "let w = r?", "r"));
+
+    // In a loop, the second round sees the first round's move.
+    let (d, _) = one_error(&with_parse(
+        "fn run() -> Result<i32, string> {\n    let r = parse();\n    let mut total = 0;\n    for i in 0..3 {\n        total = total + r?;\n    }\n    Ok(total)\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+}
+
+#[test]
+fn question_on_a_borrowed_place_is_v0304() {
+    let (d, sources) = one_error(&with_parse(
+        "fn run(r: Result<i32, string>) -> Result<i32, string> {\n    let v = r?;\n    Ok(v)\n}\n",
+    ));
+    assert_v0304(&d, part_of(&sources, "r?", "r"), "`r`");
+    assert!(d.message.contains("`?`"), "{d:#?}");
+
+    let (d, sources) = one_error(&with_parse(
+        "fn run(h: H) -> Result<i32, string> {\n    let v = h.r?;\n    Ok(v)\n}\n",
+    ));
+    assert_v0304(&d, span_of(&sources, "h.r"), "`H`");
+
+    let (d, sources) = one_error(&with_parse(
+        "fn run() -> Result<i32, string> {\n    let rs = vec![parse()];\n    let mut total = 0;\n    for r in rs {\n        total = total + r?;\n    }\n    Ok(total)\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "r?", "r"));
+}
+
+#[test]
+fn question_on_a_temporary_or_an_owned_binding_is_accepted() {
+    ok(&with_parse(
+        "fn run() -> Result<i32, string> {\n    parse()?;\n    let r = parse();\n    let mut total = r?;\n    for r in vec![parse(), parse()] {\n        total = total + r?;\n    }\n    let n = match parse() {\n        Ok(n) => n,\n        Err(e) => parse()?,\n    };\n    Ok(total + n)\n}\n",
+    ));
+}
+
+#[test]
+fn a_string_from_question_is_owned() {
+    let program = ok(
+        "fn name() -> Result<string, string> {\n    Ok(\"a\")\n}\n\nfn f() -> Result<string, string> {\n    let s = name()?;\n    let t = if true { name()? } else { \"b\" };\n    Ok(format!(\"{}{}\", s, t))\n}\n\nfn main() {}\n",
+    );
+    let f = function(&program, "f");
+    assert_eq!(repr(f, "s"), Some(StringRepr::Owned));
+    assert_eq!(repr(f, "t"), Some(StringRepr::Owned));
+}
+
+#[test]
+fn an_element_of_a_gone_vec_read_in_place_is_v0304() {
+    const VECS: &str = "fn mkv() -> Vec<string> {\n    vec![\"v\"]\n}\nfn mkps() -> Vec<P> {\n    vec![mkp()]\n}\nfn ops() -> Option<Vec<P>> {\n    None\n}\n";
+    for (stmt, leaf) in [
+        ("read(if c { mkv()[0] } else { \"x\" });", "mkv()[0]"),
+        ("read({ let v = mkv(); v[0] });", "v[0]"),
+        (
+            "println!(\"{}\", if c { let v = mkv(); v[0] } else { \"z\" });",
+            "v[0]",
+        ),
+        (
+            "show(match ops() { Some(list) => list[0], None => mkp() });",
+            "list[0]",
+        ),
+        ("if c { mkps()[0] } else { mkp() };", "mkps()[0]"),
+        (
+            "println!(\"{}\", (if c { mkps()[0] } else { mkp() }).name);",
+            "mkps()[0]",
+        ),
+        (
+            "read(match ops() { Some(list) => list[0].name, None => \"n\" });",
+            "list[0].name",
+        ),
+    ] {
+        let (d, sources) = one_error(&with_blocks(&format!(
+            "{VECS}fn f(c: bool) {{\n    {stmt}\n}}\n"
+        )));
+        assert_eq!(d.code, codes::V0304, "{stmt}: {d:#?}");
+        assert_eq!(d.span, part_of(&sources, stmt, leaf), "{stmt}: {d:#?}");
+        assert!(
+            has_note(&d, "cannot outlive the value it borrows"),
+            "{stmt}: {d:#?}"
+        );
+    }
+    // A Copy element is copied out, and a `let` keeps the temporary alive.
+    ok(&with_blocks(&format!(
+        "{VECS}fn f(c: bool) {{\n    println!(\"{{}}\", if c {{ mkps()[0].x }} else {{ 1 }});\n    let z = if c {{ mkps()[0] }} else {{ mkp() }};\n    show(z);\n}}\n"
+    )));
+}
+
+#[test]
+fn v0304_names_the_matched_value_the_arm_and_the_gone_vec() {
+    const VECS: &str = "fn mkv() -> Vec<string> {\n    vec![\"v\"]\n}\nfn ovs() -> Option<Vec<string>> {\n    None\n}\n";
+    let error = |body: &str| one_error(&with_blocks(&format!("{VECS}fn f() {{\n{body}\n}}\n"))).0;
+    // (a) A binding is borrowed from the value matched on.
+    let d = error(
+        "    let o: Option<string> = None;\n    read(match o { Some(s) => s, None => mk() });",
+    );
+    assert!(d.message.contains("borrowed from `o`"), "{d:#?}");
+    // (b) A branch that a `let` cannot keep either: make every branch new.
+    for body in [
+        "    let o: Option<P> = None;\n    show(match o { Some(p) => p, None => { let a = mkp(); a } });",
+        "    read(match ovs() { Some(list) => list[0], None => mk() });",
+    ] {
+        let d = error(body);
+        assert!(!d.message.contains("store it with `let`"), "{d:#?}");
+        assert!(
+            has_note(&d, "every branch give a new value instead"),
+            "{d:#?}"
+        );
+    }
+    // (c) A match binding lives in its arm; a temporary, until the line ends.
+    let d =
+        error("    let s = match ovs() { Some(list) => list[0], None => \"none\" };\n    read(s);");
+    assert!(
+        d.message.starts_with("`list` only exists inside this arm"),
+        "{d:#?}"
+    );
+    let d = error("    let mut t = \"a\";\n    t = mkv()[0];\n    read(t);");
+    assert!(
+        d.message
+            .starts_with("the `Vec` this value is part of is gone after this line"),
+        "{d:#?}"
+    );
+    // (d) An element of a temporary `Vec` put into an owned slot.
+    let d = error("    let o = Some(mkv()[0]);");
+    assert_eq!(
+        d.message,
+        "the `Vec` this value is part of is gone after this line, so it cannot be put inside `Some`"
+    );
+}
+
+#[test]
+fn a_binding_of_a_read_only_parameter_passed_to_a_mut_parameter_says_to_mark_it_mut() {
+    let (d, sources) = one_error(&with_strs(
+        "enum Msg {\n    Text(string),\n    Quit,\n}\nfn f(m: Msg) {\n    match m {\n        Msg::Text(t) => fill(t),\n        Msg::Quit => {}\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0303, "{d:#?}");
+    assert!(
+        d.message
+            .ends_with("mark `m` `mut`, then change `m` itself instead"),
+        "{d:#?}"
+    );
+    assert_mut_fix_it(&d, &sources, "f(m: Msg)", "m:");
 }

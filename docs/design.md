@@ -2,7 +2,9 @@
 
 These are the principles Varyk is built on and the decisions made so far,
 with the reason for each. The full design, including how the compiler works,
-is in [specs/2026-09-23-varyk-design.md](specs/2026-09-23-varyk-design.md).
+is in [specs/2026-09-23-varyk-design.md](specs/2026-09-23-varyk-design.md),
+and milestone 2's additions are in
+[specs/2026-09-25-milestone-2-design.md](specs/2026-09-25-milestone-2-design.md).
 
 ## Principles
 
@@ -86,3 +88,14 @@ generated Rust have no stability guarantee before 0.1.
 | License | MIT or Apache-2.0 | Rust ecosystem convention |
 | Learnability | designed to be learnable without a programming background; plain-word diagnostics | the audience Varyk is meant to grow, not only Rust or JavaScript developers |
 | AI agents | first-class writers, humans win on conflicts | Rust knowledge transfers; the removed syntax is where models fail; structured diagnostics close the loop |
+| Milestone 2 scope | language core only; packages, closures, and tooling later | four independent areas do not fit one MVP; a real program needs enums and collections before it needs dependencies |
+| MVP cuts | borrowed returns, struct variants, nested and literal patterns, `Option`/`Result` methods, most `Vec` and `string` methods, `..=`, `?` on `Option`, field `pub` deferred | no example needs them; `match` is the one way to look inside an `Option` or `Result`; one-level patterns make exhaustiveness exact |
+| String copy | `s.clone()`, strings only | Rust's own spelling; the cost is visible at the call; no implicit clone anywhere |
+| Closures | deferred to milestone 4 | without generics no Varyk function can take one; they pay off only with iterator adapters |
+| String joining | `format!` only; `+` rejected with a fix-it | one spelling, allocation visible at the call; Rust's `+` consumes its left side |
+| Borrowed returns | deferred to milestone 4; `.clone()` is the milestone 2 answer | a performance feature, not a capability; removes lifetime emission and return classification from the MVP |
+| Matching a place | never moves; non-Copy bindings are aliases, Copy ones are copied at arm entry; a temporary is owned | borrow by default, applied to `match` and `for` |
+| Exhaustiveness | checked by Varyk: every variant or a catch-all | plain-word diagnostics before cargo runs; exact, since patterns are one level deep |
+| Standard types | `Option`, `Result`, `Vec` with a hand-written table of six methods and indexing | no generics in the surface; the table is small, explicit, and sound by construction |
+| Lengths and indexes | `usize` added, no casts | matches Rust and rustc's types; `as` is lossy and can wait |
+| Type holes | `None`, `Vec::new()`, an empty `vec![]`, `Ok`, `Err` take the expected type or ask for an annotation | the integer-literal rule, no backward inference |

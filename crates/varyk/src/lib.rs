@@ -6,6 +6,7 @@
 
 pub mod backend;
 pub mod borrow;
+pub mod builtins;
 pub mod cli;
 pub mod diagnostics;
 pub mod driver;
@@ -36,6 +37,6 @@ pub fn check_file(
     sources: &mut Vec<SourceFile>,
 ) -> Result<HirProgram, Vec<Diagnostic>> {
     resolve(entry, sources)
-        .and_then(typecheck)
+        .and_then(|resolved| typecheck(resolved, sources))
         .and_then(analyze)
 }

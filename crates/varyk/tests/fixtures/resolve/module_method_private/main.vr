@@ -1,0 +1,7 @@
+mod m;
+
+fn main() {
+    let c = m::Counter::new();
+    let n = c.secret();
+    let s = m::Shape::origin();
+}

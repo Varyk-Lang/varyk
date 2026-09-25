@@ -1,0 +1,24 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
+
+struct User {
+    name: String,
+}
+
+fn name_of(user: &User) -> String {
+    user.name.clone()
+}
+
+fn main() {
+    let user = User { name: "Alice".to_string() };
+    let name = name_of(&user);
+    println!("{}", name);
+    let copy = name.clone();
+    println!("{}", copy);
+    println!("{}", format!("Hello, {}!", name));
+    println!("{}", name.len());
+    println!("{}", name == "Alice");
+}

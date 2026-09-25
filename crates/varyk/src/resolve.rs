@@ -6,8 +6,8 @@
 //! the per-file stop rule: a file with syntax errors contributes only those
 //! errors, and resolution stops after module loading if any file had them.
 //! Expression paths and locals are resolved later, during lowering in the
-//! type checker, through [`Symbols::lookup_fn`], [`Symbols::lookup_struct`], and
-//! [`Symbols::resolve_type`].
+//! type checker, through [`Symbols::lookup_fn`], [`Symbols::lookup_type`],
+//! [`Symbols::lookup_member`], and [`Symbols::resolve_type`].
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -15,9 +15,11 @@ use std::fs;
 use std::path::Path;
 
 use varyk_syntax::{
-    FileId, FixIt, Function, Item, ModDecl, Program, SourceFile, Span, TypeExpr, parse_source,
+    FileId, FixIt, Function, ImplBlock, Item, ModDecl, Program, SelfMode, SourceFile, Span,
+    TypeExpr, parse_source,
 };
 
+use crate::builtins::BuiltinId;
 use crate::diagnostics::{Diagnostic, codes};
 use crate::interop::{ImportedFn, RustTy, import_rust_module};
 use crate::types::{FloatKind, IntKind, ParamMode, Ty};
@@ -42,6 +44,27 @@ pub struct ImportedFnId(pub u32);
 /// Index into [`Symbols::structs`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StructId(pub u32);
+
+/// Index into [`Symbols::enums`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EnumId(pub u32);
+
+/// A user-declared type: what a type name, a struct literal's path, and
+/// an `impl` block resolve to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UserType {
+    Struct(StructId),
+    Enum(EnumId),
+}
+
+impl UserType {
+    pub fn ty(self) -> Ty {
+        match self {
+            UserType::Struct(id) => Ty::Struct(id),
+            UserType::Enum(id) => Ty::Enum(id),
+        }
+    }
+}
 
 /// What a module was loaded from.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,9 +95,20 @@ pub struct FnSig {
     pub params: Vec<(String, Ty, ParamMode)>,
     /// [`Ty::Unit`] when no return type is written.
     pub ret: Ty,
-    /// Index of the declaring [`Item::Function`] in the module's
-    /// `Program::items`; see [`Resolved::fn_decl`].
+    /// The type of the `impl` block declaring the function; `None` for a
+    /// free function (and for one in an `impl` block naming no type of
+    /// its file, which is an error).
+    pub owner: Option<UserType>,
+    /// A method's receiver mode (spec 2.5): `self` is a shared borrow,
+    /// `mut self` a mutable one. `None` for a free or associated
+    /// function. The receiver is not in `params`.
+    pub self_mode: Option<ParamMode>,
+    /// Index of the declaring [`Item::Function`] or [`Item::Impl`] in the
+    /// module's `Program::items`; see [`Resolved::fn_decl`].
     pub item: usize,
+    /// For a function of an `impl` block, its index in
+    /// [`ImplBlock::functions`].
+    pub member: Option<usize>,
     /// The whole declaration, starting at `fn` (or `pub`).
     pub span: Span,
 }
@@ -105,11 +139,35 @@ pub struct StructDef {
     pub span: Span,
 }
 
+/// An enum's resolved definition (spec 2.2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+    pub name: String,
+    pub module: ModuleId,
+    pub is_pub: bool,
+    /// Each variant's name and payload types, in declaration order; a
+    /// unit variant has no payload.
+    pub variants: Vec<(String, Vec<Ty>)>,
+    /// The whole declaration, starting at `enum` (or `pub`).
+    pub span: Span,
+}
+
+impl EnumDef {
+    /// The index of the variant called `name`.
+    pub fn variant(&self, name: &str) -> Option<usize> {
+        self.variants
+            .iter()
+            .position(|(variant, _)| variant == name)
+    }
+}
+
 /// A resolved function reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Callee {
     Varyk(FnId),
     Imported(ImportedFnId),
+    /// An associated function of the built-in table: `Vec::new`.
+    Builtin(BuiltinId),
 }
 
 /// Why a lookup failed. The type checker turns these into diagnostics at the use
@@ -119,16 +177,21 @@ pub enum LookupError {
     /// No such module, or no such item in it.
     Unknown,
     /// The item exists in another module but is not `pub`. Holds the span
-    /// of its declaration, whose start is where a `pub ` fix-it inserts.
-    NotVisible(Span),
+    /// of its declaration, whose start is where a `pub ` fix-it inserts,
+    /// and the keyword it starts with (`fn`, `struct`, or `enum`).
+    NotVisible { decl: Span, keyword: &'static str },
 }
 
-/// Every module's functions, imported functions, and structs.
+/// Every module's functions, imported functions, structs, and enums, and
+/// every type's methods and associated functions.
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
     pub fns: Vec<FnSig>,
     pub imported: Vec<ImportedSig>,
     pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
+    /// The functions of every type's `impl` blocks, by type then name.
+    members: HashMap<(UserType, String), FnId>,
     /// Per-module name tables, indexed by `ModuleId`.
     scopes: Vec<Scope>,
 }
@@ -137,7 +200,8 @@ pub struct Symbols {
 struct Scope {
     name: String,
     fns: HashMap<String, Callee>,
-    structs: HashMap<String, StructId>,
+    /// Structs and enums, which share Rust's type namespace.
+    types: HashMap<String, UserType>,
 }
 
 impl Symbols {
@@ -158,21 +222,75 @@ impl Symbols {
         if let Callee::Varyk(id) = callee {
             let sig = &self.fns[id.0 as usize];
             if target != from && !sig.is_pub {
-                return Err(LookupError::NotVisible(sig.span));
+                return Err(fn_not_visible(sig));
             }
         }
         Ok(callee)
     }
 
-    /// Looks up a struct by name in module `from`. Struct names are never
-    /// module-qualified, so there is no visibility rule to apply.
+    /// Looks up a struct or enum `name` (or `module::name`) as seen from
+    /// module `from` (spec 2.10). A type in another module must be `pub`.
+    pub fn lookup_type(
+        &self,
+        from: ModuleId,
+        module: Option<&str>,
+        name: &str,
+    ) -> Result<UserType, LookupError> {
+        let target = self.target_module(from, module)?;
+        let found = *self.scopes[target.0 as usize]
+            .types
+            .get(name)
+            .ok_or(LookupError::Unknown)?;
+        let (is_pub, decl, keyword) = match found {
+            UserType::Struct(id) => {
+                let def = &self.structs[id.0 as usize];
+                (def.is_pub, def.span, "struct")
+            }
+            UserType::Enum(id) => {
+                let def = &self.enums[id.0 as usize];
+                (def.is_pub, def.span, "enum")
+            }
+        };
+        if target != from && !is_pub {
+            return Err(LookupError::NotVisible { decl, keyword });
+        }
+        Ok(found)
+    }
+
+    /// Looks up a struct by name in module `from` itself.
     pub fn lookup_struct(&self, from: ModuleId, name: &str) -> Option<StructId> {
-        self.scopes[from.0 as usize].structs.get(name).copied()
+        match self.scopes[from.0 as usize].types.get(name) {
+            Some(UserType::Struct(id)) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// Looks up a method or associated function `name` of type `owner` as
+    /// seen from module `from` (spec 2.5): one declared in another module
+    /// must be `pub`.
+    pub fn lookup_member(
+        &self,
+        from: ModuleId,
+        owner: UserType,
+        name: &str,
+    ) -> Result<FnId, LookupError> {
+        let id = *self
+            .members
+            .get(&(owner, name.to_string()))
+            .ok_or(LookupError::Unknown)?;
+        let sig = &self.fns[id.0 as usize];
+        if sig.module != from && !sig.is_pub {
+            return Err(fn_not_visible(sig));
+        }
+        Ok(id)
     }
 
     /// Resolves a written type as seen from module `from`: a primitive
-    /// name, `string`, or a struct visible from `from`. `String` and `str`
-    /// are V0107 with a fix-it to `string`; anything else is V0101.
+    /// name, `string`, a struct or enum visible from `from` (through a
+    /// module, `m::User`, when it is `pub`), or `Option`, `Result`, or
+    /// `Vec` with the right number of type arguments (spec 2.6). `String`
+    /// and `str` are V0107 with a fix-it to `string`; an unknown name or a
+    /// wrong argument count is V0101.
     #[expect(
         clippy::result_large_err,
         reason = "a single diagnostic on a cold path; the type checker pushes it straight into its list"
@@ -180,6 +298,51 @@ impl Symbols {
     pub fn resolve_type(&self, ty: &TypeExpr, from: ModuleId) -> Result<Ty, Diagnostic> {
         let name = ty.name.name.as_str();
         let span = ty.name.span;
+        if let Some((arity, shape)) = generic_shape(name).filter(|_| ty.module.is_none()) {
+            if ty.args.len() != arity {
+                return Err(Diagnostic::new(
+                    codes::V0101,
+                    ty.span,
+                    format!(
+                        "`{name}` takes {} type{}, written `{shape}`",
+                        if arity == 1 { "one" } else { "two" },
+                        if arity == 1 { "" } else { "s" },
+                    ),
+                ));
+            }
+            let mut args = Vec::new();
+            for arg in &ty.args {
+                args.push(self.resolve_type(arg, from)?);
+            }
+            let mut args = args.into_iter().map(Box::new);
+            let mut next = || args.next().expect("the argument count was checked");
+            return Ok(match name {
+                "Option" => Ty::Option(next()),
+                "Vec" => Ty::Vec(next()),
+                _ => Ty::Result(next(), next()),
+            });
+        }
+        if !ty.args.is_empty() {
+            return Err(Diagnostic::new(
+                codes::V0001,
+                ty.span,
+                format!("`{name}` takes no type arguments; only `Option`, `Result`, and `Vec` do"),
+            ));
+        }
+        if let Some(module) = &ty.module {
+            let path = format!("{}::{name}", module.name);
+            return match self.lookup_type(from, Some(&module.name), name) {
+                Ok(found) => Ok(found.ty()),
+                Err(LookupError::Unknown) => Err(Diagnostic::new(
+                    codes::V0101,
+                    ty.span,
+                    format!("unknown type `{path}`"),
+                )),
+                Err(LookupError::NotVisible { decl, keyword }) => {
+                    Err(not_visible("type", &path, ty.span, decl, keyword))
+                }
+            };
+        }
         if let Some(prim) = Ty::from_primitive_name(name) {
             return Ok(prim);
         }
@@ -194,31 +357,84 @@ impl Symbols {
                 replacement: "string".to_string(),
             }));
         }
-        self.lookup_struct(from, name)
-            .map(Ty::Struct)
-            .ok_or_else(|| Diagnostic::new(codes::V0101, span, format!("unknown type `{name}`")))
+        self.lookup_type(from, None, name)
+            .map(UserType::ty)
+            .map_err(|_| {
+                let mut diagnostic =
+                    Diagnostic::new(codes::V0101, span, format!("unknown type `{name}`"));
+                if let Some(note) = self.did_you_mean(from, name) {
+                    diagnostic = diagnostic.with_note(note);
+                }
+                diagnostic
+            })
     }
 
-    /// V0105 when a `pub` item's resolved type `ty`, written at `span`, is
-    /// a non-`pub` struct: every caller in another module would be rejected
-    /// by rustc. Resolved types only name structs of the item's own module.
-    fn private_in_public(&self, ty: Ty, span: Span) -> Option<Diagnostic> {
-        let Ty::Struct(id) = ty else {
+    /// Modules other than `from` that declare a type or a function named
+    /// `name`, for [`Self::did_you_mean`].
+    fn modules_declaring(&self, from: ModuleId, name: &str) -> Vec<&str> {
+        self.scopes
+            .iter()
+            .enumerate()
+            .filter(|&(id, scope)| {
+                id as u32 != from.0
+                    && (scope.types.contains_key(name) || scope.fns.contains_key(name))
+            })
+            .map(|(_, scope)| scope.name.as_str())
+            .collect()
+    }
+
+    /// A "did you mean `module::name`?" note naming up to two other
+    /// modules that declare a type or a function called `name`: `None`
+    /// when none do. For an unknown type (V0101) or an unknown value or
+    /// associated call whose leading segment was taken for a module
+    /// (V0100), written bare instead of through its module.
+    pub fn did_you_mean(&self, from: ModuleId, name: &str) -> Option<String> {
+        let modules = self.modules_declaring(from, name);
+        if modules.is_empty() {
             return None;
+        }
+        let paths: Vec<String> = modules
+            .iter()
+            .take(2)
+            .map(|module| format!("`{module}::{name}`"))
+            .collect();
+        Some(format!("did you mean {}?", paths.join(" or ")))
+    }
+
+    /// V0105 when a `pub` item's resolved type `ty`, written at `span`,
+    /// names a non-`pub` struct or enum, itself or inside `Option`,
+    /// `Result`, or `Vec`: every caller in another module would be
+    /// rejected by rustc. A type of another module is always `pub` here,
+    /// since resolving it required that.
+    fn private_in_public(&self, ty: &Ty, span: Span) -> Option<Diagnostic> {
+        let (name, is_pub, decl, keyword) = match ty {
+            Ty::Option(inner) | Ty::Vec(inner) => return self.private_in_public(inner, span),
+            Ty::Result(ok, err) => {
+                return self
+                    .private_in_public(ok, span)
+                    .or_else(|| self.private_in_public(err, span));
+            }
+            Ty::Struct(id) => {
+                let def = &self.structs[id.0 as usize];
+                (&def.name, def.is_pub, def.span, "struct")
+            }
+            Ty::Enum(id) => {
+                let def = &self.enums[id.0 as usize];
+                (&def.name, def.is_pub, def.span, "enum")
+            }
+            _ => return None,
         };
-        let def = &self.structs[id.0 as usize];
-        if def.is_pub {
+        if is_pub {
             return None;
         }
         let diagnostic = Diagnostic::new(
             codes::V0105,
             span,
             format!(
-                "`{}` is used by a public item but is not public; add `pub` to the struct",
-                def.name
+                "`{name}` is used by a public item but is not public; add `pub` to the {keyword}"
             ),
         );
-        Some(declared_without_pub(diagnostic, def.span, "struct"))
+        Some(declared_without_pub(diagnostic, decl, keyword))
     }
 
     /// `from` itself for an unqualified name; otherwise the non-entry
@@ -237,7 +453,46 @@ impl Symbols {
     }
 }
 
-/// Labels the `keyword` (`fn` or `struct`) of the non-`pub` declaration at
+/// A function in another module that is not `pub`.
+fn fn_not_visible(sig: &FnSig) -> LookupError {
+    LookupError::NotVisible {
+        decl: sig.span,
+        keyword: "fn",
+    }
+}
+
+/// The argument count and written shape of `Option`, `Result`, and `Vec`;
+/// `None` for any other name.
+fn generic_shape(name: &str) -> Option<(usize, &'static str)> {
+    match name {
+        "Option" => Some((1, "Option<T>")),
+        "Vec" => Some((1, "Vec<T>")),
+        "Result" => Some((2, "Result<T, E>")),
+        _ => None,
+    }
+}
+
+/// V0105 at `span` for `what` (`function`, `type`, ...) `path`, used
+/// outside its module although its declaration at `decl`, starting with
+/// `keyword`, is not `pub`.
+pub(crate) fn not_visible(
+    what: &str,
+    path: &str,
+    span: Span,
+    decl: Span,
+    keyword: &str,
+) -> Diagnostic {
+    let diagnostic = Diagnostic::new(
+        codes::V0105,
+        span,
+        format!(
+            "{what} `{path}` is not marked `pub`, so it can only be used inside its own module"
+        ),
+    );
+    declared_without_pub(diagnostic, decl, keyword)
+}
+
+/// Labels the `keyword` (`fn`, `struct`, or `enum`) of the non-`pub` declaration at
 /// `decl`, rather than underlining its whole body, and adds a `pub ` fix-it.
 pub(crate) fn declared_without_pub(
     diagnostic: Diagnostic,
@@ -268,10 +523,11 @@ impl Resolved {
         let ModuleKind::Varyk(program) = &self.modules[sig.module.0 as usize].kind else {
             unreachable!("a Varyk function always lives in a Varyk module");
         };
-        let Item::Function(function) = &program.items[sig.item] else {
-            unreachable!("FnSig::item always indexes a function item");
-        };
-        function
+        match (&program.items[sig.item], sig.member) {
+            (Item::Function(function), None) => function,
+            (Item::Impl(block), Some(member)) => &block.functions[member],
+            _ => unreachable!("FnSig::item indexes a function, or an impl block with `member`"),
+        }
     }
 }
 
@@ -457,20 +713,40 @@ fn load_modules(
     syntax_ok
 }
 
-/// V0103 at `span` for a struct or module named after a built-in type:
-/// the generated Rust spells `string` as `String` and the primitives by
-/// their own names, so a user item with one of those names would capture
-/// them in rustc (`mod String;` makes every `String` a module).
-fn reserved_type_name(name: &str, span: Span) -> Option<Diagnostic> {
-    let taken =
-        Ty::from_primitive_name(name).is_some() || matches!(name, "string" | "String" | "str");
-    taken.then(|| {
-        Diagnostic::new(
-            codes::V0103,
-            span,
-            format!("the name `{name}` is already taken by a built-in type"),
-        )
-    })
+/// V0103 at `span` for a struct, enum, or module named after a built-in
+/// type or one of the reserved names of spec 2.1: these share Rust's type
+/// namespace with the primitives, `String`, `Option`, `Result`, and `Vec`,
+/// so a user item with one of those names would capture them in rustc
+/// (`mod String;` makes every `String` a module).
+pub(crate) fn reserved_type_name(name: &str, span: Span) -> Option<Diagnostic> {
+    let primitive = Ty::from_primitive_name(name).is_some() || matches!(name, "string" | "str");
+    if primitive {
+        return Some(taken(name, "a built-in type", span));
+    }
+    reserved_value_name(name, span)
+}
+
+/// V0103 at `span` for a function, method, variant, field, parameter, or
+/// `let` named with one of the reserved names of spec 2.1 (`Some`, `None`,
+/// `Ok`, `Err`, `Option`, `Result`, `Vec`, `String`): the generated Rust
+/// would hide Rust's own (`let None = x;` is a pattern). The primitive
+/// names stay usable here; Rust keeps values and types apart.
+pub(crate) fn reserved_value_name(name: &str, span: Span) -> Option<Diagnostic> {
+    let owner = match name {
+        "Some" | "None" => "`Option`",
+        "Ok" | "Err" => "`Result`",
+        "Option" | "Result" | "Vec" | "String" => "a built-in type",
+        _ => return None,
+    };
+    Some(taken(name, owner, span))
+}
+
+fn taken(name: &str, owner: &str, span: Span) -> Diagnostic {
+    Diagnostic::new(
+        codes::V0103,
+        span,
+        format!("the name `{name}` is already taken by {owner}"),
+    )
 }
 
 /// V0103 at `span`, labelling the first definition at `first`.
@@ -484,7 +760,9 @@ fn duplicate(name: &str, span: Span, first: Span) -> Diagnostic {
 }
 
 /// Builds the symbol tables: first every name (so types can refer to
-/// structs declared later or in any order), then field and signature types.
+/// types declared later or in any order), then every `impl` block's
+/// functions attached to its type, then field, payload, and signature
+/// types.
 fn collect_symbols(
     modules: &[Module],
     imports: Vec<(ModuleId, Vec<ImportedFn>)>,
@@ -500,6 +778,8 @@ fn collect_symbols(
             .collect(),
         ..Symbols::default()
     };
+    // Every `impl` block with its module and the id of its first function.
+    let mut impls: Vec<(ModuleId, &ImplBlock, u32)> = Vec::new();
 
     // Pass 1: names. Duplicates still get a table entry (so their types
     // are checked too) but not a scope entry.
@@ -510,18 +790,17 @@ fn collect_symbols(
         let is_entry = module.id == ModuleId(0);
         let scope = &mut symbols.scopes[module.id.0 as usize];
         let mut first_fn: HashMap<&str, Span> = HashMap::new();
-        let mut first_struct: HashMap<&str, Span> = HashMap::new();
+        let mut first_type: HashMap<&str, Span> = HashMap::new();
         if is_entry {
-            // Modules and structs share Rust's type namespace, so a struct
-            // named like a loaded module is a duplicate (rustc E0428).
+            // Modules share Rust's type namespace with structs and enums,
+            // so a type named like a loaded module is a duplicate (rustc
+            // E0428).
             for item in &program.items {
                 let Item::Mod(decl) = item else {
                     continue;
                 };
                 if modules[1..].iter().any(|m| m.name == decl.name.name) {
-                    first_struct
-                        .entry(&decl.name.name)
-                        .or_insert(decl.name.span);
+                    first_type.entry(&decl.name.name).or_insert(decl.name.span);
                 }
             }
         }
@@ -537,16 +816,8 @@ fn collect_symbols(
                             "a module must not define `main`",
                         ));
                     }
-                    let id = FnId(symbols.fns.len() as u32);
-                    symbols.fns.push(FnSig {
-                        name: name.name.clone(),
-                        module: module.id,
-                        is_pub: function.is_pub,
-                        params: Vec::new(),
-                        ret: Ty::Unit,
-                        item: index,
-                        span: function.span,
-                    });
+                    let id = push_fn(&mut symbols.fns, function, module.id, index, None);
+                    diagnostics.extend(reserved_value_name(&name.name, name.span));
                     match first_fn.entry(&name.name) {
                         Entry::Occupied(first) => {
                             diagnostics.push(duplicate(&name.name, name.span, *first.get()));
@@ -561,9 +832,7 @@ fn collect_symbols(
                     let name = &decl.name;
                     // Reported, but still registered: the later passes walk
                     // the struct declarations in the same order by id.
-                    if let Some(diagnostic) = reserved_type_name(&name.name, name.span) {
-                        diagnostics.push(diagnostic);
-                    }
+                    diagnostics.extend(reserved_type_name(&name.name, name.span));
                     let id = StructId(symbols.structs.len() as u32);
                     symbols.structs.push(StructDef {
                         name: name.name.clone(),
@@ -572,24 +841,103 @@ fn collect_symbols(
                         fields: Vec::new(),
                         span: decl.span,
                     });
-                    match first_struct.entry(&name.name) {
+                    match first_type.entry(&name.name) {
                         Entry::Occupied(first) => {
                             diagnostics.push(duplicate(&name.name, name.span, *first.get()));
                         }
                         Entry::Vacant(slot) => {
                             slot.insert(name.span);
-                            scope.structs.insert(name.name.clone(), id);
+                            scope.types.insert(name.name.clone(), UserType::Struct(id));
                         }
                     }
+                }
+                Item::Enum(decl) => {
+                    let name = &decl.name;
+                    diagnostics.extend(reserved_type_name(&name.name, name.span));
+                    let id = EnumId(symbols.enums.len() as u32);
+                    // Variant names are known now; pass 2 fills in their
+                    // payload types (and pass 1b already needs the names).
+                    let variants = decl
+                        .variants
+                        .iter()
+                        .map(|variant| (variant.name.name.clone(), Vec::new()))
+                        .collect();
+                    symbols.enums.push(EnumDef {
+                        name: name.name.clone(),
+                        module: module.id,
+                        is_pub: decl.is_pub,
+                        variants,
+                        span: decl.span,
+                    });
+                    match first_type.entry(&name.name) {
+                        Entry::Occupied(first) => {
+                            diagnostics.push(duplicate(&name.name, name.span, *first.get()));
+                        }
+                        Entry::Vacant(slot) => {
+                            slot.insert(name.span);
+                            scope.types.insert(name.name.clone(), UserType::Enum(id));
+                        }
+                    }
+                }
+                Item::Impl(block) => {
+                    let first = symbols.fns.len() as u32;
+                    for (member, function) in block.functions.iter().enumerate() {
+                        let name = &function.name;
+                        diagnostics.extend(reserved_value_name(&name.name, name.span));
+                        push_fn(&mut symbols.fns, function, module.id, index, Some(member));
+                    }
+                    impls.push((module.id, block, first));
                 }
                 Item::Mod(decl) if !is_entry => {
                     diagnostics.push(Diagnostic::new(
                         codes::V0001,
                         decl.span,
-                        "nested modules are not supported in milestone 1; declare every `mod` in the entry file",
+                        "nested modules are not supported yet; declare every `mod` in the entry file",
                     ));
                 }
                 Item::Mod(_) => {}
+            }
+        }
+    }
+
+    // Pass 1b: every `impl` block's functions join their type's table.
+    // Several blocks for one type share it.
+    let mut first_member: HashMap<(UserType, &str), Span> = HashMap::new();
+    for (module, block, first) in impls {
+        let type_name = &block.type_name;
+        let Some(&owner) = symbols.scopes[module.0 as usize].types.get(&type_name.name) else {
+            diagnostics.push(Diagnostic::new(
+                codes::V0001,
+                type_name.span,
+                format!(
+                    "an `impl` block must name a struct or enum declared in the same file, and this file declares no `{}`",
+                    type_name.name
+                ),
+            ));
+            continue;
+        };
+        for (offset, function) in block.functions.iter().enumerate() {
+            let id = FnId(first + offset as u32);
+            symbols.fns[id.0 as usize].owner = Some(owner);
+            let name = &function.name;
+            // `E::Make` must mean one thing: a function named after one of
+            // the enum's own variants would be unreachable behind it.
+            if let UserType::Enum(enum_id) = owner {
+                let def = &symbols.enums[enum_id.0 as usize];
+                if def.variant(&name.name).is_some() {
+                    let owner_text = format!("a variant of `{}`", def.name);
+                    diagnostics.push(taken(&name.name, &owner_text, name.span));
+                    continue;
+                }
+            }
+            match first_member.entry((owner, &name.name)) {
+                Entry::Occupied(first) => {
+                    diagnostics.push(duplicate(&name.name, name.span, *first.get()));
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(name.span);
+                    symbols.members.insert((owner, name.name.clone()), id);
+                }
             }
         }
     }
@@ -608,10 +956,11 @@ fn collect_symbols(
 
     // Pass 2: types, in declaration order. Tables were filled in the same
     // order, so a running index finds each item's entry.
-    let (mut next_fn, mut next_struct) = (0, 0);
-    // The span of each resolved field, parallel to `StructDef::fields`,
-    // for the recursive-struct check below.
-    let mut field_spans: Vec<Vec<Span>> = Vec::new();
+    let (mut next_fn, mut next_struct, mut next_enum) = (0, 0, 0);
+    // Every resolved field or payload type with the span it was written
+    // at, per struct and per enum, for the recursive-type check below.
+    let mut struct_parts: Vec<Vec<(Ty, Span)>> = Vec::new();
+    let mut enum_parts: Vec<Vec<(Ty, Span)>> = Vec::new();
     for module in modules {
         let ModuleKind::Varyk(program) = &module.kind else {
             continue;
@@ -626,12 +975,23 @@ fn collect_symbols(
                     sig.ret = ret;
                     next_fn += 1;
                 }
+                Item::Impl(block) => {
+                    for function in &block.functions {
+                        let (params, ret) =
+                            resolve_signature(&symbols, function, module.id, diagnostics);
+                        let sig = &mut symbols.fns[next_fn];
+                        sig.params = params;
+                        sig.ret = ret;
+                        next_fn += 1;
+                    }
+                }
                 Item::Struct(decl) => {
                     let mut seen: HashMap<&str, Span> = HashMap::new();
                     let mut fields = Vec::new();
-                    let mut spans = Vec::new();
+                    let mut parts = Vec::new();
                     for field in &decl.fields {
                         let name = &field.name;
+                        diagnostics.extend(reserved_value_name(&name.name, name.span));
                         if let Some(&first) = seen.get(name.name.as_str()) {
                             diagnostics.push(duplicate(&name.name, name.span, first));
                         }
@@ -639,37 +999,100 @@ fn collect_symbols(
                         match symbols.resolve_type(&field.ty, module.id) {
                             Ok(ty) => {
                                 if decl.is_pub {
-                                    if let Some(diagnostic) =
-                                        symbols.private_in_public(ty, field.ty.name.span)
-                                    {
-                                        diagnostics.push(diagnostic);
-                                    }
+                                    diagnostics
+                                        .extend(symbols.private_in_public(&ty, field.ty.span));
                                 }
+                                parts.push((ty.clone(), field.span));
                                 fields.push((name.name.clone(), ty));
-                                spans.push(field.span);
                             }
                             Err(diagnostic) => diagnostics.push(diagnostic),
                         }
                     }
                     symbols.structs[next_struct].fields = fields;
-                    field_spans.push(spans);
+                    struct_parts.push(parts);
                     next_struct += 1;
+                }
+                Item::Enum(decl) => {
+                    let mut seen: HashMap<&str, Span> = HashMap::new();
+                    let mut variants = Vec::new();
+                    let mut parts = Vec::new();
+                    for variant in &decl.variants {
+                        let name = &variant.name;
+                        diagnostics.extend(reserved_value_name(&name.name, name.span));
+                        if let Some(&first) = seen.get(name.name.as_str()) {
+                            diagnostics.push(duplicate(&name.name, name.span, first));
+                        }
+                        seen.entry(&name.name).or_insert(name.span);
+                        let mut payload = Vec::new();
+                        for written in &variant.fields {
+                            match symbols.resolve_type(written, module.id) {
+                                Ok(ty) => {
+                                    if decl.is_pub {
+                                        diagnostics
+                                            .extend(symbols.private_in_public(&ty, written.span));
+                                    }
+                                    parts.push((ty.clone(), written.span));
+                                    payload.push(ty);
+                                }
+                                Err(diagnostic) => diagnostics.push(diagnostic),
+                            }
+                        }
+                        variants.push((name.name.clone(), payload));
+                    }
+                    symbols.enums[next_enum].variants = variants;
+                    enum_parts.push(parts);
+                    next_enum += 1;
                 }
                 Item::Mod(_) => {}
             }
         }
     }
-
-    check_recursive_structs(&symbols, &field_spans, diagnostics);
+    struct_parts.extend(enum_parts);
+    check_recursive_types(&symbols, &struct_parts, diagnostics);
     symbols
 }
 
-/// V0109 for every struct that contains itself, directly or through other
-/// structs' fields (rustc E0072). A depth-first walk over struct-typed
-/// fields reports each cycle once, at the field that closes it.
-fn check_recursive_structs(
+/// Appends the signature shell of `function`, declared by item `item` of
+/// `module` (at `member` inside an `impl` block); pass 2 fills in its
+/// types and pass 1b its owner.
+fn push_fn(
+    fns: &mut Vec<FnSig>,
+    function: &Function,
+    module: ModuleId,
+    item: usize,
+    member: Option<usize>,
+) -> FnId {
+    let id = FnId(fns.len() as u32);
+    fns.push(FnSig {
+        name: function.name.name.clone(),
+        module,
+        is_pub: function.is_pub,
+        params: Vec::new(),
+        ret: Ty::Unit,
+        owner: None,
+        self_mode: match function.self_mode {
+            SelfMode::None => None,
+            SelfMode::Shared => Some(ParamMode::SharedBorrow),
+            SelfMode::Mutable => Some(ParamMode::MutableBorrow),
+        },
+        item,
+        member,
+        span: function.span,
+    });
+    id
+}
+
+/// V0109 for every struct or enum that contains itself, directly or
+/// through other structs' fields and enums' payloads, `Option` and
+/// `Result` arguments included, since Rust lays all of them out inline
+/// (rustc E0072); a `Vec` holds its elements elsewhere and breaks the
+/// cycle (spec 2.2). `parts[node]` lists a node's field or payload types
+/// with their spans, structs first (node `id`) and then enums (node
+/// `structs.len() + id`). A depth-first walk reports each cycle once, at
+/// the part that closes it.
+fn check_recursive_types(
     symbols: &Symbols,
-    field_spans: &[Vec<Span>],
+    parts: &[Vec<(Ty, Span)>],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     #[derive(Clone, Copy, PartialEq)]
@@ -679,63 +1102,90 @@ fn check_recursive_structs(
         Done,
     }
 
-    fn visit(
-        id: usize,
-        symbols: &Symbols,
-        field_spans: &[Vec<Span>],
-        state: &mut [State],
-        stack: &mut Vec<usize>,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        state[id] = State::OnStack;
-        stack.push(id);
-        for (index, (_, ty)) in symbols.structs[id].fields.iter().enumerate() {
-            let Ty::Struct(target) = ty else {
-                continue;
-            };
-            let target = target.0 as usize;
-            match state[target] {
-                State::Unvisited => {
-                    visit(target, symbols, field_spans, state, stack, diagnostics);
-                }
-                State::OnStack => {
-                    let start = stack
-                        .iter()
-                        .position(|&s| s == target)
-                        .expect("an on-stack struct is on the stack");
-                    let cycle: Vec<&str> = stack[start..]
-                        .iter()
-                        .chain(std::iter::once(&target))
-                        .map(|&s| symbols.structs[s].name.as_str())
-                        .collect();
-                    diagnostics.push(
-                        Diagnostic::new(
-                            codes::V0109,
-                            field_spans[id][index],
-                            "a struct cannot contain itself",
-                        )
-                        .with_note(format!("the cycle is {}", cycle.join(" -> "))),
-                    );
-                }
-                State::Done => {}
-            }
-        }
-        stack.pop();
-        state[id] = State::Done;
+    struct Walk<'a> {
+        symbols: &'a Symbols,
+        parts: &'a [Vec<(Ty, Span)>],
+        state: Vec<State>,
+        stack: Vec<usize>,
+        diagnostics: &'a mut Vec<Diagnostic>,
     }
 
-    let mut state = vec![State::Unvisited; symbols.structs.len()];
-    let mut stack = Vec::new();
-    for id in 0..symbols.structs.len() {
-        if state[id] == State::Unvisited {
-            visit(
-                id,
-                symbols,
-                field_spans,
-                &mut state,
-                &mut stack,
-                diagnostics,
-            );
+    impl Walk<'_> {
+        fn name(&self, node: usize) -> &str {
+            let structs = self.symbols.structs.len();
+            if node < structs {
+                &self.symbols.structs[node].name
+            } else {
+                &self.symbols.enums[node - structs].name
+            }
+        }
+
+        /// The nodes `ty` lays out inline.
+        fn inline(&self, ty: &Ty, out: &mut Vec<usize>) {
+            match ty {
+                Ty::Struct(id) => out.push(id.0 as usize),
+                Ty::Enum(id) => out.push(self.symbols.structs.len() + id.0 as usize),
+                Ty::Option(inner) => self.inline(inner, out),
+                Ty::Result(ok, err) => {
+                    self.inline(ok, out);
+                    self.inline(err, out);
+                }
+                _ => {}
+            }
+        }
+
+        fn visit(&mut self, node: usize) {
+            self.state[node] = State::OnStack;
+            self.stack.push(node);
+            let parts = self.parts;
+            for (ty, span) in &parts[node] {
+                let mut targets = Vec::new();
+                self.inline(ty, &mut targets);
+                targets.dedup();
+                for target in targets {
+                    match self.state[target] {
+                        State::Unvisited => self.visit(target),
+                        State::OnStack => self.report(target, *span),
+                        State::Done => {}
+                    }
+                }
+            }
+            self.stack.pop();
+            self.state[node] = State::Done;
+        }
+
+        fn report(&mut self, target: usize, span: Span) {
+            let start = self
+                .stack
+                .iter()
+                .position(|&s| s == target)
+                .expect("an on-stack type is on the stack");
+            let cycle: Vec<&str> = self.stack[start..]
+                .iter()
+                .chain(std::iter::once(&target))
+                .map(|&node| self.name(node))
+                .collect();
+            let message = if target < self.symbols.structs.len() {
+                "a struct cannot contain itself"
+            } else {
+                "an enum cannot contain itself"
+            };
+            let diagnostic = Diagnostic::new(codes::V0109, span, message)
+                .with_note(format!("the cycle is {}", cycle.join(" -> ")));
+            self.diagnostics.push(diagnostic);
+        }
+    }
+
+    let mut walk = Walk {
+        symbols,
+        parts,
+        state: vec![State::Unvisited; parts.len()],
+        stack: Vec::new(),
+        diagnostics,
+    };
+    for node in 0..parts.len() {
+        if walk.state[node] == State::Unvisited {
+            walk.visit(node);
         }
     }
 }
@@ -760,7 +1210,7 @@ fn resolve_signature(
         match symbols.resolve_type(&param.ty, module) {
             Ok(ty) => {
                 if function.is_pub {
-                    if let Some(diagnostic) = symbols.private_in_public(ty, param.ty.name.span) {
+                    if let Some(diagnostic) = symbols.private_in_public(&ty, param.ty.span) {
                         diagnostics.push(diagnostic);
                     }
                 }
@@ -781,7 +1231,7 @@ fn resolve_signature(
         Some(written) => match symbols.resolve_type(written, module) {
             Ok(ty) => {
                 if function.is_pub {
-                    if let Some(diagnostic) = symbols.private_in_public(ty, written.name.span) {
+                    if let Some(diagnostic) = symbols.private_in_public(&ty, written.span) {
                         diagnostics.push(diagnostic);
                     }
                 }
@@ -882,6 +1332,7 @@ fn map_primitive(ty: &RustTy) -> Option<Ty> {
         RustTy::U16 => Ty::Int(IntKind::U16),
         RustTy::U32 => Ty::Int(IntKind::U32),
         RustTy::U64 => Ty::Int(IntKind::U64),
+        RustTy::Usize => Ty::Int(IntKind::Usize),
         RustTy::F32 => Ty::Float(FloatKind::F32),
         RustTy::F64 => Ty::Float(FloatKind::F64),
         _ => return None,
@@ -894,7 +1345,7 @@ mod tests {
 
     use super::*;
     use crate::diagnostics::codes;
-    use crate::types::IntKind;
+    use crate::types::{FloatKind, IntKind};
 
     /// Resolves a single-file program from an inline string, with a dummy
     /// path (no `mod` declarations may appear).
@@ -1119,7 +1570,13 @@ mod tests {
 
         let hidden = symbols.lookup_fn(resolved.entry, Some("math"), "hidden");
         let expected = span_of(&sources, 1, "fn hidden() {}");
-        assert_eq!(hidden, Err(LookupError::NotVisible(expected)));
+        assert_eq!(
+            hidden,
+            Err(LookupError::NotVisible {
+                decl: expected,
+                keyword: "fn"
+            })
+        );
 
         let shown = symbols
             .lookup_fn(resolved.entry, Some("math"), "shown")
@@ -1200,6 +1657,19 @@ mod tests {
     }
 
     #[test]
+    fn unknown_type_matching_another_modules_type_is_v0101_with_a_did_you_mean_note() {
+        let (diagnostics, sources) = fixture("unknown_type_other_module");
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0101);
+        let at = span_of(&sources, 0, "Task)");
+        assert_eq!(d.span, Span::new(at.file, at.start, at.start + 4));
+        assert!(
+            d.notes.iter().any(|n| n == "did you mean `m::Task`?"),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
     fn duplicate_function_is_v0103_labelling_the_first() {
         let text = "fn f() {}\nfn f() {}\nfn main() {}\n";
         let diagnostics = errors_str(text);
@@ -1208,6 +1678,16 @@ mod tests {
         assert_eq!(d.span, Span::new(FileId(0), 13, 14));
         assert_eq!(d.labels.len(), 1);
         assert_eq!(d.labels[0].span, Span::new(FileId(0), 3, 4));
+    }
+
+    #[test]
+    fn enum_function_named_after_a_variant_is_v0103() {
+        let text = "enum E {\n    Make(i32),\n    Nope,\n}\nimpl E {\n    fn Make(x: i32) -> E {\n        E::Nope\n    }\n}\nfn main() {}\n";
+        let diagnostics = errors_str(text);
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0103);
+        assert!(d.message.contains("a variant of `E`"), "{}", d.message);
+        assert_eq!(&text[d.span.start as usize..d.span.end as usize], "Make");
     }
 
     #[test]
@@ -1297,5 +1777,327 @@ mod tests {
         let d = errors_str("fn main( {}\n");
         assert!(d.iter().all(|d| d.code != codes::V0106), "{d:#?}");
         assert!(!d.is_empty());
+    }
+
+    // --- Enums, impl blocks, and generic types ------------------------------
+
+    fn resolved(text: &str) -> Resolved {
+        match resolve_str(text).0 {
+            Ok(resolved) => resolved,
+            Err(diagnostics) => panic!("expected {text:?} to resolve, got {diagnostics:#?}"),
+        }
+    }
+
+    fn member<'a>(resolved: &'a Resolved, owner: UserType, name: &str) -> (FnId, &'a FnSig) {
+        let id = resolved
+            .symbols
+            .lookup_member(resolved.entry, owner, name)
+            .unwrap_or_else(|e| panic!("no member {name}: {e:?}"));
+        (id, &resolved.symbols.fns[id.0 as usize])
+    }
+
+    const I32: Ty = Ty::Int(IntKind::I32);
+    const F64: Ty = Ty::Float(FloatKind::F64);
+
+    #[test]
+    fn enum_and_impl_register() {
+        let r = resolved(
+            "enum Shape {\n    Circle(f64),\n    Rect(f64, string),\n    Point,\n}\n\nstruct Counter {\n    count: i32,\n}\n\nimpl Counter {\n    fn new() -> Counter {\n        Counter { count: 0 }\n    }\n\n    fn add(mut self, by: i32) {\n        self.count = self.count + by;\n    }\n\n    fn value(self) -> i32 {\n        self.count\n    }\n}\n\nfn main() {}\n",
+        );
+        let symbols = &r.symbols;
+        let Ok(UserType::Enum(shape)) = symbols.lookup_type(r.entry, None, "Shape") else {
+            panic!("Shape should be an enum");
+        };
+        let def = &symbols.enums[shape.0 as usize];
+        assert_eq!(
+            def.variants,
+            vec![
+                ("Circle".to_string(), vec![F64]),
+                ("Rect".to_string(), vec![F64, Ty::String]),
+                ("Point".to_string(), vec![]),
+            ]
+        );
+        assert_eq!(def.variant("Point"), Some(2));
+        assert_eq!(def.variant("Square"), None);
+
+        let counter = symbols
+            .lookup_type(r.entry, None, "Counter")
+            .expect("Counter");
+        let (_, new) = member(&r, counter, "new");
+        assert_eq!(
+            (new.owner, new.self_mode, &new.ret),
+            (Some(counter), None, &counter.ty())
+        );
+        let (add_id, add) = member(&r, counter, "add");
+        assert_eq!(add.self_mode, Some(ParamMode::MutableBorrow));
+        assert_eq!(add.params, vec![("by".to_string(), I32, ParamMode::Owned)]);
+        assert_eq!(r.fn_decl(add_id).name.name, "add");
+        let (_, value) = member(&r, counter, "value");
+        assert_eq!(
+            (value.self_mode, &value.ret),
+            (Some(ParamMode::SharedBorrow), &I32)
+        );
+
+        // Methods and associated functions are not free functions.
+        assert_eq!(
+            symbols.lookup_fn(r.entry, None, "new"),
+            Err(LookupError::Unknown)
+        );
+        assert_eq!(
+            symbols.lookup_member(r.entry, counter, "nope"),
+            Err(LookupError::Unknown)
+        );
+    }
+
+    #[test]
+    fn two_impl_blocks_for_one_type_merge() {
+        let r = resolved(
+            "struct C {\n    n: i32,\n}\nimpl C {\n    fn a(self) {}\n}\nimpl C {\n    fn b(self) {}\n}\nfn main() {}\n",
+        );
+        let c = r.symbols.lookup_type(r.entry, None, "C").expect("C");
+        assert_eq!(member(&r, c, "a").1.owner, Some(c));
+        assert_eq!(member(&r, c, "b").1.owner, Some(c));
+    }
+
+    #[test]
+    fn a_method_defined_twice_across_impl_blocks_is_v0103() {
+        let text = "struct C {\n    n: i32,\n}\nimpl C {\n    fn a(self) {}\n}\nimpl C {\n    fn a() {}\n}\nfn main() {}\n";
+        let (result, sources) = resolve_str(text);
+        let diagnostics = result.expect_err("should fail");
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0103);
+        let second = span_of(&sources, 0, "a() {}");
+        assert_eq!(d.span, Span::new(FileId(0), second.start, second.start + 1));
+        let first = span_of(&sources, 0, "a(self)");
+        assert_eq!(
+            d.labels[0].span,
+            Span::new(FileId(0), first.start, first.start + 1)
+        );
+    }
+
+    #[test]
+    fn an_impl_on_an_enum_registers() {
+        let r = resolved(
+            "enum Shape {\n    Point,\n}\nimpl Shape {\n    fn name(self) -> string {\n        \"point\"\n    }\n}\nfn main() {}\n",
+        );
+        let shape = r
+            .symbols
+            .lookup_type(r.entry, None, "Shape")
+            .expect("Shape");
+        assert!(matches!(shape, UserType::Enum(_)));
+        let (_, name) = member(&r, shape, "name");
+        assert_eq!(
+            (name.owner, name.self_mode, &name.ret),
+            (Some(shape), Some(ParamMode::SharedBorrow), &Ty::String)
+        );
+    }
+
+    #[test]
+    fn an_impl_for_a_type_not_in_the_file_is_v0001() {
+        let text = "impl Nope {\n    fn f() {}\n}\nfn main() {}\n";
+        let (result, sources) = resolve_str(text);
+        let diagnostics = result.expect_err("should fail");
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0001);
+        assert_eq!(d.span, span_of(&sources, 0, "Nope"));
+
+        let (diagnostics, sources) = fixture("impl_other_module");
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0001);
+        assert_eq!(d.span, span_of(&sources, 0, "Task"));
+    }
+
+    #[test]
+    fn an_enum_containing_itself_through_option_is_v0109_and_through_vec_is_not() {
+        let text = "enum L {\n    C(Option<L>),\n    End,\n}\nfn main() {}\n";
+        let (result, sources) = resolve_str(text);
+        let diagnostics = result.expect_err("should fail");
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0109);
+        assert_eq!(d.span, span_of(&sources, 0, "Option<L>"));
+        assert_eq!(d.message, "an enum cannot contain itself");
+        assert_eq!(d.notes, vec!["the cycle is L -> L".to_string()]);
+
+        resolved("enum T {\n    C(Vec<T>),\n    Leaf,\n}\nfn main() {}\n");
+    }
+
+    #[test]
+    fn a_struct_and_an_enum_containing_each_other_through_result_are_one_v0109() {
+        let text =
+            "struct S {\n    r: Result<i32, E>,\n}\nenum E {\n    Wrap(S),\n}\nfn main() {}\n";
+        let (result, sources) = resolve_str(text);
+        let diagnostics = result.expect_err("should fail");
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0109);
+        let payload = span_of(&sources, 0, "S),");
+        assert_eq!(
+            d.span,
+            Span::new(payload.file, payload.start, payload.start + 1)
+        );
+        assert_eq!(d.notes, vec!["the cycle is S -> E -> S".to_string()]);
+    }
+
+    #[test]
+    fn reserved_names_in_each_declaration_position_are_v0103() {
+        let text = "mod String;\nfn Some() {}\nenum Option {\n    A,\n}\nenum E {\n    Ok,\n}\nstruct None {}\nstruct F {\n    Vec: i32,\n}\nimpl F {\n    fn Err(self) {}\n}\nfn main() {}\n";
+        let (result, sources) = resolve_str(text);
+        let diagnostics = result.expect_err("should fail");
+        let mut spans: Vec<Span> = diagnostics.iter().map(|d| d.span).collect();
+        spans.sort_by_key(|span| span.start);
+        let expected: Vec<Span> = ["String", "Some", "Option", "Ok", "None", "Vec", "Err"]
+            .iter()
+            .map(|name| span_of(&sources, 0, name))
+            .collect();
+        assert_eq!(spans, expected, "{diagnostics:#?}");
+        assert!(diagnostics.iter().all(|d| d.code == codes::V0103));
+        let some = diagnostics
+            .iter()
+            .find(|d| d.span == expected[1])
+            .expect("Some");
+        assert_eq!(some.message, "the name `Some` is already taken by `Option`");
+        let option = diagnostics
+            .iter()
+            .find(|d| d.span == expected[2])
+            .expect("Option");
+        assert_eq!(
+            option.message,
+            "the name `Option` is already taken by a built-in type"
+        );
+    }
+
+    #[test]
+    fn option_result_and_vec_resolve_with_the_right_number_of_type_arguments() {
+        let r = resolved(
+            "struct U {\n    n: i32,\n}\nfn f(x: Vec<Option<Result<U, string>>>, n: usize) -> Option<usize> {\n    None\n}\nfn main() {}\n",
+        );
+        let Ok(Callee::Varyk(id)) = r.symbols.lookup_fn(r.entry, None, "f") else {
+            panic!()
+        };
+        let sig = &r.symbols.fns[id.0 as usize];
+        let u = Ty::Struct(r.symbols.lookup_struct(r.entry, "U").expect("U"));
+        let usize = Ty::Int(IntKind::Usize);
+        let x = Ty::Vec(Box::new(Ty::Option(Box::new(Ty::Result(
+            Box::new(u),
+            Box::new(Ty::String),
+        )))));
+        assert_eq!(
+            sig.params,
+            vec![
+                ("x".to_string(), x, ParamMode::SharedBorrow),
+                ("n".to_string(), usize.clone(), ParamMode::Owned),
+            ]
+        );
+        assert_eq!(sig.ret, Ty::Option(Box::new(usize)));
+    }
+
+    #[test]
+    fn option_result_or_vec_with_the_wrong_number_of_type_arguments_is_v0101() {
+        let text = "fn f(a: Result<i32>, b: Option<i32, i32>, c: Vec) {}\nfn main() {}\n";
+        let (result, sources) = resolve_str(text);
+        let diagnostics = result.expect_err("should fail");
+        assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
+        let expected = [
+            (
+                "Result<i32>",
+                "`Result` takes two types, written `Result<T, E>`",
+            ),
+            (
+                "Option<i32, i32>",
+                "`Option` takes one type, written `Option<T>`",
+            ),
+            ("Vec)", "`Vec` takes one type, written `Vec<T>`"),
+        ];
+        for (d, (needle, message)) in diagnostics.iter().zip(expected) {
+            assert_eq!(d.code, codes::V0101);
+            let span = span_of(&sources, 0, needle);
+            let len = needle.trim_end_matches(')').len() as u32;
+            assert_eq!(d.span, Span::new(span.file, span.start, span.start + len));
+            assert_eq!(d.message, message);
+        }
+    }
+
+    #[test]
+    fn a_module_type_in_a_signature_resolves_and_needs_pub() {
+        let (result, _) = resolve_path("crates/varyk/tests/fixtures/resolve/module_types/main.vr");
+        let r = result.expect("module_types should resolve");
+        let symbols = &r.symbols;
+        let task = symbols
+            .lookup_type(r.entry, Some("m"), "Task")
+            .expect("m::Task");
+        let shape = symbols
+            .lookup_type(r.entry, Some("m"), "Shape")
+            .expect("m::Shape");
+        let Ok(Callee::Varyk(take)) = symbols.lookup_fn(r.entry, None, "take") else {
+            panic!()
+        };
+        let types: Vec<Ty> = symbols.fns[take.0 as usize]
+            .params
+            .iter()
+            .map(|p| p.1.clone())
+            .collect();
+        assert_eq!(types, vec![task.ty(), shape.ty()]);
+        let UserType::Enum(shape_id) = shape else {
+            panic!("m::Shape is an enum")
+        };
+        assert_eq!(
+            symbols.enums[shape_id.0 as usize].variant("Circle"),
+            Some(1)
+        );
+
+        // `m::Task::new` is `pub`; `secret` is not.
+        let (_, new) = member(&r, task, "new");
+        assert_eq!(new.name, "new");
+        assert!(matches!(
+            symbols.lookup_member(r.entry, task, "secret"),
+            Err(LookupError::NotVisible { keyword: "fn", .. })
+        ));
+        let m = module_id(&r, "m");
+        assert!(symbols.lookup_member(m, task, "secret").is_ok());
+        assert!(matches!(
+            symbols.lookup_type(r.entry, Some("m"), "Hidden"),
+            Err(LookupError::NotVisible {
+                keyword: "struct",
+                ..
+            })
+        ));
+
+        let (diagnostics, sources) = fixture("module_type_private");
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0105);
+        assert_eq!(d.span, span_of(&sources, 0, "m::Hidden"));
+        let fix = d.fix_it.as_ref().expect("fix-it");
+        assert_eq!(fix.span.file, FileId(1));
+        assert_eq!(fix.span.start, span_of(&sources, 1, "struct Hidden").start);
+        assert_eq!(fix.replacement, "pub ");
+    }
+
+    #[test]
+    fn a_private_type_inside_a_public_enum_or_generic_type_is_v0105() {
+        let text = "struct Hidden {}\npub enum E {\n    A(Hidden),\n}\npub fn f(x: Option<Hidden>) {}\nfn main() {}\n";
+        let (result, sources) = resolve_str(text);
+        let diagnostics = result.expect_err("should fail");
+        let spans: Vec<Span> = diagnostics.iter().map(|d| d.span).collect();
+        let hidden = span_of(&sources, 0, "Hidden)");
+        let hidden = Span::new(hidden.file, hidden.start, hidden.start + 6);
+        assert_eq!(spans, vec![hidden, span_of(&sources, 0, "Option<Hidden>")]);
+        assert!(diagnostics.iter().all(|d| d.code == codes::V0105));
+    }
+
+    #[test]
+    fn usize_imports_and_resolves() {
+        let fns = import_rust_module("pub fn f(n: usize, r: &usize, m: &mut usize) -> usize { n }")
+            .expect("parses");
+        let sig = import_sig(ModuleId(1), fns.into_iter().next().expect("one fn"));
+        let usize = Ty::Int(IntKind::Usize);
+        assert!(sig.callable);
+        assert_eq!(
+            sig.params,
+            vec![
+                (usize.clone(), ParamMode::Owned),
+                (usize.clone(), ParamMode::SharedBorrow),
+                (usize.clone(), ParamMode::MutableBorrow),
+            ]
+        );
+        assert_eq!(sig.ret, usize);
     }
 }

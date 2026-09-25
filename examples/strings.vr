@@ -1,0 +1,25 @@
+// expected output:
+// Alice
+// Alice
+// Hello, Alice!
+// 5
+// true
+
+struct User {
+    name: string,
+}
+
+fn name_of(user: User) -> string {
+    user.name.clone()
+}
+
+fn main() {
+    let user = User { name: "Alice" };
+    let name = name_of(user);
+    println!("{}", name);
+    let copy = name.clone();
+    println!("{}", copy);
+    println!("{}", format!("Hello, {}!", name));
+    println!("{}", name.len());
+    println!("{}", name == "Alice");
+}

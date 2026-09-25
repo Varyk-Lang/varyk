@@ -1,0 +1,31 @@
+pub enum Status {
+    Open,
+    Done,
+}
+
+pub struct Task {
+    title: string,
+    status: Status,
+}
+
+impl Task {
+    pub fn new(title: string) -> Task {
+        Task { title: title.clone(), status: Status::Open }
+    }
+
+    pub fn complete(mut self) {
+        self.status = Status::Done;
+    }
+
+    pub fn is_done(self) -> bool {
+        match self.status {
+            Status::Done => true,
+            Status::Open => false,
+        }
+    }
+
+    pub fn label(self) -> string {
+        let mark = if self.is_done() { "x" } else { " " };
+        format!("[{}] {}", mark, self.title)
+    }
+}

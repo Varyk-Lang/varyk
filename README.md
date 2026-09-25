@@ -120,11 +120,12 @@ in the example above.
 
 Varyk is experimental and pre-0.1. Any syntax, error code, or command-line
 flag may change before a 0.1 release, which is not scheduled. This is
-milestone 1: a small compiler that proves the approach. It builds and runs
-the six programs in `examples/`, and it reports every error it knows about
-with a code, a plain-word message, and, where it can, a suggested fix. Enums,
-loops other than `while`, packages, and much more are not there yet; see
-[docs/language.md](docs/language.md) for exactly what works.
+milestone 2: the language core. Structs, enums, and `match`, `for` loops,
+methods, `Option`, `Result`, `Vec`, `?`, and `format!` work; the compiler
+builds and runs the twelve programs in `examples/`, and it reports every
+error it knows about with a code, a plain-word message, and, where it can, a
+suggested fix. Packages, closures, iterators, and much more are not there
+yet; see [docs/language.md](docs/language.md) for exactly what works.
 
 ## Documents
 
@@ -135,6 +136,7 @@ loops other than `while`, packages, and much more are not there yet; see
 - [docs/open-questions.md](docs/open-questions.md): questions not yet answered.
 - [docs/roadmap.md](docs/roadmap.md): what comes next.
 - [docs/specs/2026-09-23-varyk-design.md](docs/specs/2026-09-23-varyk-design.md): the full design.
+- [docs/specs/2026-09-25-milestone-2-design.md](docs/specs/2026-09-25-milestone-2-design.md): milestone 2's additions.
 
 ## License
 

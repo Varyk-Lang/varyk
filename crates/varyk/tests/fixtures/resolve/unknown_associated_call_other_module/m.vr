@@ -1,0 +1,9 @@
+pub struct Task {
+    id: i32,
+}
+
+impl Task {
+    pub fn new() -> Task {
+        Task { id: 0 }
+    }
+}

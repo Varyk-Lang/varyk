@@ -1,0 +1,77 @@
+mod tally;
+
+struct Task {
+    label: string,
+    done: bool,
+}
+
+enum Size {
+    Small,
+    Large,
+}
+
+impl Task {
+    fn new(label: string) -> Task {
+        Task { label: label.clone(), done: false }
+    }
+
+    fn complete(mut self) {
+        self.done = true;
+    }
+
+    fn label(self) -> string {
+        self.label.clone()
+    }
+
+    fn is_done(self) -> bool {
+        self.done
+    }
+}
+
+impl Size {
+    fn sides(self) -> usize {
+        4
+    }
+}
+
+fn count_done(tasks: Vec<Task>) -> usize {
+    let mut n: usize = 0;
+    let mut i: usize = 0;
+    while i < tasks.len() {
+        if tasks[i].is_done() {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn finish_first(mut tasks: Vec<Task>) {
+    tasks[0].complete();
+}
+
+fn main() {
+    let mut tasks: Vec<Task> = Vec::new();
+    tasks.push(Task::new("write"));
+    tasks.push(Task::new("test"));
+    finish_first(tasks);
+    tasks[1].complete();
+    let first = tasks[0];
+    println!("{} done: {}", first.label(), first.is_done());
+    println!("{} of {}", count_done(tasks), tasks.len());
+    let mut words = vec!["a", "b"];
+    words[1] = "c";
+    let word = words[1];
+    let copy = word.clone();
+    let lit = "lit";
+    let lit_copy = lit.clone();
+    println!("{} {} {} {}", word, copy, lit_copy, lit.len());
+    let last = words.pop();
+    let mut counts = vec![1, 2];
+    counts[0] = counts[1] + 1;
+    let size = Size::Large;
+    println!("{} {}", counts[0], size.sides());
+    let mut t = tally::Tally::new();
+    t.add(2);
+    println!("{}", t.value());
+}
