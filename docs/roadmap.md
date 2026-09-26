@@ -88,6 +88,10 @@ attribute syntax), the async runtime shape, and ownership-transfer syntax.
 - [ ] JSON via serde
 - [ ] Logging via tracing
 - [ ] HTTP server on a proven Rust crate, chosen at that time
+- [ ] HTTP client on the same stack
+- [ ] Databases through one API; sqlx is the candidate crate
+- [ ] Configuration from the environment
+- [ ] `varyk test`
 - [ ] `async`/`await` on a built-in tokio runtime, `spawn` as a built-in, `Send`/`Sync`/`Pin` kept out of the surface syntax and their failures mapped to Varyk diagnostics
 
 ## Milestone 6: tooling and beyond
@@ -99,3 +103,10 @@ attribute syntax), the async runtime shape, and ownership-transfer syntax.
 
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
+
+Using a crate directly from Varyk code, with no facade `.rs` module in
+between. Milestone 3 reaches every crate through a facade, because most
+crate APIs are generic and Varyk has no generics in its surface; whether
+Varyk code should ever `use` a crate directly is an experiment for after
+traits exist, recorded in [open-questions.md](open-questions.md). The facade
+rule stands until that experiment says otherwise.
