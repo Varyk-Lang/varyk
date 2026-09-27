@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0105]: `g::two` is `pub(crate)` in the Rust file; Varyk imports only plain `pub` functions
+ --> crates/varyk/tests/fixtures/errors/v0105_rust_fn_pub_crate/main.vr:4:20
+  |
+4 |     println!("{}", g::two());
+  |                    ^^^^^^ `g::two` is `pub(crate)` in the Rust file; Varyk imports only plain `pub` functions
+  |
+  = note: write `pub fn two` in the Rust file to use it here

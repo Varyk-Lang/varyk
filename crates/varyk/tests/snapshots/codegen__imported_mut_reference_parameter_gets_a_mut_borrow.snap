@@ -2,12 +2,11 @@
 source: crates/varyk/tests/codegen.rs
 expression: main
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
 mod ext;
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let mut n = 1;
     crate::ext::bump(&mut n);
-    println!("{}", n);
+    ::std::println!("{}", n);
 }

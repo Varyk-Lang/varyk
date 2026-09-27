@@ -1,0 +1,25 @@
+mod hook;
+
+enum Msg {
+    Text(string),
+    Quit,
+}
+
+fn make() -> Msg {
+    Msg::Text("hi")
+}
+
+fn keep() -> string {
+    let mut kept = "none";
+    match make() {
+        Msg::Text(s) => {
+            kept = s;
+        }
+        Msg::Quit => {}
+    }
+    kept
+}
+
+fn main() {
+    println!("{}", keep());
+}

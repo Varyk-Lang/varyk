@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0110]: `use` cannot name the crate `std`
+ --> crates/varyk/tests/fixtures/errors/v0110_use_crate_std/main.vr:1:5
+  |
+1 | use std::collections::HashMap;
+  |     ^^^ `use` cannot name the crate `std`
+  |
+  = note: Varyk code does not use crates directly; call it from a `.rs` module in this package

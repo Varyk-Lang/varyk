@@ -1,0 +1,19 @@
+// expected output:
+// == Greetings ==
+// Hello, Ada!
+// Hello, Grace!
+// == 2 greeted ==
+
+mod text;
+
+use crate::text::case::title;
+
+fn main() {
+    let mut greeter = text::Greeter::new("Greetings");
+    // `heading` is `pub`; `count` is private to `text`, so reading
+    // `greeter.count` here would be an error. `total` reads it instead.
+    println!("{}", greeter.heading);
+    println!("{}", greeter.greet("Ada"));
+    println!("{}", greeter.greet("Grace"));
+    println!("{}", title(format!("{} greeted", greeter.total())));
+}

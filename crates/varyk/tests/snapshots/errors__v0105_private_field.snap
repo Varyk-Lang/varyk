@@ -1,0 +1,17 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0105]: field `n` is private to module `shop`, so it cannot be read or assigned from outside it
+ --> crates/varyk/tests/fixtures/errors/v0105_private_field/main.vr:5:22
+  |
+5 |     println!("{}", c.n);
+  |                      ^ field `n` is private to module `shop`, so it cannot be read or assigned from outside it
+  |
+ ::: crates/varyk/tests/fixtures/errors/v0105_private_field/shop.vr:2:5
+  |
+2 |     n: i32,
+  |     - declared here without `pub`
+  |
+  = note: make the field public with `pub`, or add a `pub fn` on the struct that does this
+help: insert `pub ` before `n`

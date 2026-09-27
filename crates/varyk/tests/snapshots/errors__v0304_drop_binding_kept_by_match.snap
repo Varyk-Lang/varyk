@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `s` only exists inside this arm, so it cannot be kept in the outer `s`
+  --> crates/varyk/tests/fixtures/errors/v0304_drop_binding_kept_by_match/main.vr:14:25
+   |
+14 |         Msg::Text(s) => s,
+   |                         ^ `s` only exists inside this arm, so it cannot be kept in the outer `s`
+   |
+   = note: `s` stays inside the `Msg` matched on, which runs code when it is thrown away, so nothing can take `s` out of it; copy it with `.clone()` to keep it (in Rust terms, `Msg` implements `Drop`)
+   = note: in Rust terms, a reference cannot outlive the value it borrows
+help: insert `.clone()` after `s`

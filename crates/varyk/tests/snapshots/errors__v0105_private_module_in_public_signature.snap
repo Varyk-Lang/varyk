@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0105]: `Cart` is in module `cart`, which only `shop` can see, but `carts` can be used from outside `shop`; write `pub mod cart;` (or make `carts` private)
+ --> crates/varyk/tests/fixtures/errors/v0105_private_module_in_public_signature/shop.vr:3:19
+  |
+1 | mod cart;
+  | --- declared here without `pub`
+2 |
+3 | pub fn carts() -> Vec<cart::Cart> {
+  |                   ^^^^^^^^^^^^^^^ `Cart` is in module `cart`, which only `shop` can see, but `carts` can be used from outside `shop`; write `pub mod cart;` (or make `carts` private)
+  |
+  = note: in Rust terms, a public function or field names a type less visible than itself (rustc's `private_interfaces` lint); Varyk makes it an error because the Rust it generates names the type by its full path
+help: insert `pub ` before `mod`

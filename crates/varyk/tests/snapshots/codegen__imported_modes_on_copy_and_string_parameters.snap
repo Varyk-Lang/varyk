@@ -2,12 +2,11 @@
 source: crates/varyk/tests/codegen.rs
 expression: "file(&krate, \"src/main.rs\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
 mod ext;
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let mut s = "a".to_string();
     let r = crate::ext::mix(10i64, &2, &mut s, "x".to_string());
-    println!("{}", r);
+    ::std::println!("{}", r);
 }

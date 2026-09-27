@@ -22,7 +22,7 @@
 //! (call results, struct literals, literals, operators) is a temporary: a
 //! mutable place that is not borrowed.
 
-use varyk_syntax::{FixIt, Span};
+use varyk_syntax::{FixIt, SourceFile, Span};
 
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
@@ -56,8 +56,11 @@ const TEMPORARY: PlaceInfo = PlaceInfo {
 /// `string` locals, their [`crate::hir::StringRepr`]; checks the
 /// mutability contracts, owned slots, and moves, returning every
 /// diagnostic across the program.
-pub fn analyze(hir: HirProgram) -> Result<HirProgram, Vec<Diagnostic>> {
-    let (hir, diagnostics) = analyze_unchecked(hir);
+///
+/// `sources` are the program's files, indexed by `FileId.0`, for a fix-it
+/// that rewrites a piece of them.
+pub fn analyze(hir: HirProgram, sources: &[SourceFile]) -> Result<HirProgram, Vec<Diagnostic>> {
+    let (hir, diagnostics) = analyze_unchecked(hir, sources);
     if diagnostics.is_empty() {
         Ok(hir)
     } else {
@@ -69,7 +72,10 @@ pub fn analyze(hir: HirProgram) -> Result<HirProgram, Vec<Diagnostic>> {
 /// reports: the soundness tests generate Rust for programs it rejects to
 /// confirm rustc rejects them too.
 #[doc(hidden)]
-pub fn analyze_unchecked(mut hir: HirProgram) -> (HirProgram, Vec<Diagnostic>) {
+pub fn analyze_unchecked(
+    mut hir: HirProgram,
+    sources: &[SourceFile],
+) -> (HirProgram, Vec<Diagnostic>) {
     let signatures: Vec<(String, Vec<ParamMode>)> = hir
         .functions()
         .map(|f| (f.name.clone(), f.params.iter().map(|p| p.mode).collect()))
@@ -79,6 +85,7 @@ pub fn analyze_unchecked(mut hir: HirProgram) -> (HirProgram, Vec<Diagnostic>) {
         imported: &hir.imported,
         structs: &hir.structs,
         enums: &hir.enums,
+        sources,
     };
     let mut diagnostics = Vec::new();
     for function in &mut hir.functions {
@@ -135,6 +142,8 @@ struct Context<'a> {
     imported: &'a [ImportedSig],
     structs: &'a [HirStruct],
     enums: &'a [HirEnum],
+    /// The program's files, indexed by `FileId.0`.
+    sources: &'a [SourceFile],
 }
 
 impl Context<'_> {
@@ -147,8 +156,7 @@ impl Context<'_> {
             }
             Callee::Imported(id) => {
                 let sig = &self.imported[id.0 as usize];
-                let modes = sig.params.iter().map(|(_, mode)| *mode).collect();
-                (sig.name.clone(), modes, true)
+                (sig.name.clone(), sig.modes(), true)
             }
             Callee::Builtin(id) => (id.path(), id.modes(), true),
         }
@@ -157,11 +165,12 @@ impl Context<'_> {
     /// A method's name and parameter modes, its receiver's first, and
     /// whether an `Owned` parameter is an owned slot (as for an imported
     /// callee): true for the built-in table, whose `push` keeps its
-    /// argument, false for a Varyk method, whose `Owned` parameters are
-    /// Copy.
+    /// argument, and for an imported method, false for a Varyk method,
+    /// whose `Owned` parameters are Copy.
     fn method(&self, method: MethodRef) -> (String, Vec<ParamMode>, bool) {
         match method {
             MethodRef::Varyk(id) => self.callee(Callee::Varyk(id)),
+            MethodRef::Imported(id) => self.callee(Callee::Imported(id)),
             MethodRef::Builtin(id) => (id.path(), id.modes(), true),
         }
     }
@@ -194,7 +203,8 @@ fn owner_text(cx: &Context, locals: &[LocalInfo], origin: Option<Origin>) -> Str
             locals[param.0 as usize].name
         ),
         Some(Origin::Struct(id)) => {
-            format!("this value is kept inside a `{}`", cx.struct_name(id))
+            let name = cx.struct_name(id);
+            format!("this value is kept inside {} `{name}`", article(name))
         }
         Some(Origin::Local(local)) => {
             format!(
@@ -203,6 +213,17 @@ fn owner_text(cx: &Context, locals: &[LocalInfo], origin: Option<Origin>) -> Str
             )
         }
         None => "this value belongs to someone else".to_string(),
+    }
+}
+
+/// `an` before a name that starts with `A`, `E`, `I`, or `O` (`an Acc`),
+/// else `a`: a type name starting with `U` mostly sounds like "you" (`a
+/// User`, `a Unit`).
+pub(crate) fn article(name: &str) -> &'static str {
+    if name.starts_with(['A', 'E', 'I', 'O', 'a', 'e', 'i', 'o']) {
+        "an"
+    } else {
+        "a"
     }
 }
 
@@ -350,8 +371,9 @@ fn gone_message(
         if let (Ty::Struct(id), false) = (&base.ty, is_block_like(field_root(base))) {
             let name = cx.struct_name(*id);
             return format!(
-                "this value is kept inside a `{name}` that is not stored anywhere, so \
-                 {consequence}; store the `{name}` with `let` first"
+                "this value is kept inside {} `{name}` that is not stored anywhere, so \
+                 {consequence}; store the `{name}` with `let` first",
+                article(name)
             );
         }
     }
@@ -456,22 +478,33 @@ enum Slot {
 }
 
 fn analyze_function(cx: &Context, function: &mut HirFunction, diagnostics: &mut Vec<Diagnostic>) {
-    let (reported, refers, assigned, held) = places(cx, function, diagnostics);
-    strings::infer(cx, function, &reported, &refers, &assigned, diagnostics);
+    let start = diagnostics.len();
+    let (reported, refers, assigned, held, dropped) = places(cx, function, diagnostics);
+    strings::infer(
+        cx,
+        function,
+        &reported,
+        &refers,
+        &assigned,
+        &dropped,
+        diagnostics,
+    );
     moves::check(cx, function, diagnostics);
     aliases::check(cx, function, &refers, &assigned, &held, diagnostics);
+    patterns::merge_arm_fix_its(cx.sources, &mut diagnostics[start..]);
 }
 
 /// The first pass: place info, mutability contracts, and owned slots.
 /// Returns, per local, whether a V0304 was reported for a flow of it, what
 /// it may refer to, (see [`Assigned`]) the roots of the borrowed places
-/// assigned to it, and whether it is the variable of a `for` that holds
-/// the place it loops over.
+/// assigned to it, whether it is the variable of a `for` that holds the
+/// place it loops over, and, for a name bound inside a temporary of an
+/// enum with a destructor, why it cannot be kept.
 fn places(
     cx: &Context,
     function: &mut HirFunction,
     diagnostics: &mut Vec<Diagnostic>,
-) -> (Vec<bool>, Refers, Assigned, Vec<bool>) {
+) -> (Vec<bool>, Refers, Assigned, Vec<bool>, Vec<Option<String>>) {
     let HirFunction {
         name,
         params,
@@ -484,6 +517,7 @@ fn places(
     let patterns = vec![None; locals.len()];
     let held = vec![false; locals.len()];
     let reported = vec![false; locals.len()];
+    let gone = vec![false; locals.len()];
     let alias_notes = vec![None; locals.len()];
     let refers = vec![(false, Vec::new()); locals.len()];
     let assigned = Assigned {
@@ -511,6 +545,7 @@ fn places(
         locals,
         blame,
         reported,
+        gone,
         alias_notes,
         refers,
         assigned,
@@ -524,11 +559,15 @@ fn places(
             analyzer.owned_slot(tail, &Slot::Return);
         }
     }
+    let dropped = (0..analyzer.locals.len())
+        .map(|id| analyzer.dropped_advice(LocalId(id as u32)))
+        .collect();
     (
         analyzer.reported,
         analyzer.refers,
         analyzer.assigned,
         analyzer.held,
+        dropped,
     )
 }
 
@@ -545,6 +584,9 @@ struct FnAnalyzer<'a> {
     /// Per local: a V0304 was reported for a flow of it (so the owned-`let`
     /// check in [`strings`] stays quiet about it).
     reported: Vec<bool>,
+    /// Per `let`: a V0304 said its value is gone before the `let` is used,
+    /// so a later use of it says nothing more.
+    gone: Vec<bool>,
     /// Per local: the extra note V0300 adds when the local is a `let mut`
     /// alias of an element or field reached through a place that turned out
     /// shared, so writing through it needs a copy instead of `mut`.
@@ -882,11 +924,24 @@ impl FnAnalyzer<'_> {
                 Leaf::Unsure | Leaf::Dangling => true,
             };
             if gone {
-                let consequence = format!("it cannot be kept in `{}`", self.local(local).name);
+                let name = &self.local(local).name;
+                // The same name inside and outside: say which one.
+                let outer = if place_root(leaf).is_some_and(|root| self.local(root).name == *name) {
+                    "the outer "
+                } else {
+                    ""
+                };
+                let consequence = format!("it cannot be kept in {outer}`{name}`");
                 let message = gone_message(self.cx, self.locals, leaf, value, &consequence);
-                self.diagnostics
-                    .push(Diagnostic::new(codes::V0304, leaf.span, message).with_note(GONE_NOTE));
+                let mut diagnostic = Diagnostic::new(codes::V0304, leaf.span, message);
+                // A name bound inside a temporary with a destructor: say
+                // why, and copy a `string` out with `.clone()`.
+                if let Some(advice) = place_root(leaf).and_then(|root| self.dropped_advice(root)) {
+                    diagnostic = clone_fix_it(diagnostic.with_note(advice), leaf.span, &leaf.ty);
+                }
+                self.diagnostics.push(diagnostic.with_note(GONE_NOTE));
                 self.reported[local.0 as usize] = true;
+                self.gone[local.0 as usize] = true;
             }
         }
     }
@@ -1504,7 +1559,8 @@ impl FnAnalyzer<'_> {
                 continue;
             }
             if self.patterns[blamed.0 as usize].is_some() {
-                let diagnostic = self.binding_unchangeable(codes::V0303, leaf.span, blamed, callee);
+                let diagnostic =
+                    self.binding_unchangeable(codes::V0303, leaf.span, blamed, root, callee);
                 self.diagnostics.push(diagnostic);
                 continue;
             }
@@ -1610,7 +1666,7 @@ impl FnAnalyzer<'_> {
         let diagnostic = Diagnostic::new(codes::V0306, span, message)
             .with_label(element, format!("this element of `{name}` is {label}"))
             .with_note(format!(
-                "in Rust terms, `{name}` is borrowed{mutably} to reach the element before the \
+                "in Rust terms, `{name}` is borrowed{mutably} to get at the element before the \
                  index is worked out"
             ));
         self.diagnostics.push(diagnostic);
@@ -1620,7 +1676,7 @@ impl FnAnalyzer<'_> {
     /// but is not a mutable place because `blamed` lacks `mut`.
     fn cannot_change(&self, span: Span, root: LocalId, blamed: LocalId) -> Diagnostic {
         if self.patterns[blamed.0 as usize].is_some() {
-            let diagnostic = self.binding_unchangeable(codes::V0301, span, blamed, "");
+            let diagnostic = self.binding_unchangeable(codes::V0301, span, blamed, root, "");
             // `root` is a `let mut` alias of `blamed` (a pattern or `for`
             // binding), so add the same `.clone()` note V0300 gives: the
             // assignment blames `blamed`, but `root` is the name the code
@@ -1693,6 +1749,10 @@ impl FnAnalyzer<'_> {
                 continue;
             }
             if let Some(root) = place_root(leaf) {
+                // Already said: what it holds is gone before this.
+                if self.gone[root.0 as usize] {
+                    continue;
+                }
                 self.reported[root.0 as usize] = true;
             }
             let owner = if info.origin.is_none() && through_index(leaf) {
@@ -1707,7 +1767,7 @@ impl FnAnalyzer<'_> {
                 Slot::Return => "returned from here".to_string(),
                 Slot::StructField { id, field } => format!(
                     "stored in field `{}` of `{}`",
-                    self.cx.structs[id.0 as usize].fields[*field].0,
+                    self.cx.structs[id.0 as usize].fields[*field].name,
                     self.cx.struct_name(*id)
                 ),
                 Slot::ImportedParam(callee) => {

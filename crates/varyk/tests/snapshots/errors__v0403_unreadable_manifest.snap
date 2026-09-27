@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0403]: this `Cargo.toml` cannot be read: stream did not contain valid UTF-8
+ --> crates/varyk/tests/fixtures/errors/v0403_unreadable_manifest/Cargo.toml:1:1
+  |
+1 |
+  | ^ this `Cargo.toml` cannot be read: stream did not contain valid UTF-8

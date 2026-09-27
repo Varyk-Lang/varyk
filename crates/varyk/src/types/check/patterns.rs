@@ -6,12 +6,12 @@
 
 use std::collections::HashMap;
 
-use varyk_syntax::{Expr, Ident, MatchArm, Pattern, Span, SubPattern};
+use varyk_syntax::{Expr, Ident, MatchArm, Path, Pattern, Span, SubPattern};
 
-use super::{FnChecker, Scope, expr_diverges, is_builtin_variant};
+use super::{FnChecker, Scope, expr_diverges, is_builtin_variant, opaque_variant};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirArm, HirExpr, HirExprKind, HirPattern, VariantRef, is_block_like, is_place};
-use crate::resolve::UserType;
+use crate::resolve::{LookupError, UserType, display_path, path_text, split_last};
 use crate::types::Ty;
 
 /// A variant of the type matched on: its name as written in a pattern
@@ -240,11 +240,11 @@ impl FnChecker<'_> {
                 name.span,
             ),
             Pattern::Variant(pattern) => {
-                let index = match (&pattern.module, &pattern.type_) {
-                    (None, None) if is_builtin_variant(&pattern.name.name) => {
+                let index = match &pattern.path {
+                    None if is_builtin_variant(&pattern.name.name) => {
                         self.builtin_pattern(&pattern.name.name, ty, variants, pattern.span)?
                     }
-                    (None, None) => {
+                    None => {
                         let name = &pattern.name.name;
                         let mut message =
                             format!("`{name}` is not a variant of `{}`", self.ty_name(ty));
@@ -261,10 +261,7 @@ impl FnChecker<'_> {
                             .push(Diagnostic::new(codes::V0205, pattern.span, message).with_note("in Rust terms, the pattern's type does not match the type of the value matched on"));
                         return None;
                     }
-                    (module, Some(type_)) => {
-                        self.user_pattern(module.as_ref(), type_, &pattern.name, ty, pattern.span)?
-                    }
-                    (Some(_), None) => unreachable!("a pattern's one segment fills `type_`"),
+                    Some(path) => self.user_pattern(path, &pattern.name, ty, pattern.span)?,
                 };
                 let parens = pattern.span.end > pattern.name.span.end;
                 (index, &pattern.subpatterns[..], parens, pattern.span)
@@ -334,52 +331,67 @@ impl FnChecker<'_> {
         found
     }
 
-    /// The index of the variant `type_::name` (or `module::type_::name`)
-    /// among those of `ty`: V0100 or V0105 for a type that cannot be found
-    /// or seen, V0205 for a variant of another type.
-    fn user_pattern(
-        &mut self,
-        module: Option<&Ident>,
-        type_: &Ident,
-        name: &Ident,
-        ty: &Ty,
-        span: Span,
-    ) -> Option<usize> {
-        let path = match module {
-            Some(module) => format!("{}::{}", module.name, type_.name),
-            None => type_.name.clone(),
+    /// The index of the variant `path::name` (`type_::name`, or
+    /// `module::type_::name` with a module path of any depth and prefix,
+    /// `path`'s last segment always the type) among those of `ty`: V0100
+    /// or V0105 for a type that cannot be found or seen, V0111 for `super`
+    /// in the crate root, V0205 for a variant of another type.
+    fn user_pattern(&mut self, path: &Path, name: &Ident, ty: &Ty, span: Span) -> Option<usize> {
+        let Some((module, type_)) = split_last(path) else {
+            // `crate::Word`: a keyword alone before the variant.
+            let message = format!(
+                "`{}` names no enum; a pattern names a variant through its enum, as in \
+                 `Shape::Point`",
+                display_path(path, &name.name)
+            );
+            self.diagnostics
+                .push(Diagnostic::new(codes::V0100, span, message));
+            return None;
         };
-        let type_span = Span::new(
-            span.file,
-            module.unwrap_or(type_).span.start,
-            type_.span.end,
-        );
-        let found =
-            self.symbols
-                .lookup_type(self.module, module.map(|m| m.name.as_str()), &type_.name);
+        let full_path = path_text(path);
+        let type_span = Span::new(span.file, path.span.start, type_.span.end);
+        let found = self
+            .symbols
+            .lookup_type(self.module, module.as_ref(), &type_.name);
         let id = match found {
             Ok(UserType::Enum(id)) => id,
             Ok(UserType::Struct(_)) => {
-                let message = format!("`{path}` is a struct, not an enum, so it has no variants");
+                let message =
+                    format!("`{full_path}` is a struct, not an enum, so it has no variants");
                 self.diagnostics
                     .push(Diagnostic::new(codes::V0205, type_span, message).with_note("in Rust terms, the pattern's type does not match the type of the value matched on"));
                 return None;
             }
             Err(error) => {
-                self.lookup_error(error, "type", &path, type_span, Some(&type_.name));
+                // `m::Wrap` for a `.rs` enum Varyk did not import (M3
+                // spec 4.3): V0101 saying why, same as the type, value,
+                // and call positions.
+                let skipped = self.symbols.skipped_item(
+                    self.module,
+                    module.as_ref(),
+                    &type_.name,
+                    &full_path,
+                    type_span,
+                );
+                match skipped {
+                    Some(diagnostic) if error == LookupError::Unknown => {
+                        self.diagnostics.push(diagnostic);
+                    }
+                    _ => self.lookup_error(error, "type", &full_path, type_span, Some(&type_.name)),
+                }
                 return None;
             }
         };
         let def = &self.symbols.enums[id.0 as usize];
         let Some(index) = def.variant(&name.name) else {
-            let message = format!("enum `{path}` has no variant `{}`", name.name);
+            let message = format!("enum `{full_path}` has no variant `{}`", name.name);
             self.diagnostics
                 .push(Diagnostic::new(codes::V0100, name.span, message));
             return None;
         };
         if *ty != Ty::Enum(id) {
             let message = format!(
-                "`{path}::{}` is a variant of `{path}`, but this value is `{}`",
+                "`{full_path}::{}` is a variant of `{full_path}`, but this value is `{}`",
                 name.name,
                 self.ty_name(ty)
             );
@@ -387,6 +399,12 @@ impl FnChecker<'_> {
                 .push(Diagnostic::new(codes::V0205, span, message).with_note(
                 "in Rust terms, the pattern's type does not match the type of the value matched on",
             ));
+            return None;
+        }
+        if let Some(reason) = &def.opaque {
+            let full = format!("{full_path}::{}", name.name);
+            self.diagnostics
+                .push(opaque_variant(&full, &def.name, reason, span));
             return None;
         }
         Some(index)

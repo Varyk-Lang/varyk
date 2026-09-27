@@ -1,35 +1,41 @@
-//! Type parsing (spec 2.6, 2.10): a type is a bare name (`i32`, `string`,
-//! `User`, ...), optionally preceded by a module segment (`m::User`) and
-//! followed by generic arguments (`Vec<i32>`, `Result<User, string>`,
-//! nested freely, spec 2.6). Resolving either the module segment or the
-//! generic arguments is milestone 2 task 5's job; this parser only builds
-//! the syntax tree (`TypeExpr::module`, `TypeExpr::args`). `&T`/`&mut T` and
-//! lifetime syntax in a parameter's type are `item.rs`'s job
-//! (`parse_param`), since reporting them needs the parameter's name too, to
-//! build the fix-it.
+//! Type parsing (spec 2.6, 2.10, 3.1): a type is a bare name (`i32`,
+//! `string`, `User`, ...), optionally preceded by a module path
+//! (`m::User`, `shop::cart::Cart`) and followed by generic arguments
+//! (`Vec<i32>`, `Result<User, string>`, nested freely, spec 2.6).
+//! Resolving either the module path or the generic arguments is the
+//! compiler's resolver's job; this parser only builds the syntax tree
+//! (`TypeExpr::path`, `TypeExpr::args`). `&T`/`&mut T` and lifetime syntax
+//! in a parameter's type are `item.rs`'s job (`parse_param`), since
+//! reporting them needs the parameter's name too, to build the fix-it.
 
 use super::Parser;
-use crate::ast::TypeExpr;
+use crate::ast::{Path, PathStart, TypeExpr};
 use crate::span::Span;
 use crate::token::TokenKind;
 
 impl<'a> Parser<'a> {
-    /// A named type: `name`, `m::name`, `name<args>`, or `m::name<args>`.
-    /// The base type name is not optional: a missing or reserved-keyword
-    /// name is a fatal `Err` (from `expect_identifier`), and so is a
-    /// missing name after `::`.
+    /// A named type: `name`, `m::name`, `shop::cart::Cart`, `name<args>`,
+    /// or `m::name<args>`. The base type name is not optional: a missing
+    /// or reserved-keyword name is a fatal `Err` (from
+    /// `expect_identifier`), and so is a missing name after `::`.
     pub(super) fn parse_type(&mut self) -> Result<TypeExpr, ()> {
-        let first = self.expect_identifier("a type name")?;
-        let mut span = first.span;
-
-        let (module, name) = if self.peek() == Some(&TokenKind::ColonColon) {
+        let start_span = self.current_span();
+        let leading = self.take_path_start();
+        let mut segments = vec![self.expect_identifier("a type name")?];
+        while self.peek() == Some(&TokenKind::ColonColon) {
             self.bump();
-            let second = self.expect_identifier("a type name after `::`")?;
-            span = self.span_from(span, second.span);
-            (Some(first), second)
-        } else {
-            (None, first)
-        };
+            segments.push(self.expect_identifier("a type name after `::`")?);
+        }
+        let name = segments.pop().expect("at least one segment");
+        let path = (leading != PathStart::None || !segments.is_empty()).then(|| {
+            let end = segments.last().map_or(start_span, |s| s.span);
+            Path {
+                leading,
+                segments,
+                span: self.span_from(start_span, end),
+            }
+        });
+        let mut span = self.span_from(start_span, name.span);
 
         let args = if self.peek() == Some(&TokenKind::Lt) {
             let (args, group_span) = self.parse_generic_args()?;
@@ -40,7 +46,7 @@ impl<'a> Parser<'a> {
         };
 
         Ok(TypeExpr {
-            module,
+            path,
             name,
             args,
             span,
@@ -133,16 +139,38 @@ mod tests {
     fn bare_identifier_type() {
         let ty = parse_type_ok("i32");
         assert_eq!(ty.name.name, "i32");
-        assert!(ty.module.is_none());
+        assert!(ty.path.is_none());
         assert!(ty.args.is_empty());
     }
 
     #[test]
     fn module_qualified_type_parses() {
         let ty = parse_type_ok("m::User");
-        assert_eq!(ty.module.as_ref().unwrap().name, "m");
+        let path = ty.path.as_ref().unwrap();
+        assert_eq!(path.segments.len(), 1);
+        assert_eq!(path.segments[0].name, "m");
         assert_eq!(ty.name.name, "User");
         assert!(ty.args.is_empty());
+    }
+
+    #[test]
+    fn nested_module_path_type_parses() {
+        let ty = parse_type_ok("shop::cart::Cart");
+        let path = ty.path.as_ref().unwrap();
+        let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["shop", "cart"]);
+        assert_eq!(ty.name.name, "Cart");
+    }
+
+    #[test]
+    fn crate_prefixed_type_path_parses() {
+        // spec 3.1: `crate::` is a valid type-path prefix.
+        let ty = parse_type_ok("crate::a::Foo");
+        let path = ty.path.as_ref().unwrap();
+        assert!(matches!(path.leading, crate::ast::PathStart::Crate));
+        let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a"]);
+        assert_eq!(ty.name.name, "Foo");
     }
 
     #[test]
@@ -176,7 +204,7 @@ mod tests {
     #[test]
     fn module_qualified_generic_type_parses() {
         let ty = parse_type_ok("m::Vec<i32>");
-        assert_eq!(ty.module.as_ref().unwrap().name, "m");
+        assert_eq!(ty.path.as_ref().unwrap().segments[0].name, "m");
         assert_eq!(ty.name.name, "Vec");
         assert_eq!(ty.args.len(), 1);
     }

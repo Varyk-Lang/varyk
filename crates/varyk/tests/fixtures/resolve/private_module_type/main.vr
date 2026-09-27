@@ -1,0 +1,5 @@
+mod shop;
+
+fn take(c: shop::cart::Cart) {}
+
+fn main() {}

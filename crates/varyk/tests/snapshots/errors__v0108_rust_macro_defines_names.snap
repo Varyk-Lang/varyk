@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: `ext::double` cannot be called from Varyk, because `ext.rs` could redefine the types its signature names
+ --> crates/varyk/tests/fixtures/errors/v0108_rust_macro_defines_names/main.vr:4:20
+  |
+4 |     println!("{}", ext::double(2));
+  |                    ^^^^^^^^^^^^^^ `ext::double` cannot be called from Varyk, because `ext.rs` could redefine the types its signature names
+  |
+  = note: `point!` at `ext.rs:9` could define names Varyk cannot see, so Varyk cannot tell which types this file's signatures and fields name; move the macro and its uses to another `.rs` file, and write out by hand any function you call from Varyk

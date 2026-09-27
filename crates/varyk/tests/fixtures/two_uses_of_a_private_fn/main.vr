@@ -1,0 +1,6 @@
+mod shop;
+
+fn main() {
+    println!("{}", shop::count());
+    println!("{}", shop::count());
+}

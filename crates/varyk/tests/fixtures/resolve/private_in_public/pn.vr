@@ -15,7 +15,7 @@ pub fn make() -> Hidden {
 }
 
 pub struct Shown {
-    h: Hidden,
+    pub h: Hidden,
 }
 
 struct Quiet {

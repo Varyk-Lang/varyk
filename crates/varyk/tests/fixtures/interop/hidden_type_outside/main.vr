@@ -1,0 +1,7 @@
+mod shop;
+
+fn main() {
+    let h = shop::api::make();
+    let b = shop::api::boxed();
+    println!("{}", b.h.x);
+}

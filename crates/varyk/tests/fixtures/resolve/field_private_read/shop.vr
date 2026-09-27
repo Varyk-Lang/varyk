@@ -1,0 +1,7 @@
+pub struct Cart {
+    n: i32,
+}
+
+pub fn mk() -> Cart {
+    Cart { n: 1 }
+}

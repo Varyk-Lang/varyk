@@ -1,0 +1,5 @@
+mod unused;
+
+fn main() {
+    println!("{}", unused::greet());
+}

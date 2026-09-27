@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: unsupported Rust signature: `ext::total` cannot be called from Varyk
+ --> crates/varyk/tests/fixtures/errors/v0108_rust_alias_of_a_mapped_name/main.vr:4:13
+  |
+4 |     let t = ext::total();
+  |             ^^^^^^^^^^^^ unsupported Rust signature: `ext::total` cannot be called from Varyk
+  |
+  = note: the Rust signature is `fn total() -> String`
+  = note: `String` here is the Rust file's own `String` (a `type` alias or another item it declares), not the standard one; rename it in the Rust file

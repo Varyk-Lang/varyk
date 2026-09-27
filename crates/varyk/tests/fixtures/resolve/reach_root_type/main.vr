@@ -1,0 +1,9 @@
+mod shop;
+
+struct Config {
+    n: i32,
+}
+
+fn main() {
+    println!("{}", shop::get().n);
+}

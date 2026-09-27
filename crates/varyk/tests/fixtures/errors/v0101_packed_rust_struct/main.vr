@@ -1,0 +1,7 @@
+mod ext;
+
+fn show(s: ext::S) {
+    println!("{}", s.x);
+}
+
+fn main() {}

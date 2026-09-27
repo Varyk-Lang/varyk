@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `super::super` is not supported; write the path from `crate::` instead
+ --> crates/varyk/tests/fixtures/errors/v0001_super_super/main.vr:4:12
+  |
+4 |     super::super::helper();
+  |            ^^^^^ `super::super` is not supported; write the path from `crate::` instead

@@ -1,0 +1,3 @@
+pub fn count() -> i32 {
+    1
+}

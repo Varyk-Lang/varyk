@@ -1,0 +1,7 @@
+mod ext;
+
+fn show(w: ext::Wrap) {
+    println!("{}", ext::unwrap_i32(w));
+}
+
+fn main() {}

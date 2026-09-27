@@ -1,0 +1,3 @@
+pub struct Cart {
+    total: i32,
+}

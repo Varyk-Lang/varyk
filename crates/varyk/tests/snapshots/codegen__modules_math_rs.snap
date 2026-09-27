@@ -2,6 +2,7 @@
 source: crates/varyk/tests/codegen.rs
 expression: "file(&krate, \"src/math.rs\")"
 ---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 pub fn square(x: i32) -> i32 {
     x * x
 }

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0100]: type `K` has no method `count`
+ --> crates/varyk/tests/fixtures/errors/v0100_rust_enum_method/main.vr:5:22
+  |
+5 |     println!("{}", k.count());
+  |                      ^^^^^ type `K` has no method `count`
+  |
+  = note: `count` exists in the Rust file, but Varyk does not import methods of Rust enums yet; add a `pub fn count(k: &K)` instead

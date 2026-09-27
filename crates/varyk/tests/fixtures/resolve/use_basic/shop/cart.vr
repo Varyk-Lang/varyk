@@ -1,0 +1,9 @@
+pub struct Cart {
+    pub total: i32,
+}
+
+impl Cart {
+    pub fn new() -> Cart {
+        Cart { total: 0 }
+    }
+}

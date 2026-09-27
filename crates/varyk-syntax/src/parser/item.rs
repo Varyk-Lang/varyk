@@ -4,8 +4,8 @@
 
 use super::Parser;
 use crate::ast::{
-    EnumDecl, EnumVariant, FieldDecl, Function, ImplBlock, Item, ModDecl, Param, Program, SelfMode,
-    StructDecl,
+    EnumDecl, EnumVariant, FieldDecl, Function, Ident, ImplBlock, Item, ModDecl, Param, Path,
+    Program, SelfMode, StructDecl, UseDecl,
 };
 use crate::error::{FixIt, V0001, V0002, V0011, V0012};
 use crate::span::Span;
@@ -30,6 +30,9 @@ impl<'a> Parser<'a> {
     fn parse_item(&mut self) -> Result<Item, ()> {
         let start_span = self.current_span();
         let is_pub = self.bump_if(&TokenKind::Pub);
+        if is_pub && self.peek() == Some(&TokenKind::LParen) {
+            self.reject_pub_paren(start_span);
+        }
         match self.peek() {
             Some(TokenKind::Fn) => self
                 .parse_function(start_span, is_pub, false)
@@ -38,6 +41,19 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Enum) => self.parse_enum(start_span, is_pub).map(Item::Enum),
             Some(TokenKind::Impl) if !is_pub => self.parse_impl(start_span).map(Item::Impl),
             Some(TokenKind::Mod) => self.parse_mod(start_span, is_pub).map(Item::Mod),
+            Some(TokenKind::UseKw) => {
+                if is_pub {
+                    let use_span = self.current_span();
+                    let span = self.span_from(start_span, use_span);
+                    self.push_error(
+                        V0001,
+                        span,
+                        "`pub use` is not supported in Varyk yet; a `use` only shortens a name \
+                         inside this package, so write it without `pub`",
+                    );
+                }
+                self.parse_use(start_span).map(Item::Use)
+            }
             Some(TokenKind::ReservedKeyword(word)) => {
                 let word = word.clone();
                 let span = self.current_span();
@@ -54,7 +70,7 @@ impl<'a> Parser<'a> {
                 self.push_error(
                     V0002,
                     span,
-                    "expected an item (`fn`, `struct`, `enum`, `impl`, or `mod`)",
+                    "expected an item (`fn`, `struct`, `enum`, `impl`, `mod`, or `use`)",
                 );
                 Err(())
             }
@@ -312,25 +328,136 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// A field: `name: T`. A leading `pub` is `V0001` naming field-level
-    /// visibility (spec 2.10: field-level `pub` is milestone 3), reported
-    /// and skipped so the field still parses.
+    /// A field: `name: T`, optionally `pub` (spec 3.4). `pub(...)`, Rust's
+    /// restricted visibility, is `V0001` (`reject_pub_paren`): Varyk has
+    /// only plain `pub`.
     fn parse_field(&mut self) -> Result<FieldDecl, ()> {
         let start_span = self.current_span();
-        if self.peek() == Some(&TokenKind::Pub) {
-            let pub_span = self.current_span();
-            self.bump();
-            self.push_error(
-                V0001,
-                pub_span,
-                "field-level `pub` is not supported until milestone 3; make the whole struct `pub` instead",
-            );
+        let is_pub = self.bump_if(&TokenKind::Pub);
+        if is_pub && self.peek() == Some(&TokenKind::LParen) {
+            self.reject_pub_paren(start_span);
         }
         let name = self.expect_name_identifier("a field name")?;
         self.expect(TokenKind::Colon, "`:` after the field name")?;
         let ty = self.parse_type()?;
         let span = self.span_from(start_span, ty.span);
-        Ok(FieldDecl { name, ty, span })
+        Ok(FieldDecl {
+            name,
+            ty,
+            is_pub,
+            span,
+        })
+    }
+
+    /// `pub(...)` (spec 3.2, 3.4): Rust's restricted visibility
+    /// (`pub(crate)`, `pub(super)`, `pub(in path)`), which Varyk does not
+    /// have. `pub_span` is the already-consumed `pub` keyword's span, and
+    /// the current token is the group's opening `(`, confirmed present by
+    /// the caller. Reports `V0001` naming what Varyk offers instead and
+    /// consumes the parenthesized group, so parsing continues as plain
+    /// `pub`.
+    fn reject_pub_paren(&mut self, pub_span: Span) {
+        let group_span = self.skip_paren_group();
+        let span = self.span_from(pub_span, group_span);
+        self.push_error(
+            V0001,
+            span,
+            "Varyk has only `pub`; `pub(crate)`, `pub(super)`, and `pub(in path)` are not supported",
+        );
+    }
+
+    /// Consumes a `(...)` group whose opening `(` is already confirmed
+    /// present, matching nested parentheses by depth, and returns the span
+    /// of the whole group without building anything from its contents.
+    /// Mirrors `skip_brace_group`; best-effort, an unclosed group consumes
+    /// the rest of the token stream.
+    fn skip_paren_group(&mut self) -> Span {
+        let lparen = self.bump().expect("caller confirmed `(` is present");
+        let mut depth = 1u32;
+        let mut last_span = lparen.span;
+        while depth > 0 {
+            match self.peek() {
+                Some(TokenKind::LParen) => {
+                    depth += 1;
+                    last_span = self.bump().expect("peek just confirmed a token").span;
+                }
+                Some(TokenKind::RParen) => {
+                    depth -= 1;
+                    last_span = self.bump().expect("peek just confirmed a token").span;
+                }
+                Some(_) => {
+                    last_span = self.bump().expect("peek just confirmed a token").span;
+                }
+                None => break,
+            }
+        }
+        self.span_from(lparen.span, last_span)
+    }
+
+    /// `use path;` or `use path as name;` (spec 3.3), right after `use` has
+    /// been recognized but not yet consumed.
+    fn parse_use(&mut self, start_span: Span) -> Result<UseDecl, ()> {
+        self.bump(); // `use`
+        let path = self.parse_use_path()?;
+        let alias = if matches!(self.peek(), Some(TokenKind::ReservedKeyword(word)) if word == "as")
+        {
+            self.bump(); // `as`
+            Some(self.expect_name_identifier("a name after `as`")?)
+        } else {
+            None
+        };
+        let semi = self.expect(TokenKind::Semi, "`;` after the `use` path")?;
+        let span = self.span_from(start_span, semi.span);
+        Ok(UseDecl { path, alias, span })
+    }
+
+    /// The path of a `use` item: an optional keyword prefix (`crate`,
+    /// `self`, `super`) followed by one or more `::`-separated names.
+    /// Braces and globs, Rust habits Varyk's `use` does not have (spec
+    /// 3.3), are each `V0001` naming the construct, from
+    /// `parse_use_segment`.
+    fn parse_use_path(&mut self) -> Result<Path, ()> {
+        let start_span = self.current_span();
+        let leading = self.take_path_start();
+        let mut segments = vec![self.parse_use_segment()?];
+        while self.peek() == Some(&TokenKind::ColonColon) {
+            self.bump();
+            segments.push(self.parse_use_segment()?);
+        }
+        let end = segments.last().expect("at least one segment").span;
+        Ok(Path {
+            leading,
+            segments,
+            span: self.span_from(start_span, end),
+        })
+    }
+
+    /// One name in a `use` path: a plain identifier, or `V0001` for a
+    /// brace group (`{B, C}`) or a glob (`*`), each naming what Varyk
+    /// offers instead of the Rust habit.
+    fn parse_use_segment(&mut self) -> Result<Ident, ()> {
+        match self.peek() {
+            Some(TokenKind::LBrace) => {
+                let span = self.skip_brace_group();
+                self.push_error(
+                    V0001,
+                    span,
+                    "`use` does not support grouped imports in Varyk; write one `use` per name",
+                );
+                Err(())
+            }
+            Some(TokenKind::Star) => {
+                let span = self.current_span();
+                self.bump();
+                self.push_error(
+                    V0001,
+                    span,
+                    "`use` does not support glob imports in Varyk; write the name you want",
+                );
+                Err(())
+            }
+            _ => self.expect_identifier("a name in the `use` path"),
+        }
     }
 
     /// `enum Name { variants... }` (spec 2.2). At least one variant is
@@ -740,21 +867,134 @@ mod tests {
     }
 
     #[test]
-    fn pub_field_is_v0001() {
-        let (program, errors) = parse_program("struct User { pub name: string }");
+    fn pub_field_parses() {
+        let program = parse_program_ok("struct User { pub name: string, age: i32 }");
+        match &program.items[0] {
+            Item::Struct(s) => {
+                assert!(s.fields[0].is_pub);
+                assert!(!s.fields[1].is_pub);
+            }
+            other => panic!("expected a struct, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pub_paren_on_a_function_is_v0001() {
+        for src in ["pub(crate) fn f() { }", "pub(super) fn f() { }"] {
+            let (program, errors) = parse_program(src);
+            assert!(!program.items.is_empty(), "V0001 must not stop parsing");
+            let v0001 = errors
+                .iter()
+                .find(|e| e.code == V0001)
+                .unwrap_or_else(|| panic!("expected a V0001 parsing {src:?}: {errors:?}"));
+            assert!(v0001.message.contains("only `pub`"), "{}", v0001.message);
+            let f = only_function(&program);
+            assert!(f.is_pub, "pub( ) should still leave the item `pub`");
+        }
+    }
+
+    #[test]
+    fn pub_paren_on_a_field_is_v0001() {
+        let (program, errors) = parse_program("struct User { pub(crate) name: string }");
         assert!(!program.items.is_empty(), "V0001 must not stop parsing");
         let v0001 = errors
             .iter()
             .find(|e| e.code == V0001)
             .expect("expected a V0001");
-        assert_eq!(
-            v0001.message,
-            "field-level `pub` is not supported until milestone 3; make the whole struct `pub` instead"
-        );
+        assert!(v0001.message.contains("only `pub`"), "{}", v0001.message);
         match &program.items[0] {
-            Item::Struct(s) => assert_eq!(s.fields[0].name.name, "name"),
+            Item::Struct(s) => {
+                assert_eq!(s.fields[0].name.name, "name");
+                assert!(s.fields[0].is_pub);
+            }
             other => panic!("expected a struct, got {other:?}"),
         }
+    }
+
+    // --- `use` (spec 3.3) ---------------------------------------------------
+
+    fn only_use(program: &Program) -> &UseDecl {
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0] {
+            Item::Use(u) => u,
+            other => panic!("expected a use item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn use_crate_path_with_several_segments() {
+        let program = parse_program_ok("use crate::a::b::C;");
+        let u = only_use(&program);
+        assert!(matches!(u.path.leading, crate::ast::PathStart::Crate));
+        let names: Vec<&str> = u.path.segments.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "C"]);
+        assert!(u.alias.is_none());
+    }
+
+    #[test]
+    fn use_with_alias() {
+        let program = parse_program_ok("use a::B as D;");
+        let u = only_use(&program);
+        assert!(matches!(u.path.leading, crate::ast::PathStart::None));
+        let names: Vec<&str> = u.path.segments.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "B"]);
+        assert_eq!(u.alias.as_ref().unwrap().name, "D");
+    }
+
+    #[test]
+    fn use_self_path() {
+        let program = parse_program_ok("use self::x;");
+        let u = only_use(&program);
+        assert!(matches!(u.path.leading, crate::ast::PathStart::SelfMod));
+        assert_eq!(u.path.segments[0].name, "x");
+    }
+
+    #[test]
+    fn use_super_path() {
+        let program = parse_program_ok("use super::x;");
+        let u = only_use(&program);
+        assert!(matches!(u.path.leading, crate::ast::PathStart::Super));
+        assert_eq!(u.path.segments[0].name, "x");
+    }
+
+    #[test]
+    fn use_braced_group_is_v0001() {
+        let (_, errors) = parse_program("use a::{B, C};");
+        let v0001 = errors
+            .iter()
+            .find(|e| e.code == V0001)
+            .expect("expected a V0001");
+        assert!(
+            v0001.message.contains("grouped imports"),
+            "{}",
+            v0001.message
+        );
+    }
+
+    #[test]
+    fn use_glob_is_v0001() {
+        let (_, errors) = parse_program("use a::*;");
+        let v0001 = errors
+            .iter()
+            .find(|e| e.code == V0001)
+            .expect("expected a V0001");
+        assert!(v0001.message.contains("glob imports"), "{}", v0001.message);
+    }
+
+    #[test]
+    fn pub_use_is_v0001() {
+        let (program, errors) = parse_program("pub use a::B;");
+        let v0001 = errors
+            .iter()
+            .find(|e| e.code == V0001)
+            .expect("expected a V0001");
+        assert!(v0001.message.contains("pub use"), "{}", v0001.message);
+        assert!(v0001.message.contains("without `pub`"), "{}", v0001.message);
+        // Reported, but the `use` still parses: `V0001` must not stop
+        // parsing.
+        let u = only_use(&program);
+        let names: Vec<&str> = u.path.segments.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "B"]);
     }
 
     // --- Enums (spec 2.2) --------------------------------------------------

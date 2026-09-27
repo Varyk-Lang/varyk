@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/shop/cart/item.rs\")"
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub struct Item {
+    pub price: i32,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub fn cost(item: &Item) -> i32 {
+    item.price + crate::shop::start() - 2
+}

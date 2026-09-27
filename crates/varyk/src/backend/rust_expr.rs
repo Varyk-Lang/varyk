@@ -11,7 +11,7 @@ use varyk_syntax::{BinaryOp, UnaryOp};
 use super::rust::{item_path, struct_path};
 use crate::hir::{
     HirArm, HirExpr, HirExprKind, HirFunction, HirPattern, HirProgram, LocalId, MethodRef,
-    StringRepr, VariantRef, declared_inside, field_root, is_block_like, is_place, leaves,
+    StringRepr, VariantRef, declared_inside, field_root, is_block_like, leaves, matched_in_place,
 };
 use crate::resolve::{Callee, ModuleId, UserType};
 use crate::types::{FloatKind, IntKind, ParamMode, Ty};
@@ -278,7 +278,10 @@ impl<'a> FnEmitter<'a> {
                 // `let` so lent a `String`, and a binding of borrowed text
                 // is not a mutable place.
                 Have::Str => format!("&mut {}.to_string()", postfix(expr, text)),
-                Have::Ref { .. } => text,
+                // Only a program `check` rejects lends a shared reference
+                // mutably; spelled so, rustc names the same fault (E0596).
+                Have::Ref { mutable: false } => format!("&mut *{text}"),
+                Have::Ref { mutable: true } => text,
             },
             Need::Str => match have {
                 Have::Str => text,
@@ -320,13 +323,13 @@ impl<'a> FnEmitter<'a> {
                 if fields.is_empty() {
                     return format!("{path} {{}}");
                 }
-                let names = &self.program.structs[id.0 as usize].fields;
+                let defs = &self.program.structs[id.0 as usize].fields;
                 let fields: Vec<String> = fields
                     .iter()
                     .map(|(index, value)| {
                         format!(
                             "{}: {}",
-                            names[*index].0,
+                            defs[*index].name,
                             self.expr(value, Need::Value, indent)
                         )
                     })
@@ -389,7 +392,7 @@ impl<'a> FnEmitter<'a> {
                     .iter()
                     .map(|element| self.expr(element, Need::Value, indent))
                     .collect();
-                format!("vec![{}]", elements.join(", "))
+                format!("::std::vec![{}]", elements.join(", "))
             }
             HirExprKind::Block(_) | HirExprKind::If { .. } | HirExprKind::Match { .. } => {
                 unreachable!("`expr` emits blocks, `if`s, and `match`es itself")
@@ -404,7 +407,7 @@ impl<'a> FnEmitter<'a> {
     /// which makes an expression arm a block. Each arm's value is emitted
     /// as `need` says.
     fn match_expr(&self, head: &HirExpr, arms: &[HirArm], need: Need, indent: usize) -> String {
-        let by_reference = is_place(head);
+        let by_reference = matched_in_place(&self.program.enums, head);
         let head_need = if by_reference {
             Need::Shared { binding: true }
         } else {
@@ -427,7 +430,7 @@ impl<'a> FnEmitter<'a> {
                 })
                 .collect();
             let body = match &arm.body.kind {
-                HirExprKind::Block(block) => self.block_after(block, &copies, need, inner),
+                HirExprKind::Block(block) => self.block_body(block, &copies, need, inner),
                 _ if copies.is_empty() => format!("{},", self.expr(&arm.body, need, inner)),
                 _ => {
                     let body_pad = "    ".repeat(inner + 1);
@@ -500,11 +503,18 @@ impl<'a> FnEmitter<'a> {
         args.join(", ")
     }
 
-    /// `receiver.name(args)`. Rust's method call borrows the receiver as
-    /// the method's `self` needs, so a place receiver is written as it is
-    /// (never moved); a string receiver that is a `&str` has `clone`
-    /// spelled `.to_string()`, since cloning a `&str` copies only the
-    /// reference (spec 3.5).
+    /// A method call. A Varyk or imported method is called by its path,
+    /// `Type::name(receiver, args)`, the receiver lent as its `self`
+    /// needs: in the `receiver.name(args)` form Rust's method lookup can
+    /// pick a trait method of the same name over the inherent one Varyk
+    /// checked (a by-value `Into::into`, or a `&self` `Clone::clone` over
+    /// a `&mut self` method).
+    ///
+    /// A builtin is `receiver.name(args)`: Rust's method call borrows the
+    /// receiver as the method's `self` needs, so a place receiver is
+    /// written as it is (never moved); a string receiver that is a `&str`
+    /// has `clone` spelled `.to_string()`, since cloning a `&str` copies
+    /// only the reference (spec 3.5).
     fn method_call(
         &self,
         receiver: &HirExpr,
@@ -512,14 +522,16 @@ impl<'a> FnEmitter<'a> {
         args: &[HirExpr],
         indent: usize,
     ) -> String {
-        let (name, modes): (&str, Vec<ParamMode>) = match method {
+        let id = match method {
             MethodRef::Varyk(id) => {
-                let function = self.program.function(id);
-                let modes = function.params.iter().map(|p| p.mode).collect();
-                (&function.name, modes)
+                return self.path_call(Callee::Varyk(id), receiver, args, indent);
             }
-            MethodRef::Builtin(id) => (id.get().name, id.modes()),
+            MethodRef::Imported(id) => {
+                return self.path_call(Callee::Imported(id), receiver, args, indent);
+            }
+            MethodRef::Builtin(id) => id,
         };
+        let (name, modes): (&str, Vec<ParamMode>) = (id.get().name, id.modes());
         let args = self.args(args, &modes[1..], indent);
         if receiver.ty != Ty::String {
             let mutable = modes[0] == ParamMode::MutableBorrow;
@@ -543,10 +555,31 @@ impl<'a> FnEmitter<'a> {
         }
     }
 
+    /// `Type::name(receiver, args)` for the method `callee`.
+    fn path_call(
+        &self,
+        callee: Callee,
+        receiver: &HirExpr,
+        args: &[HirExpr],
+        indent: usize,
+    ) -> String {
+        let (path, modes) = self.callee(callee);
+        let receiver = self.args(std::slice::from_ref(receiver), &modes[..1], indent);
+        if args.is_empty() {
+            return format!("{path}({receiver})");
+        }
+        format!(
+            "{path}({receiver}, {})",
+            self.args(args, &modes[1..], indent)
+        )
+    }
+
     /// `println!` or `format!` (`name`): every argument as it is, since
-    /// the format machinery borrows it.
+    /// the format machinery borrows it. Every std macro is written by its
+    /// full path, `::std::println!`: a bare name could be a
+    /// `#[macro_export]` macro of a `.rs` module of the package.
     fn format_call(&self, name: &str, format: &str, args: &[HirExpr], indent: usize) -> String {
-        let mut out = format!("{name}!(\"{format}\"");
+        let mut out = format!("::std::{name}!(\"{format}\"");
         for arg in args {
             out.push_str(", ");
             out.push_str(&self.expr(arg, Need::AsIs, indent));
@@ -656,8 +689,15 @@ impl<'a> FnEmitter<'a> {
             }
             Callee::Imported(id) => {
                 let sig = &self.program.imported[id.0 as usize];
-                let path = item_path(self.program, sig.module, self.module, &sig.name);
-                (path, sig.params.iter().map(|(_, mode)| *mode).collect())
+                // An associated function is reached through its struct.
+                let path = match sig.owner {
+                    None => item_path(self.program, sig.module, self.module, &sig.name),
+                    Some(owner) => {
+                        let owner = struct_path(self.program, owner, self.module);
+                        format!("{owner}::{}", sig.name)
+                    }
+                };
+                (path, sig.modes())
             }
             Callee::Builtin(id) => (id.path(), id.modes()),
         }

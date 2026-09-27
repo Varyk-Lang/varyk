@@ -8,10 +8,15 @@
 //! diagnostics and fix-its at it. Integer and float literals keep their
 //! source text and are never value-parsed: rustc enforces their range.
 
+use std::path::PathBuf;
+
 use varyk_syntax::{BinaryOp, Span, UnaryOp};
 
 use crate::builtins::BuiltinId;
-use crate::resolve::{Callee, EnumId, FnId, ImportedSig, ModuleId, StructId, UserType};
+use crate::resolve::{
+    Callee, DropCause, EnumId, FieldDef, FnId, ImportedFnId, ImportedSig, ModuleId, StructId,
+    UserType,
+};
 use crate::types::{ParamMode, Ty};
 
 /// Index into [`HirFunction::locals`]. Parameters come first: parameter
@@ -47,6 +52,20 @@ impl HirProgram {
     pub fn function(&self, id: FnId) -> &HirFunction {
         &self.functions[id.0 as usize]
     }
+
+    /// The Rust path of module `id` from the crate root: `crate` for the
+    /// entry module, `crate::shop::cart` for a nested one.
+    pub fn module_path(&self, id: ModuleId) -> String {
+        let mut names = Vec::new();
+        let mut current = &self.modules[id.0 as usize];
+        while let Some(parent) = current.parent {
+            names.push(current.name.as_str());
+            current = &self.modules[parent.0 as usize];
+        }
+        names.push("crate");
+        names.reverse();
+        names.join("::")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,15 +73,42 @@ pub struct HirModule {
     pub id: ModuleId,
     /// The `mod` name, or `resolve::ENTRY_MODULE_NAME` for the entry.
     pub name: String,
+    /// The module that declares this one; `None` for the entry.
+    pub parent: Option<ModuleId>,
+    /// Declared `pub mod`.
+    pub is_pub: bool,
+    /// The generated file's path under `src/`, mirroring the module tree
+    /// (spec 2.3): `main.rs`, `shop.rs`, `shop/mod.rs`, `shop/cart.rs`.
+    pub path: String,
+    /// This module's own `use` declarations (spec 3.3), in source order,
+    /// each already rewritten to the canonical `crate::`-rooted path of
+    /// what it names, so the backend emits them verbatim.
+    pub uses: Vec<HirUse>,
     pub kind: HirModuleKind,
+}
+
+/// `use path;` or `use path as alias;` (spec 3.3), ready for emission:
+/// `path` is the canonical `crate::`-rooted path to whatever the `use`
+/// names, the same form the backend writes for the item elsewhere, so the
+/// generated line resolves regardless of how the user wrote it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirUse {
+    pub path: String,
+    /// `Some` only when the user wrote `as`; the local name is otherwise
+    /// already `path`'s last segment.
+    pub alias: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirModuleKind {
     /// A `.vr` module; its functions are in [`HirProgram::functions`].
     Varyk,
-    /// A `.rs` module's source text, copied verbatim into the generated crate.
-    Rust { source: String },
+    /// A `.rs` module's source text, copied verbatim into the generated
+    /// crate, and the user's file it was read from (spec 2.3: the backend
+    /// copies this path into [`crate::backend::GeneratedCrate::copied`]
+    /// rather than reading `source` again).
+    Rust { source: String, path: PathBuf },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,8 +116,11 @@ pub struct HirStruct {
     pub name: String,
     pub module: ModuleId,
     pub is_pub: bool,
+    /// Imported from a `.rs` module (M3 spec 4.1): the backend emits no
+    /// definition for it.
+    pub imported: bool,
     /// In declaration order; a field index is a position in this list.
-    pub fields: Vec<(String, Ty)>,
+    pub fields: Vec<FieldDef>,
     pub span: Span,
 }
 
@@ -80,8 +129,14 @@ pub struct HirEnum {
     pub name: String,
     pub module: ModuleId,
     pub is_pub: bool,
+    /// Imported from a `.rs` module (M3 spec 4.3): the backend emits no
+    /// definition for it.
+    pub imported: bool,
     /// Each variant's name and payload types, in declaration order.
     pub variants: Vec<(String, Vec<Ty>)>,
+    /// Has, or may have, an `impl Drop` in a `.rs` module (see
+    /// `EnumDef::drops`).
+    pub drops: Option<DropCause>,
     pub span: Span,
 }
 
@@ -391,10 +446,13 @@ impl HirPattern {
 }
 
 /// The method a [`HirExprKind::MethodCall`] calls: a Varyk method, whose
-/// first parameter is its receiver, or a row of the built-in table.
+/// first parameter is its receiver, a method of an imported Rust struct,
+/// whose receiver mode is [`ImportedSig::modes`]'s first (M3 spec 4.2),
+/// or a row of the built-in table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodRef {
     Varyk(FnId),
+    Imported(ImportedFnId),
     Builtin(BuiltinId),
 }
 
@@ -466,6 +524,14 @@ pub(crate) fn is_place(expr: &HirExpr) -> bool {
         HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } => is_place(base),
         _ => false,
     }
+}
+
+/// Whether a `match` on `head` only looks inside it, its bindings
+/// aliases of its parts, rather than owning it: `head` is a place, or a
+/// temporary of an enum with a destructor, whose payload Rust cannot
+/// move out (E0509).
+pub(crate) fn matched_in_place(enums: &[HirEnum], head: &HirExpr) -> bool {
+    is_place(head) || matches!(head.ty, Ty::Enum(id) if enums[id.0 as usize].drops.is_some())
 }
 
 /// Whether `local` is declared inside `within` (an expression or a

@@ -2,20 +2,21 @@
 source: crates/varyk/tests/codegen.rs
 expression: main
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
 mod tally;
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 struct Task {
     label: String,
     done: bool,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 enum Size {
     Small,
     Large,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 impl Task {
     fn new(label: &str) -> Task {
         Task { label: label.to_string(), done: false }
@@ -34,17 +35,19 @@ impl Task {
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 impl Size {
     fn sides(&self) -> usize {
         4usize
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn count_done(tasks: &Vec<Task>) -> usize {
     let mut n = 0usize;
     let mut i = 0usize;
     while i < tasks.len() {
-        if tasks[i].is_done() {
+        if Task::is_done(&tasks[i]) {
             n = n + 1usize;
         }
         i = i + 1usize;
@@ -52,32 +55,34 @@ fn count_done(tasks: &Vec<Task>) -> usize {
     n
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn finish_first(tasks: &mut Vec<Task>) {
-    tasks[0usize].complete();
+    Task::complete(&mut tasks[0usize]);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let mut tasks: Vec<Task> = Vec::new();
     tasks.push(Task::new("write"));
     tasks.push(Task::new("test"));
     finish_first(&mut tasks);
-    tasks[1usize].complete();
+    Task::complete(&mut tasks[1usize]);
     let first = &tasks[0usize];
-    println!("{} done: {}", first.label(), first.is_done());
-    println!("{} of {}", count_done(&tasks), tasks.len());
-    let mut words: Vec<String> = vec!["a".to_string(), "b".to_string()];
+    ::std::println!("{} done: {}", Task::label(first), Task::is_done(first));
+    ::std::println!("{} of {}", count_done(&tasks), tasks.len());
+    let mut words: Vec<String> = ::std::vec!["a".to_string(), "b".to_string()];
     words[1usize] = "c".to_string();
     let word = &words[1usize];
     let copy = word.clone();
     let lit = "lit";
     let lit_copy = lit.to_string();
-    println!("{} {} {} {}", word, copy, lit_copy, lit.len());
+    ::std::println!("{} {} {} {}", word, copy, lit_copy, lit.len());
     let last: Option<String> = words.pop();
-    let mut counts: Vec<i32> = vec![1, 2];
+    let mut counts: Vec<i32> = ::std::vec![1, 2];
     counts[0usize] = counts[1usize] + 1;
     let size = Size::Large;
-    println!("{} {}", counts[0usize], size.sides());
+    ::std::println!("{} {}", counts[0usize], Size::sides(&size));
     let mut t = crate::tally::Tally::new();
-    t.add(2);
-    println!("{}", t.value());
+    crate::tally::Tally::add(&mut t, 2);
+    ::std::println!("{}", crate::tally::Tally::value(&t));
 }

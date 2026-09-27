@@ -1,0 +1,22 @@
+mod hook;
+
+enum Msg {
+    Text(string),
+    Quit,
+}
+
+fn make() -> Msg {
+    Msg::Text("hi")
+}
+
+fn pick() -> string {
+    let s = match make() {
+        Msg::Text(s) => s,
+        Msg::Quit => "quit",
+    };
+    s
+}
+
+fn main() {
+    println!("{}", pick());
+}

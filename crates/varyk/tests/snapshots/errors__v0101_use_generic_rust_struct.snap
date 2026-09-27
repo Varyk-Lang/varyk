@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust struct `ext::Wrap`
+ --> crates/varyk/tests/fixtures/errors/v0101_use_generic_rust_struct/main.vr:2:5
+  |
+2 | use ext::Wrap;
+  |     ^^^^^^^^^ Varyk cannot use the Rust struct `ext::Wrap`
+  |
+  = note: the Rust struct `Wrap` is not imported because it has type or lifetime parameters; Varyk imports only structs without them, so wrap it in a struct that has none

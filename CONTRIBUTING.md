@@ -1,8 +1,9 @@
 # Contributing
 
-Varyk is experimental and pre-0.1. Contributions are welcome; small,
-focused pull requests are the easiest to review. Varyk has one maintainer,
-so reviews are best effort and a pull request may wait a while; a reminder
+Varyk is experimental and pre-1.0: anything may change, and a breaking
+change bumps the minor version. Contributions are welcome; small, focused
+pull requests are the easiest to review. Varyk has one maintainer, so
+reviews are best effort and a pull request may wait a while; a reminder
 after two weeks is welcome.
 
 ## Build and test
@@ -26,13 +27,16 @@ written for people and AI agents alike.
 - `docs/specs/` holds the design the compiler is built from; read it before
   changing semantics. Decisions that are settled are in its decisions log.
 - `docs/language.md` is the one-page reference and must change in the same
-  pull request as any change to what the compiler accepts.
+  pull request as any change to what the compiler accepts. A whole
+  program in it is a set of code blocks each starting with a `// <file>`
+  line, ending with `// main.vr`; `crates/varyk/tests/cli.rs` checks each.
 - `docs/roadmap.md` says what comes next; `docs/plans/` holds the
   implementation plans and the follow-ups left from each milestone.
 - Diagnostics have stable codes (`crates/varyk/src/diagnostics/codes.rs`).
-  A code is never reused for a different meaning. New diagnostics get an
-  end-to-end fixture under `crates/varyk/tests/fixtures/errors/` and a
-  snapshot in `crates/varyk/tests/errors.rs`.
+  A code is never reused for a different meaning. A new diagnostic needs a
+  fixture under `crates/varyk/tests/fixtures/errors/<code>_<slug>/`, a
+  registration in `crates/varyk/tests/errors.rs`, and a line in the code
+  list at the end of `docs/language.md`.
 
 ## Commit messages and releases
 
@@ -57,16 +61,19 @@ A `!` after the prefix (`feat!:`) marks a breaking change. Before 1.0,
 minor version.
 
 release-please opens a release pull request on `main` with the version
-bumps and `CHANGELOG.md`. Merging it creates the tags `varyk-vX.Y.Z` and
-`varyk-syntax-vX.Y.Z` and the GitHub releases, and runs the publish job,
-which needs approval in the `release` environment before it uploads both
-crates to crates.io.
+bumps and `CHANGELOG.md`. Merging that pull request is the release decision:
+it creates the tags `varyk-vX.Y.Z` and `varyk-syntax-vX.Y.Z` and the GitHub
+releases, and the publish job then uploads both crates to crates.io with no
+further approval. The crates.io token is a secret of the `release`
+environment, which only workflow runs from protected branches (`main`) may
+use; the environment has no required reviewer, so nothing waits on a click
+after the merge.
 
 ## Keeping it small
 
-This is an MVP. Prefer the smallest change that fixes the problem, and
-open an issue first for anything that adds a language feature, so it can
-be weighed against the spec's principles.
+Varyk is small on purpose. Prefer the smallest change that fixes the
+problem, and open an issue first for anything that adds a language feature,
+so it can be weighed against the spec's principles.
 
 ## Licensing of contributions
 

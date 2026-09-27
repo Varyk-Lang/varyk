@@ -1,0 +1,22 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod matcher;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn tally(m: &mut crate::matcher::Matcher, word: &str) {
+    if crate::matcher::Matcher::is_match(m, word) {
+        crate::matcher::Matcher::bump(m);
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let mut m = crate::matcher::Matcher::new("red|green");
+    tally(&mut m, "red");
+    tally(&mut m, "blue");
+    tally(&mut m, "green");
+    ::std::println!("{} {}", m.hits, crate::matcher::Matcher::is_match(&m, "green"));
+    ::std::println!("{}", crate::matcher::describe(&m));
+}

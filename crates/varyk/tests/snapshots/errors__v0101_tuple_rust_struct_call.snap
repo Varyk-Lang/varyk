@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust struct `ext::M`
+ --> crates/varyk/tests/fixtures/errors/v0101_tuple_rust_struct_call/main.vr:4:13
+  |
+4 |     let m = ext::M(1);
+  |             ^^^^^^ Varyk cannot use the Rust struct `ext::M`
+  |
+  = note: the Rust struct `M` is not imported because it is a tuple struct, which Varyk does not import yet; give its fields names

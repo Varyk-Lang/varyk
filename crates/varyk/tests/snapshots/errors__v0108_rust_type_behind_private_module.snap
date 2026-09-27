@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: `shop::api::make` cannot be called here, because its Rust signature names a type this module cannot see
+ --> crates/varyk/tests/fixtures/errors/v0108_rust_type_behind_private_module/main.vr:4:13
+  |
+4 |     let h = shop::api::make();
+  |             ^^^^^^^^^^^^^^^^^ `shop::api::make` cannot be called here, because its Rust signature names a type this module cannot see
+  |
+  = note: the Rust signature is `fn make() -> crate::shop::hidden::H`
+  = note: `H` is in module `shop::hidden`, which only `shop` can see, so this can be used only inside `shop`; to use it here, write `pub mod hidden;` in `shop`

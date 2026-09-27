@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0104]: a module cannot be named `Main`, in any capitalization; use another name
+ --> crates/varyk/tests/fixtures/errors/v0104_mod_capitalised_main/main.vr:1:1
+  |
+1 | mod Main;
+  | ^^^^^^^^^ a module cannot be named `Main`, in any capitalization; use another name
+  |
+  = note: `src/main.rs` is where the generated program starts, and many file systems treat `Main.rs` and `main.rs` as one file

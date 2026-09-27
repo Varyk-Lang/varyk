@@ -1,0 +1,6 @@
+mod shop;
+
+fn main() {
+    let c = shop::Cart::new();
+    println!("{}", c.get());
+}

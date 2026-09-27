@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0100]: type `A` has no method `label`
+ --> crates/varyk/tests/fixtures/errors/v0100_skipped_rust_method/main.vr:5:22
+  |
+5 |     println!("{}", a.label());
+  |                      ^^^^^ type `A` has no method `label`
+  |
+  = note: `label` exists in the Rust file but is a trait method; Varyk does not import such methods; add a `pub fn label` to a plain `impl A` block

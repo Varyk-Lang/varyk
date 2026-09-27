@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: unsupported Rust signature: `ext::save` cannot be called from Varyk
+ --> crates/varyk/tests/fixtures/errors/v0108_unit_inside_rust_type/main.vr:4:17
+  |
+4 |     let saved = ext::save();
+  |                 ^^^^^^^^^^^ unsupported Rust signature: `ext::save` cannot be called from Varyk
+  |
+  = note: the Rust signature is `fn save() -> Result<(), String>`
+  = note: `()` inside another type is not supported yet; use `bool` or a struct instead, as in `Result<bool, String>`

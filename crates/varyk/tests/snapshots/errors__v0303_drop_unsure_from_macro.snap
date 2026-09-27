@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0303]: `shout` may change `s`, but `s` stays inside `Msg`, which may run code when it is thrown away, so it cannot be changed here; to change it, first make a changeable copy with `let mut s = s.clone();`
+  --> crates/varyk/tests/fixtures/errors/v0303_drop_unsure_from_macro/main.vr:20:19
+   |
+19 |         Msg::Text(s) => {
+   |                   - `s` is bound here
+20 |             shout(s);
+   |                   ^ `shout` may change `s`, but `s` stays inside `Msg`, which may run code when it is thrown away, so it cannot be changed here; to change it, first make a changeable copy with `let mut s = s.clone();`
+   |
+   = note: Varyk cannot rule out that `Msg` runs code when it is thrown away (in Rust terms, whether it has an `impl Drop`), because `helper.rs` has a macro, `quiet!`, whose text mentions `Drop`, so `match` only borrows it and nothing can be moved out of it
+help: insert `let mut s = s.clone();`

@@ -1,0 +1,5 @@
+mod g;
+
+fn main() {
+    println!("{}", g::two());
+}

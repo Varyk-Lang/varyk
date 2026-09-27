@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use varyk::backend::{Backend, GeneratedCrate, RustBackend};
+use varyk::backend::{Backend, CrateInfo, GeneratedCrate, RustBackend};
 use varyk_syntax::{FileId, SourceFile};
 
 // --- Helpers ----------------------------------------------------------------
@@ -15,11 +15,11 @@ fn workspace_root() -> PathBuf {
 
 fn generate_source(entry: SourceFile) -> GeneratedCrate {
     let mut sources = Vec::new();
-    let program = match varyk::check_file(entry, &mut sources) {
+    let program = match varyk::check_file(entry, varyk::package::Kind::Binary, None, &mut sources) {
         Ok(program) => program,
         Err(diagnostics) => panic!("expected the program to check, got {diagnostics:#?}"),
     };
-    RustBackend.generate(&program, "test_pkg")
+    RustBackend.generate(&program, &CrateInfo::single_file("test_pkg".to_string()))
 }
 
 /// Generates the crate for `<rel>`, relative to the workspace root.
@@ -38,13 +38,33 @@ fn file<'a>(krate: &'a GeneratedCrate, path: &str) -> &'a str {
     krate
         .files
         .iter()
-        .find(|(p, _)| p == path)
-        .map(|(_, content)| content.as_str())
+        .find(|file| file.path == path)
+        .map(|file| file.text.as_str())
         .unwrap_or_else(|| panic!("no file {path} in {:?}", paths(krate)))
 }
 
 fn paths(krate: &GeneratedCrate) -> Vec<&str> {
-    krate.files.iter().map(|(p, _)| p.as_str()).collect()
+    krate.files.iter().map(|file| file.path.as_str()).collect()
+}
+
+fn copied_paths(krate: &GeneratedCrate) -> Vec<&str> {
+    krate.copied.iter().map(|(path, _)| path.as_str()).collect()
+}
+
+/// The item-level attribute every generated item carries (spec 2.3), so a
+/// test can strip it out and compare the rest to a spec body that
+/// predates task 2's per-item attributes.
+const ALLOW_ITEM: &str = "#[allow(warnings, arithmetic_overflow, unconditional_panic)]";
+
+fn without_allow_lines(text: &str) -> String {
+    text.lines()
+        .filter(|line| *line != ALLOW_ITEM)
+        .map(|line| format!("{line}\n"))
+        .collect::<String>()
+        // The specs show std macros bare; the backend writes their full
+        // path, so that no `#[macro_export]` macro of a `.rs` module can
+        // stand in for them.
+        .replace("::std::", "")
 }
 
 fn main_rs(text: &str) -> String {
@@ -102,10 +122,10 @@ fn main() {
     print_user(&user);
 }
 ";
-    let expected = format!(
-        "#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]\n\n{spec_body}"
-    );
-    assert_eq!(main, expected);
+    // Every generated item now carries its own attribute line (spec 2.3)
+    // instead of one crate-wide header; strip those out to compare
+    // against the spec's plain body.
+    assert_eq!(without_allow_lines(main), spec_body);
 }
 
 #[test]
@@ -113,7 +133,7 @@ fn modules_crate_has_two_files_and_a_mod_line() {
     let krate = generate_path("examples/modules/main.vr");
     assert_eq!(paths(&krate), ["src/main.rs", "src/math.rs"]);
     let main = file(&krate, "src/main.rs");
-    assert!(main.contains("\nmod math;\n"), "{main}");
+    assert!(main.starts_with("mod math;\n"), "{main}");
     insta::assert_snapshot!("modules_main_rs", main);
     insta::assert_snapshot!("modules_math_rs", file(&krate, "src/math.rs"));
 }
@@ -121,11 +141,43 @@ fn modules_crate_has_two_files_and_a_mod_line() {
 #[test]
 fn interop_crate_copies_greet_rs_verbatim() {
     let krate = generate_path("examples/interop/main.vr");
-    assert_eq!(paths(&krate), ["src/main.rs", "src/greet.rs"]);
+    assert_eq!(paths(&krate), ["src/main.rs"]);
+    assert_eq!(copied_paths(&krate), ["src/greet.rs"]);
     let source = std::fs::read_to_string(workspace_root().join("examples/interop/greet.rs"))
         .expect("greet.rs should exist");
-    assert_eq!(file(&krate, "src/greet.rs"), source);
+    let copied = std::fs::read_to_string(&krate.copied[0].1)
+        .expect("the copied entry's path should point at a readable file");
+    assert_eq!(copied, source);
     insta::assert_snapshot!("interop_main_rs", file(&krate, "src/main.rs"));
+}
+
+/// An imported struct has no definition in the generated crate; its
+/// associated function is reached through it, and its methods' receivers
+/// are borrowed as `&self` and `&mut self` say (M3 spec 4.1, 4.2).
+#[test]
+fn imported_struct_emits_no_definition_and_borrows_by_receiver() {
+    let krate = generate_path("crates/varyk/tests/fixtures/interop/matcher/main.vr");
+    assert_eq!(paths(&krate), ["src/main.rs"]);
+    assert_eq!(copied_paths(&krate), ["src/matcher.rs"]);
+    let main = file(&krate, "src/main.rs");
+    assert!(!main.contains("struct Matcher"), "{main}");
+    insta::assert_snapshot!("imported_struct_main_rs", main);
+}
+
+/// An imported enum has no definition in the generated crate; a `match`
+/// on it uses its variants' full path from the crate root (M3 spec 4.3).
+#[test]
+fn imported_enum_emits_no_definition_and_matches_by_variant_path() {
+    let krate = generate_path("crates/varyk/tests/fixtures/interop/kind/main.vr");
+    assert_eq!(paths(&krate), ["src/main.rs"]);
+    assert_eq!(copied_paths(&krate), ["src/kind.rs"]);
+    let main = file(&krate, "src/main.rs");
+    assert!(!main.contains("enum Kind"), "{main}");
+    assert!(main.contains("match k {"), "{main}");
+    assert!(main.contains("kind::Kind::Word(n)"), "{main}");
+    assert!(main.contains("kind::Kind::Number(n)"), "{main}");
+    assert!(main.contains("kind::Kind::Unit"), "{main}");
+    insta::assert_snapshot!("imported_enum_main_rs", main);
 }
 
 // --- The six milestone-2 examples ------------------------------------------
@@ -178,13 +230,10 @@ fn main() {
     println!(\"{}\", name == \"Alice\");
 }
 ";
-    // Only the crate's `allow` header, before the first blank line, may
-    // differ from the spec.
-    let (header, body) = main
-        .split_once("\n\n")
-        .expect("main.rs should have a header then a blank line");
-    assert!(header.starts_with("#![allow("), "{main}");
-    assert_eq!(body, spec_body);
+    // Every generated item now carries its own attribute line (spec 2.3)
+    // instead of one crate-wide header; strip those out to compare
+    // against the spec's plain body.
+    assert_eq!(without_allow_lines(main), spec_body);
     insta::assert_snapshot!("strings_main_rs", main);
 }
 
@@ -193,9 +242,38 @@ fn todo_crate_has_two_files_and_a_mod_line() {
     let krate = generate_path("examples/todo/main.vr");
     assert_eq!(paths(&krate), ["src/main.rs", "src/task.rs"]);
     let main = file(&krate, "src/main.rs");
-    assert!(main.contains("\nmod task;\n"), "{main}");
+    assert!(main.starts_with("mod task;\n"), "{main}");
     insta::assert_snapshot!("todo_main_rs", main);
     insta::assert_snapshot!("todo_task_rs", file(&krate, "src/task.rs"));
+}
+
+/// A three-level tree (spec 3.1): `shop/mod.vr` declares `pub mod cart`
+/// and a private `.rs` module; `cart.vr` declares `pub mod item`. Every
+/// generated file lands at its mirrored path, no `mod` line carries the
+/// allow attribute (it would reach the `.rs` modules below), and
+/// cross-module references are full `crate::` paths.
+#[test]
+fn nested_tree_mirrors_the_modules() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/tree/main.vr");
+    assert_eq!(
+        paths(&krate),
+        [
+            "src/main.rs",
+            "src/shop/mod.rs",
+            "src/shop/cart.rs",
+            "src/shop/cart/item.rs"
+        ]
+    );
+    assert_eq!(copied_paths(&krate), ["src/shop/util.rs"]);
+    let shop = file(&krate, "src/shop/mod.rs");
+    assert!(shop.starts_with("pub mod cart;\nmod util;\n"), "{shop}");
+    insta::assert_snapshot!("tree_main_rs", file(&krate, "src/main.rs"));
+    insta::assert_snapshot!("tree_shop_mod_rs", shop);
+    insta::assert_snapshot!("tree_shop_cart_rs", file(&krate, "src/shop/cart.rs"));
+    insta::assert_snapshot!(
+        "tree_shop_cart_item_rs",
+        file(&krate, "src/shop/cart/item.rs")
+    );
 }
 
 // --- Spec 4.3 table rows ----------------------------------------------------
@@ -322,15 +400,18 @@ fn imported_mut_reference_parameter_gets_a_mut_borrow() {
 
 #[test]
 fn pub_items_stay_pub_and_others_are_private() {
+    // A field's own `pub` (spec 3.4), not its struct's, decides whether
+    // it is emitted `pub`: `Open` is a `pub` struct with one `pub` field
+    // and one private field, and both keep their own flag.
     let main = main_rs(
-        "pub struct Open {\n    a: i32,\n}\n\nstruct Closed {\n    b: i32,\n}\n\npub fn open() {}\n\nfn closed() {}\n\nfn main() {}\n",
+        "pub struct Open {\n    a: i32,\n    pub b: i32,\n}\n\nstruct Closed {\n    c: i32,\n}\n\npub fn open() {}\n\nfn closed() {}\n\nfn main() {}\n",
     );
     assert!(
-        main.contains("\npub struct Open {\n    pub a: i32,\n}\n"),
+        main.contains("\npub struct Open {\n    a: i32,\n    pub b: i32,\n}\n"),
         "{main}"
     );
     assert!(
-        main.contains("\nstruct Closed {\n    b: i32,\n}\n"),
+        main.contains("\nstruct Closed {\n    c: i32,\n}\n"),
         "{main}"
     );
     assert!(main.contains("\npub fn open() {\n}\n"), "{main}");
@@ -374,6 +455,34 @@ fn cross_module_struct_and_function_paths() {
     let krate = generate_path("crates/varyk/tests/fixtures/codegen/cross_module/main.vr");
     insta::assert_snapshot!("cross_module_main_rs", file(&krate, "src/main.rs"));
     insta::assert_snapshot!("cross_module_shapes_rs", file(&krate, "src/shapes.rs"));
+}
+
+/// The four `use` forms (spec 3.3) each emit as a canonical `crate::`
+/// path, with `ALLOW_ITEM`: a type reached with the `crate::` keyword, a
+/// module alias, a `.rs` function reached with `crate::`, and an aliased
+/// type (`as`).
+#[test]
+fn use_forms_emit_canonical_crate_paths() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/use_forms/main.vr");
+    insta::assert_snapshot!("use_forms_main_rs", file(&krate, "src/main.rs"));
+}
+
+/// Two `use` declarations of one module sharing a local name in different
+/// namespaces (spec 2.1: `use crate::a::Foo;` a struct, `use
+/// crate::b::Foo;` a function) must each emit their own canonical path,
+/// not the same one twice (which rustc would reject, E0252).
+#[test]
+fn use_declarations_sharing_a_local_name_across_namespaces_emit_their_own_paths() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/use_namespaces/main.vr");
+    let main_rs = file(&krate, "src/main.rs");
+    assert!(
+        main_rs.contains("use crate::a::Foo;"),
+        "missing the struct's own line:\n{main_rs}"
+    );
+    assert!(
+        main_rs.contains("use crate::b::Foo;"),
+        "missing the function's own line:\n{main_rs}"
+    );
 }
 
 #[test]
@@ -472,7 +581,10 @@ fn values_and_constructors() {
         "{main}"
     );
     // A type hole filled by the `let`'s written type keeps it in Rust.
-    assert!(main.contains("let empty: Vec<i32> = vec![];"), "{main}");
+    assert!(
+        main.contains("let empty: Vec<i32> = ::std::vec![];"),
+        "{main}"
+    );
     assert!(main.contains("let maybe: Option<i32> = None;"), "{main}");
     insta::assert_snapshot!("values_main_rs", main);
 }
@@ -487,8 +599,11 @@ fn methods_associated_functions_the_built_in_table_and_indexing() {
         "{main}"
     );
     assert!(main.contains("Task::new(\"write\")"), "{main}");
-    assert!(main.contains("tasks[0usize].complete();"), "{main}");
-    assert!(main.contains("tasks[i].is_done()"), "{main}");
+    assert!(
+        main.contains("Task::complete(&mut tasks[0usize]);"),
+        "{main}"
+    );
+    assert!(main.contains("Task::is_done(&tasks[i])"), "{main}");
     assert!(main.contains("let first = &tasks[0usize];"), "{main}");
     // `clone` on a `&str` is spelled `.to_string()` (spec 3.5).
     assert!(main.contains("lit.to_string()"), "{main}");

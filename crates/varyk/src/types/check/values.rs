@@ -4,13 +4,16 @@
 //! `vec![..]`, and the type-hole rule for a value whose type comes from
 //! where it goes.
 
-use varyk_syntax::{Expr, Ident, Span};
+use varyk_syntax::{Expr, Ident, Path, Span};
 
-use super::{FnChecker, is_builtin_variant};
+use super::{FnChecker, is_builtin_variant, opaque_variant, unsupported_rust_signature};
 use crate::builtins::{self, Owner};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirExpr, HirExprKind, VariantRef};
-use crate::resolve::{Callee, EnumId, LookupError, UserType, not_visible};
+use crate::resolve::{
+    Callee, EnumId, LookupError, UserType, display_path, no_parent, not_visible, path_text,
+    split_last,
+};
 use crate::types::Ty;
 
 /// What the leading segments of a path `T::name` name.
@@ -27,21 +30,38 @@ impl FnChecker<'_> {
     /// call).
     pub(super) fn path_value(
         &mut self,
-        module: Option<&Ident>,
-        type_: Option<&Ident>,
+        path: Option<&Path>,
         name: &Ident,
         expected: Option<Ty>,
         span: Span,
     ) -> Option<HirExpr> {
-        if let Some(owner) = self.path_owner(module, type_, span) {
-            let (owner, path) = owner?;
-            return self.type_member(owner, &path, name, None, expected, span, span);
+        if let Some(owner) = self.path_owner(path, span) {
+            let (owner, owner_path) = owner?;
+            return self.type_member(owner, &owner_path, name, None, expected, span, span);
         }
-        if let Some(module) = module {
-            let message = format!("cannot find value `{}::{}`", module.name, name.name);
+        // `path_owner` returned `None`: the path, if any, is a module
+        // path, and a module holds no values Varyk can name (spec 2.10).
+        if let Some(path) = path {
+            if let Err(LookupError::NoParent { span }) = self.symbols.module_at(self.module, path) {
+                self.diagnostics.push(no_parent(span));
+                return None;
+            }
+            let full = display_path(path, &name.name);
+            // `m::U` for a `.rs` unit struct Varyk did not import (M3
+            // spec 4.1): V0101 saying why.
+            if let Some(diagnostic) =
+                self.symbols
+                    .skipped_item(self.module, Some(path), &name.name, &full, span)
+            {
+                self.diagnostics.push(diagnostic);
+                return None;
+            }
+            let message = format!("cannot find value `{full}`");
             let mut diagnostic = Diagnostic::new(codes::V0100, span, message);
-            if let Some(note) = self.symbols.did_you_mean(self.module, &module.name) {
-                diagnostic = diagnostic.with_note(note);
+            if let Some(last) = path.segments.last() {
+                if let Some(note) = self.symbols.did_you_mean(self.module, &last.name) {
+                    diagnostic = diagnostic.with_note(note);
+                }
             }
             self.diagnostics.push(diagnostic);
             return None;
@@ -57,39 +77,61 @@ impl FnChecker<'_> {
         })
     }
 
-    /// For a path `T::name` or `m::T::name` (at `span`) whose leading
-    /// segments name a type (`Vec` included): that type, with its path as
-    /// written. `None` when they name no type of this module (so `m::f` is
-    /// a module path); `Some(None)` once a diagnostic is reported for an
-    /// unknown or hidden type.
+    /// For a path `T::name`, `m::T::name`, or `crate::m::T::name` (at
+    /// `span`) whose segments end at a type (`Vec` included): that type,
+    /// with its path as written. `None` when there is no path, or it ends
+    /// at a module or at a module path that does not resolve (the caller
+    /// then looks the name up as a function of that module, which reports
+    /// the bad path), or it is a single segment naming no type of this
+    /// module (taken for a module name, spec 2.10); `Some(None)` once a
+    /// diagnostic is reported for an unknown or hidden type.
     pub(super) fn path_owner(
         &mut self,
-        module: Option<&Ident>,
-        type_: Option<&Ident>,
+        path: Option<&Path>,
         span: Span,
     ) -> Option<Option<(PathOwner, String)>> {
-        let (found, path, type_span) = match (module, type_) {
-            (Some(module), Some(type_)) => (
-                self.symbols
-                    .lookup_type(self.module, Some(&module.name), &type_.name),
-                format!("{}::{}", module.name, type_.name),
-                Span::new(span.file, module.span.start, type_.span.end),
-            ),
-            (Some(type_), None) if type_.name == "Vec" => {
-                return Some(Some((PathOwner::Vec, "Vec".to_string())));
-            }
-            // A type of this module first, then a module (spec 2.10).
-            (Some(type_), None) => match self.symbols.lookup_type(self.module, None, &type_.name) {
-                Ok(found) => (Ok(found), type_.name.clone(), type_.span),
+        let path = path?;
+        let (prefix, last) = split_last(path)?;
+        if prefix.is_none() && last.name == "Vec" {
+            return Some(Some((PathOwner::Vec, "Vec".to_string())));
+        }
+        // A module path when its prefix resolves and its last segment is
+        // a module there (modules and types share one namespace, so it
+        // cannot also be a type), or when its prefix does not resolve.
+        let module = match &prefix {
+            None => self.module,
+            Some(prefix) => match self.symbols.module_at(self.module, prefix) {
+                Ok(module) => module,
                 Err(_) => return None,
             },
-            _ => return None,
         };
-        match found {
-            Ok(owner) => Some(Some((PathOwner::User(owner), path))),
+        if self.symbols.child(module, &last.name).is_some() {
+            return None;
+        }
+        let owner_path = path_text(path);
+        match self
+            .symbols
+            .lookup_type(self.module, prefix.as_ref(), &last.name)
+        {
+            Ok(found) => Some(Some((PathOwner::User(found), owner_path))),
+            Err(LookupError::Unknown) if prefix.is_none() => None,
             Err(error) => {
-                let hint = type_.map(|t| t.name.as_str());
-                self.lookup_error(error, "type", &path, type_span, hint);
+                let type_span = Span::new(span.file, path.span.start, last.span.end);
+                // `m::S::new()` for a `.rs` struct Varyk did not import (M3
+                // spec 4.1): V0101 saying why.
+                let skipped = self.symbols.skipped_item(
+                    self.module,
+                    prefix.as_ref(),
+                    &last.name,
+                    &owner_path,
+                    type_span,
+                );
+                match skipped {
+                    Some(diagnostic) if error == LookupError::Unknown => {
+                        self.diagnostics.push(diagnostic);
+                    }
+                    _ => self.lookup_error(error, "type", &owner_path, type_span, Some(&last.name)),
+                }
                 Some(None)
             }
         }
@@ -119,10 +161,14 @@ impl FnChecker<'_> {
             PathOwner::User(user) => user,
         };
         if let UserType::Enum(id) = user {
-            if self.symbols.enums[id.0 as usize]
-                .variant(&name.name)
-                .is_some()
-            {
+            let def = &self.symbols.enums[id.0 as usize];
+            if def.variant(&name.name).is_some() {
+                if let Some(reason) = def.opaque.clone() {
+                    let full = format!("{path}::{}", name.name);
+                    self.diagnostics
+                        .push(opaque_variant(&full, &def.name, &reason, path_span));
+                    return None;
+                }
                 return self.variant(id, path, name, args, span);
             }
         }
@@ -134,6 +180,16 @@ impl FnChecker<'_> {
                     .push(not_visible("function", &full, path_span, decl, keyword));
                 return None;
             }
+            Err(LookupError::PrivateModule { module }) => {
+                let diagnostic = self
+                    .symbols
+                    .private_module(module, "function", &full, path_span);
+                self.diagnostics.push(diagnostic);
+                return None;
+            }
+            Err(LookupError::NoParent { .. }) => {
+                unreachable!("a member lookup follows no path")
+            }
             Err(LookupError::Unknown) => {
                 let message = match user {
                     UserType::Enum(_) => {
@@ -143,13 +199,33 @@ impl FnChecker<'_> {
                         format!("type `{path}` has no function `{}`", name.name)
                     }
                 };
-                self.diagnostics
-                    .push(Diagnostic::new(codes::V0100, path_span, message));
+                let mut diagnostic = Diagnostic::new(codes::V0100, path_span, message);
+                if let Some(note) = self.symbols.skipped_member_note(user, &name.name) {
+                    diagnostic = diagnostic.with_note(note);
+                }
+                self.diagnostics.push(diagnostic);
                 return None;
             }
         };
-        let sig = &self.symbols.fns[id.0 as usize];
-        let message = if sig.self_mode.is_some() {
+        let (self_mode, params, ret) = match id {
+            Callee::Varyk(fn_id) => {
+                let sig = &self.symbols.fns[fn_id.0 as usize];
+                let params: Vec<Ty> = sig.params.iter().map(|p| p.1.clone()).collect();
+                (sig.self_mode, params, sig.ret.clone())
+            }
+            Callee::Imported(imported) => {
+                let sig = &self.symbols.imported[imported.0 as usize];
+                if !sig.callable || !self.symbols.usable_from(sig.within, self.module) {
+                    self.diagnostics
+                        .push(unsupported_rust_signature(&full, sig, path_span));
+                    return None;
+                }
+                let params: Vec<Ty> = sig.params.iter().map(|p| p.0.clone()).collect();
+                (sig.self_mode, params, sig.ret.clone())
+            }
+            Callee::Builtin(_) => unreachable!("a type's members are never built-ins"),
+        };
+        let message = if self_mode.is_some() {
             format!(
                 "`{full}` is a method, so it is called on a value of its type, as in \
                  `x.{}()`",
@@ -158,14 +234,9 @@ impl FnChecker<'_> {
         } else if args.is_none() {
             format!("`{full}` is a function, not a value; call it, as in `{full}(..)`")
         } else {
-            let params: Vec<Ty> = sig.params.iter().map(|p| p.1.clone()).collect();
-            let ret = sig.ret.clone();
             let args = self.arguments(&full, &params, args.unwrap_or_default(), span)?;
             return Some(HirExpr {
-                kind: HirExprKind::Call {
-                    callee: Callee::Varyk(id),
-                    args,
-                },
+                kind: HirExprKind::Call { callee: id, args },
                 ty: ret,
                 span,
             });

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0111]: `use` cannot name a variant; write `use shapes::Shape;` and then `Shape::Circle`
+ --> crates/varyk/tests/fixtures/errors/v0111_use_variant_in_module/main.vr:3:13
+  |
+3 | use shapes::Shape::Circle;
+  |             ^^^^^^^^^^^^^ `use` cannot name a variant; write `use shapes::Shape;` and then `Shape::Circle`

@@ -1,0 +1,8 @@
+mod hidden;
+pub mod api;
+
+pub fn total() -> i32 {
+    let h = api::make();
+    let b = api::boxed();
+    h.x + b.h.x
+}

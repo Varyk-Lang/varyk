@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0104]: module `shop` is ambiguous: both `shop.vr` and `shop/mod.vr` exist next to the entry file
+ --> crates/varyk/tests/fixtures/errors/v0104_mod_vr_twin/main.vr:1:1
+  |
+1 | mod shop;
+  | ^^^^^^^^^ module `shop` is ambiguous: both `shop.vr` and `shop/mod.vr` exist next to the entry file

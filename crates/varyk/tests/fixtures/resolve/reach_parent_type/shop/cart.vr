@@ -1,0 +1,3 @@
+pub fn make() -> Vec<super::Base> {
+    vec![super::Base { n: 1 }]
+}

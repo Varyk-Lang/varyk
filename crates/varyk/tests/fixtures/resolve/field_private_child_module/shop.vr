@@ -1,0 +1,13 @@
+mod cart;
+
+struct Cart {
+    n: i32,
+}
+
+fn mk() -> Cart {
+    Cart { n: 1 }
+}
+
+pub fn total() -> i32 {
+    cart::read(mk())
+}

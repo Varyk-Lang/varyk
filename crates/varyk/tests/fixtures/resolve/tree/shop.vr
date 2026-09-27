@@ -1,0 +1,18 @@
+pub mod cart;
+
+pub struct Order {
+    pub n: i32,
+}
+
+pub enum Kind {
+    Word,
+    Number(i32),
+}
+
+pub fn start() -> i32 {
+    1
+}
+
+pub fn first() -> i32 {
+    self::cart::Cart::new().total
+}

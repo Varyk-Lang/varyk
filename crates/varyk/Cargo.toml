@@ -7,9 +7,9 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "Varyk: an experimental language with Rust-like safety and Go-like simplicity that compiles to Rust"
+description = "An experimental programming language for backend services, with Rust-like safety and Go-like simplicity, that compiles to Rust"
 readme = "../../README.md"
-keywords = ["varyk", "language", "compiler", "rust"]
+keywords = ["language", "compiler", "rust", "backend", "transpiler"]
 categories = ["compilers", "command-line-utilities"]
 
 [[bin]]
@@ -20,9 +20,10 @@ path = "src/main.rs"
 annotate-snippets = "0.12.16"
 clap = { version = "4.6.7", features = ["derive"] }
 quote = "1.0.47"
-proc-macro2 = "1.0"
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
 serde_json = "1.0.151"
-syn = { version = "3.0.6", features = ["full"] }
+syn = { version = "3.0.6", features = ["full", "visit"] }
+toml = "1"
 varyk-syntax = { path = "../varyk-syntax", version = "0.0.2" }
 
 [dev-dependencies]

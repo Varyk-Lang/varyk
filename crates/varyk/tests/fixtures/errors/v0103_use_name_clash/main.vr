@@ -1,0 +1,9 @@
+mod shop;
+
+struct Cart {
+    total: i32,
+}
+
+use crate::shop::Cart;
+
+fn main() {}

@@ -28,6 +28,9 @@ fn keyword_kind(word: &str) -> Option<TokenKind> {
         "for" => TokenKind::For,
         "in" => TokenKind::In,
         "self" => TokenKind::SelfKw,
+        "crate" => TokenKind::CrateKw,
+        "super" => TokenKind::SuperKw,
+        "use" => TokenKind::UseKw,
         "true" => TokenKind::BoolLiteral(true),
         "false" => TokenKind::BoolLiteral(false),
         _ => return None,
@@ -37,10 +40,9 @@ fn keyword_kind(word: &str) -> Option<TokenKind> {
 /// Every other Rust keyword and reserved word, including the 2024-edition
 /// ones.
 const RESERVED_KEYWORDS: &[&str] = &[
-    "as", "async", "await", "const", "crate", "dyn", "extern", "loop", "move", "ref", "Self",
-    "static", "super", "trait", "type", "unsafe", "use", "where", "abstract", "become", "box",
-    "do", "final", "gen", "macro", "override", "priv", "try", "typeof", "unsized", "virtual",
-    "yield",
+    "as", "async", "await", "const", "dyn", "extern", "loop", "move", "ref", "Self", "static",
+    "trait", "type", "unsafe", "where", "abstract", "become", "box", "do", "final", "gen", "macro",
+    "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
 /// Lexes `file` into tokens and any syntax errors found along the way.
@@ -455,6 +457,9 @@ mod tests {
             ("for", TokenKind::For),
             ("in", TokenKind::In),
             ("self", TokenKind::SelfKw),
+            ("crate", TokenKind::CrateKw),
+            ("super", TokenKind::SuperKw),
+            ("use", TokenKind::UseKw),
             ("true", TokenKind::BoolLiteral(true)),
             ("false", TokenKind::BoolLiteral(false)),
         ];

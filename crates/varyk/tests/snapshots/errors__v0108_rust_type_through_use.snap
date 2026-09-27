@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: unsupported Rust signature: `ext::make` cannot be called from Varyk
+ --> crates/varyk/tests/fixtures/errors/v0108_rust_type_through_use/main.vr:5:16
+  |
+5 |     let item = ext::make();
+  |                ^^^^^^^^^^^ unsupported Rust signature: `ext::make` cannot be called from Varyk
+  |
+  = note: the Rust signature is `fn make() -> Item`
+  = note: `Item` is brought in by a `use` line in the Rust file, which Varyk does not follow; write the full path, as in `crate::module::Item`

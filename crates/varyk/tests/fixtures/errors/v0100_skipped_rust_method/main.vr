@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    let a = ext::A::new();
+    println!("{}", a.label());
+}

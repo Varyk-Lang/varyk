@@ -1,0 +1,12 @@
+mod shop;
+
+fn main() {
+    let item = crate::shop::cart::item::Item { price: 3 };
+    let mut cart = shop::cart::Cart::new();
+    cart.add(item);
+    println!("{}", cart.total);
+    match shop::cart::size(cart) {
+        shop::Size::Small => println!("small"),
+        crate::shop::Size::Large(n) => println!("large {}", n),
+    }
+}

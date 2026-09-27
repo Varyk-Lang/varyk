@@ -1,0 +1,15 @@
+fn make() -> Option<string> {
+    Some("a")
+}
+
+fn change(mut s: string) {
+    s = "b";
+    println!("{}", s);
+}
+
+fn main() {
+    match make() {
+        Some(s) => change(s),
+        None => {}
+    }
+}

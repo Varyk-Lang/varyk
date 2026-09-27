@@ -28,7 +28,7 @@ use varyk_syntax::Span;
 
 use super::{
     Assigned, BORROWED_NOTE, Context, GONE_NOTE, Refers, clone_fix_it, dangling, gone_message,
-    owner_text, place_info, push_unique, what_to_do,
+    owner_text, place_info, place_root, push_unique, what_to_do,
 };
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
@@ -47,10 +47,12 @@ pub(super) fn infer(
     reported: &[bool],
     refers: &Refers,
     assigned: &Assigned,
+    dropped: &[Option<String>],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut flows = Flows {
         cx,
+        dropped,
         refers,
         assigned,
         locals: &function.locals,
@@ -148,9 +150,15 @@ pub(super) fn infer(
         });
     }
 
-    for (local, span, message) in gone {
+    for (local, span, message, advice) in gone {
         if !reported[local.0 as usize] {
-            diagnostics.push(Diagnostic::new(codes::V0304, span, message).with_note(GONE_NOTE));
+            let mut diagnostic = Diagnostic::new(codes::V0304, span, message);
+            // A name bound inside a temporary with a destructor: say why,
+            // and copy it out with `.clone()`.
+            if let Some(advice) = advice {
+                diagnostic = clone_fix_it(diagnostic.with_note(advice), span, &Ty::String);
+            }
+            diagnostics.push(diagnostic.with_note(GONE_NOTE));
         }
     }
     // A `String` copied in is moved, not borrowed; a `String` assigned a
@@ -212,6 +220,9 @@ struct Mixed {
 /// The string value flows of one function.
 struct Flows<'a> {
     cx: &'a Context<'a>,
+    /// Per local: why a name bound inside a temporary with a destructor
+    /// cannot be kept (see `places`).
+    dropped: &'a [Option<String>],
     refers: &'a Refers,
     assigned: &'a Assigned,
     locals: &'a [LocalInfo],
@@ -225,7 +236,7 @@ struct Flows<'a> {
     /// A borrowed place assigned to a free `let` that is gone after the
     /// assignment (a field of a temporary, or of a local declared inside
     /// the assigned value), with its message: always an error.
-    gone: Vec<(LocalId, Span, String)>,
+    gone: Vec<(LocalId, Span, String, Option<String>)>,
     /// A free `let` (the first) copied into another free `let` (the
     /// second) that outlives what its text may refer to, with its span and
     /// message: an error unless the first is an owned `String`.
@@ -513,7 +524,9 @@ impl Flows<'_> {
                     let name = &self.locals[local.0 as usize].name;
                     let consequence = format!("it cannot be kept in `{name}`");
                     let message = gone_message(self.cx, self.locals, leaf, value, &consequence);
-                    self.gone.push((local, leaf.span, message));
+                    let advice =
+                        place_root(leaf).and_then(|root| self.dropped[root.0 as usize].clone());
+                    self.gone.push((local, leaf.span, message, advice));
                 } else if place.borrowed {
                     self.borrowed_into.push((local, leaf.span, place.origin));
                 }

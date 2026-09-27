@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0403]: this package cannot be called `../..`: a name can only use letters, digits, `-`, and `_`
+ --> crates/varyk/tests/fixtures/errors/v0403_invalid_name/Cargo.toml:2:8
+  |
+2 | name = "../.."
+  |        ^^^^^^^ this package cannot be called `../..`: a name can only use letters, digits, `-`, and `_`
+  |
+  = note: the name is also the program's name and its build directory's, so it follows the rules of Cargo, Rust's build tool

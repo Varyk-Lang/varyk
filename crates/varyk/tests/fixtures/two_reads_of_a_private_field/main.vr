@@ -1,0 +1,7 @@
+mod shop;
+
+fn main() {
+    let c = shop::make();
+    println!("{}", c.n);
+    println!("{}", c.n);
+}

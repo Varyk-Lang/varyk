@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0104]: `crates/varyk/tests/fixtures/errors/v0104_rust_crate_not_a_dependency/src/js.rs` uses the crate `serde`, which is not in `[dependencies]`; add it under `[dependencies]` in Cargo.toml
+ --> crates/varyk/tests/fixtures/errors/v0104_rust_crate_not_a_dependency/src/js.rs:1:5
+  |
+1 | use serde::Serialize;
+  |     ^^^^^ `crates/varyk/tests/fixtures/errors/v0104_rust_crate_not_a_dependency/src/js.rs` uses the crate `serde`, which is not in `[dependencies]`; add it under `[dependencies]` in Cargo.toml

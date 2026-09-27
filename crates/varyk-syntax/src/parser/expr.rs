@@ -4,7 +4,8 @@
 
 use super::Parser;
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, Ident, MatchArm, Pattern, SubPattern, UnaryOp, VariantPattern,
+    BinaryOp, Block, Expr, ExprKind, Ident, MatchArm, Path, PathStart, Pattern, SubPattern,
+    UnaryOp, VariantPattern,
 };
 use crate::error::{V0001, V0002};
 use crate::span::Span;
@@ -38,6 +39,16 @@ fn binary_op(kind: &TokenKind) -> Option<(BinaryOp, u8, u8)> {
 /// comparison chained onto the first, which `a < b < c` is and Rust (and
 /// Varyk) does not allow.
 const COMPARISON_BP: u8 = 5;
+
+/// A dotted chain as written: its keyword prefix, its plain segments
+/// (at least one), the span of its first token (the keyword, or the first
+/// segment), and the span of the whole chain.
+struct DottedPath {
+    leading: PathStart,
+    segments: Vec<Ident>,
+    start: Span,
+    span: Span,
+}
 
 impl<'a> Parser<'a> {
     /// Parses one expression, stopping at the first `V0002`. The error
@@ -349,6 +360,12 @@ impl<'a> Parser<'a> {
 
             Some(TokenKind::Identifier(_)) => self.parse_path_or_struct_lit(),
 
+            Some(TokenKind::CrateKw | TokenKind::SuperKw) => self.parse_path_or_struct_lit(),
+
+            Some(TokenKind::SelfKw) if self.peek_at(1) == Some(&TokenKind::ColonColon) => {
+                self.parse_path_or_struct_lit()
+            }
+
             Some(TokenKind::SelfKw) => self.parse_self(),
 
             Some(TokenKind::If) => self.parse_if(),
@@ -567,30 +584,12 @@ impl<'a> Parser<'a> {
     /// `self` in expression position (spec 2.5): a `Path` whose name is
     /// `self`, the same node a plain variable produces, so `self.count` and
     /// the rest of a method body parse like any other place expression.
-    /// `self::x` is not a path Varyk has (`self` is never a module), so it
-    /// is `V0001` rather than a `Path` with a module segment.
+    /// `self::x` never reaches here: it starts a path (spec 3.1).
     fn parse_self(&mut self) -> Result<Expr, ()> {
         let self_token = self.bump().expect("peek confirmed `self`");
-        if self.peek() == Some(&TokenKind::ColonColon) {
-            self.bump();
-            let end_span = match self.peek() {
-                Some(TokenKind::Identifier(_)) => {
-                    self.bump().expect("peek just confirmed a token").span
-                }
-                _ => self.current_span(),
-            };
-            let span = self.span_from(self_token.span, end_span);
-            self.push_error(
-                V0001,
-                span,
-                "`self` is a keyword and cannot be used as a module in a path",
-            );
-            return Err(());
-        }
         Ok(Expr {
             kind: ExprKind::Path {
-                module: None,
-                type_: None,
+                path: None,
                 name: Ident {
                     name: "self".to_string(),
                     span: self_token.span,
@@ -600,82 +599,78 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parses `name(::name)*`: at least one segment, chased through every
-    /// `::` found. Shared by expression paths (`parse_path_or_struct_lit`)
-    /// and variant patterns (`parse_pattern`), which chase the same
-    /// `name`, `module::name`, `module::Type::name` shape (spec 2.5,
-    /// 2.10).
-    fn parse_dotted_path(&mut self, what: &str) -> Result<(Vec<Ident>, Span), ()> {
+    /// Parses an optional `crate::`, `self::`, or `super::` prefix and then
+    /// `name(::name)*`: at least one segment, chased through every `::`
+    /// found, growing to any depth as nested modules do (spec 3.1). Shared
+    /// by expression paths (`parse_path_or_struct_lit`) and variant
+    /// patterns (`parse_pattern`), which chase the same `name`,
+    /// `module::name`, `module::Type::name`, ... shape (spec 2.5, 2.10).
+    fn parse_dotted_path(&mut self, what: &str) -> Result<DottedPath, ()> {
+        let start = self.current_span();
+        let leading = self.take_path_start();
         let mut segments = vec![self.expect_identifier(what)?];
         while self.peek() == Some(&TokenKind::ColonColon) {
             self.bump();
             segments.push(self.expect_identifier("a name after `::`")?);
         }
-        let span = self.span_from(
-            segments[0].span,
-            segments.last().expect("at least one segment").span,
-        );
-        Ok((segments, span))
+        let span = self.span_from(start, segments.last().expect("at least one segment").span);
+        Ok(DottedPath {
+            leading,
+            segments,
+            start,
+            span,
+        })
     }
 
-    /// A path (`name`, `module::name`, `module::Type::name`, or,
-    /// `V0001`-reported, a longer chain), optionally followed by a struct
-    /// literal when the parser is not in condition position.
+    /// Splits a dotted chain into a `Path` covering its prefix and every
+    /// segment but the last (`None` for one plain segment), and that last
+    /// segment as the name actually read, called, or matched (spec 2.5,
+    /// 2.10, 3.1). Shared by expression paths, struct literals, and variant
+    /// patterns, which all read a plain name (no `Path`) the same way and
+    /// differ only in what the final name means.
+    fn path_and_name(&self, dotted: DottedPath) -> (Option<Path>, Ident) {
+        let DottedPath {
+            leading,
+            mut segments,
+            start,
+            ..
+        } = dotted;
+        let name = segments.pop().expect("at least one segment");
+        let path = (leading != PathStart::None || !segments.is_empty()).then(|| {
+            let end = segments.last().map_or(start, |s| s.span);
+            Path {
+                leading,
+                segments,
+                span: self.span_from(start, end),
+            }
+        });
+        (path, name)
+    }
+
+    /// A path (`name`, `module::name`, `module::Type::name`, or a longer
+    /// chain reaching into nested modules, spec 3.1), optionally followed
+    /// by a struct literal when the parser is not in condition position.
     fn parse_path_or_struct_lit(&mut self) -> Result<Expr, ()> {
-        let (mut segments, path_span) = self.parse_dotted_path("a name")?;
+        let dotted = self.parse_dotted_path("a name")?;
+        let path_span = dotted.span;
 
         if self.peek() == Some(&TokenKind::LBrace) && !self.in_condition {
-            return self.parse_struct_lit(segments, path_span);
+            return self.parse_struct_lit(dotted);
         }
 
-        if segments.len() > 3 {
-            self.push_error(
-                V0001,
-                path_span,
-                "a path longer than three segments (`module::Type::name`) is not supported in Varyk",
-            );
-        }
-        let name = segments.pop().expect("at least one segment");
-        // A four-or-more-segment path (already `V0001`-reported above)
-        // still needs a `Path` built from something: the first two
-        // segments, dropping the rest, so later passes have something to
-        // work with.
-        let type_ = if segments.len() >= 2 {
-            Some(segments.remove(1))
-        } else {
-            None
-        };
-        let module = if !segments.is_empty() {
-            Some(segments.remove(0))
-        } else {
-            None
-        };
+        let (path, name) = self.path_and_name(dotted);
         Ok(Expr {
-            kind: ExprKind::Path {
-                module,
-                type_,
-                name,
-            },
+            kind: ExprKind::Path { path, name },
             span: path_span,
         })
     }
 
-    /// `Name { field: expr, ... }` or `module::Name { field: expr, ... }`
-    /// (spec 2.10), called right after `segments` has been parsed as a
-    /// dotted path and the next token is `{`. A struct literal supports at
-    /// most one module segment; a longer path is `V0001`, and the fields
-    /// still parse so the caller sees a complete AST either way, using the
-    /// segment closest to the name as the effective module.
-    fn parse_struct_lit(&mut self, mut segments: Vec<Ident>, path_span: Span) -> Result<Expr, ()> {
-        if segments.len() > 2 {
-            self.push_error(
-                V0001,
-                path_span,
-                "a struct literal is named with at most one module (`module::Name`)",
-            );
-        }
-        let name = segments.pop().expect("at least one segment");
-        let module = segments.pop();
+    /// `Name { field: expr, ... }` or `path::Name { field: expr, ... }`
+    /// (spec 2.10, 3.1), called right after `dotted` has been parsed and
+    /// the next token is `{`.
+    fn parse_struct_lit(&mut self, dotted: DottedPath) -> Result<Expr, ()> {
+        let path_span = dotted.span;
+        let (path, name) = self.path_and_name(dotted);
         self.bump(); // '{'
         let mut fields = Vec::new();
         if self.peek() != Some(&TokenKind::RBrace) {
@@ -696,11 +691,7 @@ impl<'a> Parser<'a> {
         let rbrace = self.expect(TokenKind::RBrace, "`}`")?;
         let span = self.span_from(path_span, rbrace.span);
         Ok(Expr {
-            kind: ExprKind::StructLit {
-                module,
-                name,
-                fields,
-            },
+            kind: ExprKind::StructLit { path, name, fields },
             span,
         })
     }
@@ -872,11 +863,7 @@ impl<'a> Parser<'a> {
         if self.peek() == Some(&TokenKind::Eq) {
             let span = self.current_span();
             let target = match &body.kind {
-                ExprKind::Path {
-                    module: None,
-                    type_: None,
-                    name,
-                } => name.name.as_str(),
+                ExprKind::Path { path: None, name } => name.name.as_str(),
                 _ => "...",
             };
             self.push_error(
@@ -899,55 +886,12 @@ impl<'a> Parser<'a> {
                 let token = self.bump().expect("peek just confirmed a token is present");
                 Ok(Pattern::Wildcard(token.span))
             }
-            Some(TokenKind::Identifier(_)) => {
-                let (mut segments, path_span) = self.parse_dotted_path("a pattern")?;
-                if segments.len() > 3 {
-                    self.push_error(
-                        V0001,
-                        path_span,
-                        "a variant pattern longer than three segments (`module::Type::Variant`) is not supported in Varyk",
-                    );
-                }
-                if self.peek() == Some(&TokenKind::LBrace) {
-                    let group_span = self.skip_brace_group();
-                    let span = self.span_from(path_span, group_span);
-                    self.push_error(
-                        V0001,
-                        span,
-                        "enum variants with named fields are not supported until milestone 4; \
-                         use a tuple variant instead",
-                    );
-                    return Err(());
-                }
-                let has_subpatterns = self.peek() == Some(&TokenKind::LParen);
-                if segments.len() == 1 && !has_subpatterns {
-                    return Ok(Pattern::Name(segments.pop().expect("one segment")));
-                }
-                let (subpatterns, sub_span) = if has_subpatterns {
-                    let (subpatterns, sub_span) = self.parse_subpatterns()?;
-                    (subpatterns, Some(sub_span))
-                } else {
-                    (Vec::new(), None)
-                };
-                let name = segments.pop().expect("at least one segment");
-                // Unlike `ExprKind::Path`, a pattern's single remaining
-                // segment is unambiguously the type (`Shape::Point`), not
-                // a module: patterns never call anything, so there is no
-                // bare-module case to weigh against it.
-                let type_ = segments.pop();
-                let module = segments.pop();
-                let span = match sub_span {
-                    Some(sub_span) => self.span_from(path_span, sub_span),
-                    None => path_span,
-                };
-                Ok(Pattern::Variant(VariantPattern {
-                    module,
-                    type_,
-                    name,
-                    subpatterns,
-                    span,
-                }))
+            Some(TokenKind::CrateKw | TokenKind::SelfKw | TokenKind::SuperKw)
+                if self.peek_at(1) == Some(&TokenKind::ColonColon) =>
+            {
+                self.parse_variant_pattern()
             }
+            Some(TokenKind::Identifier(_)) => self.parse_variant_pattern(),
             Some(TokenKind::DotDot) => {
                 let span = self.current_span();
                 self.bump();
@@ -983,6 +927,51 @@ impl<'a> Parser<'a> {
                 Err(())
             }
         }
+    }
+
+    /// A variant pattern, or a bare name when it is one plain segment
+    /// with no sub-patterns (spec 2.3): `Point`, `Some(p)`,
+    /// `geo::Shape::Point`, `crate::shop::Kind::Word`.
+    fn parse_variant_pattern(&mut self) -> Result<Pattern, ()> {
+        let dotted = self.parse_dotted_path("a pattern")?;
+        let path_span = dotted.span;
+        if self.peek() == Some(&TokenKind::LBrace) {
+            let group_span = self.skip_brace_group();
+            let span = self.span_from(path_span, group_span);
+            self.push_error(
+                V0001,
+                span,
+                "enum variants with named fields are not supported until milestone 4; \
+                 use a tuple variant instead",
+            );
+            return Err(());
+        }
+        let has_subpatterns = self.peek() == Some(&TokenKind::LParen);
+        if dotted.leading == PathStart::None && dotted.segments.len() == 1 && !has_subpatterns {
+            let mut segments = dotted.segments;
+            return Ok(Pattern::Name(segments.pop().expect("one segment")));
+        }
+        let (subpatterns, sub_span) = if has_subpatterns {
+            let (subpatterns, sub_span) = self.parse_subpatterns()?;
+            (subpatterns, Some(sub_span))
+        } else {
+            (Vec::new(), None)
+        };
+        // Unlike `ExprKind::Path`, a pattern's last remaining segment is
+        // unambiguously the type (`Shape::Point`), not a module: patterns
+        // never call anything, so there is no bare-module case to weigh
+        // against it.
+        let (path, name) = self.path_and_name(dotted);
+        let span = match sub_span {
+            Some(sub_span) => self.span_from(path_span, sub_span),
+            None => path_span,
+        };
+        Ok(Pattern::Variant(VariantPattern {
+            path,
+            name,
+            subpatterns,
+            span,
+        }))
     }
 
     /// `(sub, sub, ...)` right after a variant pattern's name, whose
@@ -1307,13 +1296,10 @@ mod tests {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
                 match &callee.kind {
-                    ExprKind::Path {
-                        module,
-                        type_,
-                        name,
-                    } => {
-                        assert_eq!(module.as_ref().unwrap().name, "greet");
-                        assert!(type_.is_none());
+                    ExprKind::Path { path, name } => {
+                        let path = path.as_ref().expect("a module segment");
+                        assert_eq!(path.segments.len(), 1);
+                        assert_eq!(path.segments[0].name, "greet");
                         assert_eq!(name.name, "hello");
                     }
                     other => panic!("expected a path callee, got {other:?}"),
@@ -1325,16 +1311,13 @@ mod tests {
     }
 
     #[test]
-    fn three_segment_path_fills_module_and_type() {
+    fn three_segment_path_fills_a_two_segment_path() {
         let expr = parse_ok("m::Counter::new");
         match &expr.kind {
-            ExprKind::Path {
-                module,
-                type_,
-                name,
-            } => {
-                assert_eq!(module.as_ref().unwrap().name, "m");
-                assert_eq!(type_.as_ref().unwrap().name, "Counter");
+            ExprKind::Path { path, name } => {
+                let path = path.as_ref().expect("two segments");
+                let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+                assert_eq!(names, vec!["m", "Counter"]);
                 assert_eq!(name.name, "new");
             }
             other => panic!("expected a path, got {other:?}"),
@@ -1342,9 +1325,35 @@ mod tests {
     }
 
     #[test]
-    fn four_segment_path_is_v0001() {
-        let (_expr, errors) = parse("a::b::c::d");
-        assert!(errors.iter().any(|e| e.code == V0001), "errors: {errors:?}");
+    fn deep_module_path_call_parses() {
+        // spec 3.1: paths grow with depth as modules nest.
+        let expr = parse_ok("shop::cart::Cart::new()");
+        match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { path, name } => {
+                    let path = path.as_ref().expect("three segments");
+                    let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+                    assert_eq!(names, vec!["shop", "cart", "Cart"]);
+                    assert_eq!(name.name, "new");
+                }
+                other => panic!("expected a path callee, got {other:?}"),
+            },
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deep_module_path_variant_parses() {
+        let expr = parse_ok("shop::kind::Kind::Word");
+        match &expr.kind {
+            ExprKind::Path { path, name } => {
+                let path = path.as_ref().expect("three segments");
+                let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+                assert_eq!(names, vec!["shop", "kind", "Kind"]);
+                assert_eq!(name.name, "Word");
+            }
+            other => panic!("expected a path, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1435,12 +1444,8 @@ mod tests {
     fn struct_literal_with_trailing_comma() {
         let expr = parse_ok("Point { x: 1, y: 2, }");
         match &expr.kind {
-            ExprKind::StructLit {
-                module,
-                name,
-                fields,
-            } => {
-                assert!(module.is_none());
+            ExprKind::StructLit { path, name, fields } => {
+                assert!(path.is_none());
                 assert_eq!(name.name, "Point");
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields[0].0.name, "x");
@@ -1535,8 +1540,11 @@ mod tests {
         assert_eq!(expr.span.start, 0);
         assert_eq!(expr.span.end, src.len() as u32);
         match &expr.kind {
-            ExprKind::StructLit { module, name, .. } => {
-                assert_eq!(module.as_ref().unwrap().name, "math");
+            ExprKind::StructLit { path, name, .. } => {
+                assert_eq!(
+                    prefix_and_segments(path.as_ref().unwrap()),
+                    ("", vec!["math"])
+                );
                 assert_eq!(name.name, "Point");
             }
             other => panic!("expected a struct literal, got {other:?}"),
@@ -1544,9 +1552,27 @@ mod tests {
     }
 
     #[test]
-    fn three_segment_struct_literal_is_v0001() {
-        let (_expr, errors) = parse("a::b::Point { }");
-        assert!(errors.iter().any(|e| e.code == V0001), "errors: {errors:?}");
+    fn deep_and_keyword_prefixed_struct_literals_parse() {
+        // spec 3.1: a struct literal's path grows like any other.
+        for (src, leading, segments) in [
+            ("shop::cart::Cart { n: 1 }", "", vec!["shop", "cart"]),
+            (
+                "crate::shop::cart::Cart { n: 1 }",
+                "crate",
+                vec!["shop", "cart"],
+            ),
+            ("super::Cart { n: 1 }", "super", vec![]),
+        ] {
+            let expr = parse_ok(src);
+            assert_eq!(expr.span.start, 0, "{src}");
+            assert_eq!(expr.span.end, src.len() as u32, "{src}");
+            let ExprKind::StructLit { path, name, .. } = &expr.kind else {
+                panic!("{src}: expected a struct literal, got {expr:?}");
+            };
+            let path = path.as_ref().expect("a module path");
+            assert_eq!(prefix_and_segments(path), (leading, segments), "{src}");
+            assert_eq!(name.name, "Cart", "{src}");
+        }
     }
 
     #[test]
@@ -1714,16 +1740,68 @@ mod tests {
         }
     }
 
+    /// The leading keyword and plain segments of an expression path, as
+    /// `("crate", ["shop", "Cart"])`.
+    fn prefix_and_segments(path: &Path) -> (&'static str, Vec<&str>) {
+        let leading = match path.leading {
+            PathStart::Crate => "crate",
+            PathStart::SelfMod => "self",
+            PathStart::Super => "super",
+            PathStart::None => "",
+        };
+        (
+            leading,
+            path.segments.iter().map(|s| s.name.as_str()).collect(),
+        )
+    }
+
     #[test]
-    fn self_colon_colon_x_is_v0001() {
-        let (expr, errors) = parse("self::x");
-        assert!(expr.is_err());
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("self")),
-            "errors: {errors:?}"
-        );
+    fn keyword_prefixed_call_paths_parse() {
+        // spec 3.1: `crate::`, `self::`, and `super::` start an
+        // expression path too, at any depth.
+        for (src, leading, segments, last) in [
+            (
+                "crate::shop::Cart::new()",
+                "crate",
+                vec!["shop", "Cart"],
+                "new",
+            ),
+            ("super::helper()", "super", vec![], "helper"),
+            (
+                "self::cart::Cart::new()",
+                "self",
+                vec!["cart", "Cart"],
+                "new",
+            ),
+        ] {
+            let expr = parse_ok(src);
+            let ExprKind::Call { callee, .. } = &expr.kind else {
+                panic!("{src}: expected a call, got {expr:?}");
+            };
+            assert_eq!(callee.span.start, 0, "{src}");
+            let ExprKind::Path { path, name } = &callee.kind else {
+                panic!("{src}: expected a path callee");
+            };
+            let path = path.as_ref().expect("a keyword makes a path");
+            assert_eq!(prefix_and_segments(path), (leading, segments), "{src}");
+            assert_eq!(name.name, last, "{src}");
+        }
+    }
+
+    #[test]
+    fn self_colon_colon_x_is_a_path() {
+        let expr = parse_ok("self::x");
+        let ExprKind::Path { path, name } = &expr.kind else {
+            panic!("expected a path, got {expr:?}");
+        };
+        let path = path.as_ref().expect("a keyword makes a path");
+        assert_eq!(prefix_and_segments(path), ("self", vec![]));
+        assert_eq!(name.name, "x");
+    }
+
+    #[test]
+    fn bare_self_is_still_a_value() {
+        assert_eq!(path_name(&parse_ok("self")), "self");
     }
 
     #[test]
@@ -1767,8 +1845,9 @@ mod tests {
                 assert_eq!(arms.len(), 2);
                 match &arms[0].pattern {
                     Pattern::Variant(variant) => {
-                        assert!(variant.module.is_none());
-                        assert_eq!(variant.type_.as_ref().unwrap().name, "Shape");
+                        let path = variant.path.as_ref().expect("one segment: the type");
+                        assert_eq!(path.segments.len(), 1);
+                        assert_eq!(path.segments[0].name, "Shape");
                         assert_eq!(variant.name.name, "Circle");
                         assert_eq!(variant.subpatterns.len(), 1);
                         match &variant.subpatterns[0] {
@@ -1798,8 +1877,7 @@ mod tests {
         match &expr.kind {
             ExprKind::Match { arms, .. } => match &arms[0].pattern {
                 Pattern::Variant(variant) => {
-                    assert!(variant.module.is_none());
-                    assert!(variant.type_.is_none());
+                    assert!(variant.path.is_none());
                     assert_eq!(variant.name.name, "Some");
                     assert!(matches!(variant.subpatterns[0], SubPattern::Wildcard(_)));
                 }
@@ -1815,13 +1893,35 @@ mod tests {
         match &expr.kind {
             ExprKind::Match { arms, .. } => match &arms[0].pattern {
                 Pattern::Variant(variant) => {
-                    assert_eq!(variant.module.as_ref().unwrap().name, "geo");
-                    assert_eq!(variant.type_.as_ref().unwrap().name, "Shape");
+                    let path = variant.path.as_ref().expect("two segments");
+                    let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
+                    assert_eq!(names, vec!["geo", "Shape"]);
                     assert_eq!(variant.name.name, "Point");
                 }
                 other => panic!("expected a variant pattern, got {other:?}"),
             },
             other => panic!("expected a match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn keyword_prefixed_variant_pattern_parses() {
+        let expr = parse_ok("match k { crate::shop::Kind::Word => 0, super::Kind::Other(n) => n }");
+        let ExprKind::Match { arms, .. } = &expr.kind else {
+            panic!("expected a match, got {expr:?}");
+        };
+        let expected = [
+            ("crate", vec!["shop", "Kind"], "Word", 1..1),
+            ("super", vec!["Kind"], "Other", 1..2),
+        ];
+        for (arm, (leading, segments, name, subs)) in arms.iter().zip(expected) {
+            let Pattern::Variant(variant) = &arm.pattern else {
+                panic!("expected a variant pattern, got {:?}", arm.pattern);
+            };
+            let path = variant.path.as_ref().expect("a module path");
+            assert_eq!(prefix_and_segments(path), (leading, segments));
+            assert_eq!(variant.name.name, name);
+            assert_eq!(variant.subpatterns.len(), subs.len());
         }
     }
 

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0111]: no module `shop` is declared in this file; a `use` path starts with `crate::`, `self::`, `super::`, or a module declared in this file
+ --> crates/varyk/tests/fixtures/errors/v0111_use_module_declared_elsewhere/tools.vr:1:5
+  |
+1 | use shop::price;
+  |     ^^^^ no module `shop` is declared in this file; a `use` path starts with `crate::`, `self::`, `super::`, or a module declared in this file
+  |
+  = note: `shop` is declared elsewhere in this package; write `use crate::shop::price;`

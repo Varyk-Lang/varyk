@@ -1,0 +1,16 @@
+mod matcher;
+
+fn tally(mut m: matcher::Matcher, word: string) {
+    if m.is_match(word) {
+        m.bump();
+    }
+}
+
+fn main() {
+    let mut m = matcher::Matcher::new("red|green");
+    tally(m, "red");
+    tally(m, "blue");
+    tally(m, "green");
+    println!("{} {}", m.hits, m.is_match("green"));
+    println!("{}", matcher::describe(m));
+}

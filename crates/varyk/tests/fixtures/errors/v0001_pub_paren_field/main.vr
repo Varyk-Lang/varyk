@@ -1,0 +1,5 @@
+struct User {
+    pub(crate) name: string,
+}
+
+fn main() {}

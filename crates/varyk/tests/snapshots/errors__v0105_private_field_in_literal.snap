@@ -1,0 +1,16 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0105]: `Cart { .. }` cannot be written here because `n` is private to module `shop`; add `pub` to the field or a `pub fn new`
+ --> crates/varyk/tests/fixtures/errors/v0105_private_field_in_literal/main.vr:4:26
+  |
+4 |     let c = shop::Cart { n: 1 };
+  |                          ^ `Cart { .. }` cannot be written here because `n` is private to module `shop`; add `pub` to the field or a `pub fn new`
+  |
+ ::: crates/varyk/tests/fixtures/errors/v0105_private_field_in_literal/shop.vr:2:5
+  |
+2 |     n: i32,
+  |     - declared here without `pub`
+  |
+help: insert `pub ` before `n`

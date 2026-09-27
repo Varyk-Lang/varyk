@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust enum `ext::Wrap`
+  --> crates/varyk/tests/fixtures/errors/v0101_generic_rust_enum_pattern/main.vr:10:9
+   |
+10 |         ext::Wrap::Value(v) => {}
+   |         ^^^^^^^^^ Varyk cannot use the Rust enum `ext::Wrap`
+   |
+   = note: the Rust enum `Wrap` is not imported because it has type or lifetime parameters; Varyk imports only enums without them, so wrap it in an enum that has none

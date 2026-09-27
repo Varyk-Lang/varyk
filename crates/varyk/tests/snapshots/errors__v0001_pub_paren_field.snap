@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: Varyk has only `pub`; `pub(crate)`, `pub(super)`, and `pub(in path)` are not supported
+ --> crates/varyk/tests/fixtures/errors/v0001_pub_paren_field/main.vr:2:5
+  |
+2 |     pub(crate) name: string,
+  |     ^^^^^^^^^^ Varyk has only `pub`; `pub(crate)`, `pub(super)`, and `pub(in path)` are not supported

@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    ext::f(1);
+    ext::t();
+}

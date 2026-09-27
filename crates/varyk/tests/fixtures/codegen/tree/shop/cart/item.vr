@@ -1,0 +1,7 @@
+pub struct Item {
+    pub price: i32,
+}
+
+pub fn cost(item: Item) -> i32 {
+    item.price + crate::shop::start() - 2
+}

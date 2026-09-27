@@ -11,30 +11,64 @@ pub struct Ident {
     pub span: Span,
 }
 
+/// Where a path starts (spec 3.1, 3.3): one of the three keyword prefixes,
+/// or nothing (a plain module name declared in this file, or no module
+/// segment at all). The parser records whichever prefix is written;
+/// resolving `Crate` and `Super` to an actual module, and rejecting
+/// `Super` in the crate root (V0111), is the compiler's resolver's job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathStart {
+    Crate,
+    SelfMod,
+    Super,
+    None,
+}
+
+/// A `::`-separated path (spec 3.1, 3.3): an optional keyword prefix
+/// (`crate`, `self`, `super`) followed by name segments. What the segments
+/// (and any name that follows them, for a type or expression path) resolve
+/// to -- a chain of modules, a type, a function, a variant -- is decided by
+/// where the path appears and, ultimately, the compiler's resolver, never
+/// the parser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Path {
+    pub leading: PathStart,
+    pub segments: Vec<Ident>,
+    pub span: Span,
+}
+
 /// A named type: `string`, `i32`, `User`, and so on are all just names,
-/// resolved later by the compiler's resolver. A type may carry an optional
-/// module segment (`m::User`, spec 2.10) and generic arguments (`Vec<i32>`,
-/// `Result<User, string>`, nested freely, spec 2.6); the parser only records
-/// them, and the resolver checks that the module, the name, and the argument
-/// count exist.
+/// resolved later by the compiler's resolver. A type may carry a module
+/// path (`m::User`, `shop::cart::Cart`, spec 2.10, 3.1) and generic
+/// arguments (`Vec<i32>`, `Result<User, string>`, nested freely, spec 2.6);
+/// the parser only records them, and the resolver checks that the path,
+/// the name, and the argument count exist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeExpr {
-    pub module: Option<Ident>,
+    pub path: Option<Path>,
     pub name: Ident,
     pub args: Vec<TypeExpr>,
     pub span: Span,
 }
 
 impl TypeExpr {
-    /// Renders the whole type back to source text: the module segment (if
-    /// any), the name, and any generic arguments, recursively. Used
-    /// wherever a diagnostic or fix-it needs to show the type as written,
-    /// rather than just its base name.
+    /// Renders the whole type back to source text: the path (if any), the
+    /// name, and any generic arguments, recursively. Used wherever a
+    /// diagnostic or fix-it needs to show the type as written, rather than
+    /// just its base name.
     pub fn display_name(&self) -> String {
         let mut out = String::new();
-        if let Some(module) = &self.module {
-            out.push_str(&module.name);
-            out.push_str("::");
+        if let Some(path) = &self.path {
+            match path.leading {
+                PathStart::Crate => out.push_str("crate::"),
+                PathStart::SelfMod => out.push_str("self::"),
+                PathStart::Super => out.push_str("super::"),
+                PathStart::None => {}
+            }
+            for segment in &path.segments {
+                out.push_str(&segment.name);
+                out.push_str("::");
+            }
         }
         out.push_str(&self.name.name);
         if !self.args.is_empty() {
@@ -68,6 +102,7 @@ pub enum Item {
     Enum(EnumDecl),
     Impl(ImplBlock),
     Mod(ModDecl),
+    Use(UseDecl),
 }
 
 /// Whether a function is a plain function, or a method with a `self`
@@ -107,8 +142,9 @@ pub struct Param {
     pub span: Span,
 }
 
-/// `struct Name { fields... }`, optionally `pub` (which makes every field
-/// public; field-level `pub` is milestone 2, spec 4.1).
+/// `struct Name { fields... }`, optionally `pub` (spec 4.1). Whether a
+/// field is visible follows the same rule as everything else (spec 3.2):
+/// see [`FieldDecl::is_pub`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDecl {
     pub name: Ident,
@@ -117,10 +153,15 @@ pub struct StructDecl {
     pub span: Span,
 }
 
+/// A struct field: `name: T`, optionally `pub` (spec 3.4). Visibility
+/// follows the same rule as everything else (section 3.2): a private
+/// field is visible in the declaring module and its descendants, which
+/// includes the struct's own methods.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldDecl {
     pub name: Ident,
     pub ty: TypeExpr,
+    pub is_pub: bool,
     pub span: Span,
 }
 
@@ -163,6 +204,16 @@ pub struct ImplBlock {
 pub struct ModDecl {
     pub name: Ident,
     pub is_pub: bool,
+    pub span: Span,
+}
+
+/// `use path;` or `use path as name;` (spec 3.3): introduces a local alias
+/// for whatever `path` names -- a module, a struct, an enum, or a function
+/// -- resolved and checked by the compiler's resolver, never the parser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDecl {
+    pub path: Path,
+    pub alias: Option<Ident>,
     pub span: Span,
 }
 
@@ -308,19 +359,20 @@ pub enum ExprKind {
     /// into the generated Rust, which resolves them.
     String(String),
 
-    /// `name`, `module::name`, or `module::Type::name` (spec 2.5, 2.10): a
-    /// plain name, a module-qualified one, or a module-and-type-qualified
-    /// one (an associated function or enum variant reached through a
-    /// module). A two-segment path fills `module` only; a three-segment
-    /// one fills both `module` and `type_`. A path longer than three
-    /// segments is rejected with `V0001` (still built from its first two
-    /// segments and its last, so later passes have something to work
-    /// with). Resolving `type_` is milestone 2 tasks 6 and 7's job; until
-    /// then the compiler rejects it with `V0001` rather than silently
-    /// mis-resolving it.
+    /// `name`, `module::name`, or `module::Type::name` (spec 2.5, 2.10,
+    /// 3.1): a plain name, a module-qualified one, or a
+    /// module-and-type-qualified one (an associated function or enum
+    /// variant reached through a module), with paths now growing to any
+    /// depth as nested modules do. `path` covers every segment before the
+    /// final one (the module chain, and the type name when the path names
+    /// an associated function or a variant); `name` is that final segment,
+    /// the thing actually read or called. Whether `path`'s segments name a
+    /// deeper module chain than milestone 3 resolves, a single module, or a
+    /// type in this file (the two-way ambiguity a bare one-segment `path`
+    /// carries, spec 2.10) is the compiler's resolver's job, not the
+    /// parser's.
     Path {
-        module: Option<Ident>,
-        type_: Option<Ident>,
+        path: Option<Path>,
         name: Ident,
     },
 
@@ -387,10 +439,12 @@ pub enum ExprKind {
     /// not a macro system: its elements, each an owned slot.
     VecLit(Vec<Expr>),
 
-    /// `Name { field: expr, ... }`, or `module::Name { field: expr, ... }`
-    /// (spec 2.10). Never parsed in condition position.
+    /// `Name { field: expr, ... }`, or `path::Name { field: expr, ... }`
+    /// with a module path of any depth and an optional `crate::`,
+    /// `self::`, or `super::` prefix (spec 2.10, 3.1). Never parsed in
+    /// condition position.
     StructLit {
-        module: Option<Ident>,
+        path: Option<Path>,
         name: Ident,
         fields: Vec<(Ident, Expr)>,
     },
@@ -458,14 +512,13 @@ impl Pattern {
 
 /// A variant pattern (spec 2.3): `name`, or `type_::name`, or
 /// `module::type_::name`, each with an optional parenthesized list of
-/// sub-patterns. A single remaining segment always fills `type_`, never
-/// `module`: unlike [`ExprKind::Path`], a pattern never calls anything, so
-/// there is no bare-module case to weigh it against. A pattern path longer
-/// than three segments is `V0001`.
+/// sub-patterns, growing to any depth as [`ExprKind::Path`] does. `path`'s
+/// last segment is always the type (unlike an expression path, a pattern
+/// never calls anything, so there is no bare-module case to weigh it
+/// against); any segments before that are the module chain.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantPattern {
-    pub module: Option<Ident>,
-    pub type_: Option<Ident>,
+    pub path: Option<Path>,
     pub name: Ident,
     pub subpatterns: Vec<SubPattern>,
     pub span: Span,

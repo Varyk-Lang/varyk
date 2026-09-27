@@ -1,7 +1,8 @@
 # Open questions
 
-This is section 9 of the [design spec](specs/2026-09-23-varyk-design.md),
-copied as is; milestones refer to [roadmap.md](roadmap.md).
+This began as section 9 of the [design spec](specs/2026-09-23-varyk-design.md),
+copied as is. Later milestone specs add to it, and this file is the collected
+list; milestones refer to [roadmap.md](roadmap.md).
 
 Recorded, deliberately unanswered.
 
@@ -25,8 +26,24 @@ Recorded, deliberately unanswered.
   with a fix-it.
 - What error-handling ergonomics beyond `Result` and `?` are worth adding?
 - Should Rust enums and generic types from `.rs` modules be imported
-  automatically, as structs will be in milestone 3?
+  automatically, as structs will be in milestone 3? Half-answered in
+  milestone 3: enums are imported automatically; generic types remain open.
 - Should `match` on an owned local move it, as in Rust, so that its parts
   can be taken out without a copy? Milestone 2 borrows every place it
   matches on, so an owned `Option<Task>` local can only be opened by
   matching on the call that produced it.
+- Should Varyk code ever `use` a crate directly, once traits exist? Milestone 3
+  reaches every crate through a facade `.rs` module in the package; that rule
+  is the answer until then, and may remain it. An experiment, listed as
+  unscheduled in the roadmap.
+- Will generics ever be Varyk surface syntax? Milestone 3 assumes not and
+  designs the facade around that.
+- Should a Varyk library be importable from Varyk without a facade, given
+  that its public API is already Varyk-shaped?
+- The site's hero shows a service as milestone 5 is meant to write it, and
+  that example assumes four things this spec has not decided: standard
+  modules `http`, `db`, and `json` reachable without `use`; one shared
+  `Error` type so `?` works across them; automatic serde derivation for
+  structs; and expected-type inference for a query result. Each is settled
+  by the milestone-5 spec, and the site copies the real example once it
+  exists.

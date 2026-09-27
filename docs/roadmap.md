@@ -4,7 +4,8 @@ The living plan for Varyk. Milestones are ordered; items within a milestone
 are not. Design rationale lives in `docs/specs/`. Each milestone gets an
 implementation plan in `docs/plans/` when work on it starts.
 
-Varyk is experimental and pre-0.1. Nothing here is a release commitment or a
+Varyk is experimental and pre-1.0: anything may change, and a breaking
+change bumps the minor version. Nothing here is a release commitment or a
 date. An item in progress is marked in its text.
 
 ## Milestone 1: compiler skeleton and the borrow-by-default proof
@@ -56,15 +57,25 @@ section 7 of the spec.
 
 ## Milestone 3: packages and interop
 
-- [ ] `Cargo.toml` as the package manifest, `[package.metadata.varyk]`
-- [ ] Cargo dependencies and `use`
-- [ ] Nested modules and `mod.vr` directories
-- [ ] Field-level `pub`
-- [ ] Import of Rust structs from `.rs` modules
-- [ ] Rust-layer errors mapped to Varyk source through a source map; per-file handling of rustc warnings
-- [ ] `varyk init` with a `build.rs` so plain `cargo build` works
-- [ ] Publishing a Varyk library to crates.io with generated `.rs` included
+Spec: `docs/specs/2026-09-26-milestone-3-design.md`. Varyk code never names
+a crate; a dependency is used from a `.rs` facade in the same package.
+
+- [x] `Cargo.toml` as the package manifest, `src/main.vr` or `src/lib.vr` as the root, edition 2024, `[package.metadata.varyk]` reserved
+- [x] Cargo dependencies, reached from `.rs` facades; `Cargo.lock` shared with cargo
+- [x] Nested modules and `mod.vr` directories, `pub mod`, and Rust's visibility rule
+- [x] `use` for paths inside the package
+- [x] Field-level `pub`
+- [x] Import of Rust structs, their inherent methods, and enums from `.rs` modules
+- [x] Rust-layer errors mapped to Varyk source through a line-level source map (V0900); the user's `.rs` errors and warnings shown at their file; item-level lint allows on generated code
+- [x] `varyk init` with a `build.rs` so plain `cargo build` works, and `varyk emit`
+- [x] `varyk publish`: a plain Rust crate with the generated `.rs` and the `.vr` sources included
+- [x] Three example packages building and running with expected output; soundness templates for every new construct
+- [x] `docs/language.md`, `docs/design.md`, `docs/open-questions.md`, and `docs/roadmap.md` updated
 - [ ] Site at varyk.com: the pitch, `borrowing.vr` beside its generated Rust, getting started, install via `cargo install varyk`, the language reference
+
+Done when every item above but the site is checked; the site is a separate
+sub-project in its own repository. The full definition of done is section
+10 of the spec.
 
 ## Milestone 4: closures, iterators, and tooling
 
@@ -77,6 +88,11 @@ section 7 of the spec.
 - [ ] `HashMap`, `Box`, `as`, `clone` on structs and enums
 - [ ] `varyk fmt`, a deterministic formatter on `varyk-syntax`
 - [ ] Test asserting `docs/language.md` covers every construct the parser accepts
+- [ ] Nested modules in `.rs` files
+- [ ] Import of Rust tuple and unit structs
+- [ ] Derives on imported Rust structs (`Clone`, `PartialEq`, `Debug`) usable from Varyk
+- [ ] `.rs` signatures naming Varyk-declared types
+- [ ] Direct import of a published Varyk library from Varyk
 
 ## Milestone 5: batteries for services
 
@@ -88,6 +104,10 @@ attribute syntax), the async runtime shape, and ownership-transfer syntax.
 - [ ] JSON via serde
 - [ ] Logging via tracing
 - [ ] HTTP server on a proven Rust crate, chosen at that time
+- [ ] HTTP client on the same stack
+- [ ] Databases through one API; sqlx is the candidate crate
+- [ ] Configuration from the environment
+- [ ] `varyk test`
 - [ ] `async`/`await` on a built-in tokio runtime, `spawn` as a built-in, `Send`/`Sync`/`Pin` kept out of the surface syntax and their failures mapped to Varyk diagnostics
 
 ## Milestone 6: tooling and beyond
@@ -99,3 +119,10 @@ attribute syntax), the async runtime shape, and ownership-transfer syntax.
 
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
+
+Using a crate directly from Varyk code, with no facade `.rs` module in
+between. Milestone 3 reaches every crate through a facade, because most
+crate APIs are generic and Varyk has no generics in its surface; whether
+Varyk code should ever `use` a crate directly is an experiment for after
+traits exist, recorded in [open-questions.md](open-questions.md). The facade
+rule stands until that experiment says otherwise.

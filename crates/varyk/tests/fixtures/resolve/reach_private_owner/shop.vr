@@ -1,0 +1,15 @@
+mod cart;
+
+struct Helper {
+    n: i32,
+}
+
+impl Helper {
+    pub fn make() -> Vec<cart::Cart> {
+        vec![cart::Cart { n: 1 }]
+    }
+}
+
+pub fn count() -> usize {
+    Helper::make().len()
+}

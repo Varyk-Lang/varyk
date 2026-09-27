@@ -1,0 +1,20 @@
+mod ext;
+mod other;
+
+enum Local {
+    A,
+}
+
+// A Varyk struct field and a Varyk enum payload naming an imported enum
+// (M3 spec 4.3, 4.4): both must resolve to `Ty::Enum` without walking off
+// the end of the recursive-type check's per-item table, which is sized to
+// every Varyk-declared enum but not every imported one.
+struct WithKind {
+    kind: ext::Kind,
+}
+
+enum WrapsKind {
+    Held(ext::Kind),
+}
+
+fn main() {}

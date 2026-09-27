@@ -2,17 +2,18 @@
 source: crates/varyk/tests/codegen.rs
 expression: main
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 struct Task {
     title: String,
     done: bool,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 struct Board {
     tasks: Vec<Task>,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 impl Board {
     fn open_count(&self) -> i32 {
         let mut count = 0;
@@ -25,16 +26,19 @@ impl Board {
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn make_tasks() -> Vec<Task> {
-    vec![Task { title: "write".to_string(), done: false }, Task { title: "test".to_string(), done: true }]
+    ::std::vec![Task { title: "write".to_string(), done: false }, Task { title: "test".to_string(), done: true }]
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn titles(tasks: &Vec<Task>) {
     for t in tasks {
-        println!("{}", t.title);
+        ::std::println!("{}", t.title);
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn finish_all(tasks: &mut Vec<Task>) -> i32 {
     let mut open = 0;
     for t in &*tasks {
@@ -49,6 +53,7 @@ fn finish_all(tasks: &mut Vec<Task>) -> i32 {
     open
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn sum(values: &Vec<i32>) -> i32 {
     let mut total = 0;
     for value in values {
@@ -58,16 +63,19 @@ fn sum(values: &Vec<i32>) -> i32 {
     total
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn words() -> Vec<String> {
-    vec!["alpha".to_string(), "beta".to_string()]
+    ::std::vec!["alpha".to_string(), "beta".to_string()]
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn shout(word: &str) {
-    println!("{}!", word);
+    ::std::println!("{}!", word);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
-    let numbers: Vec<i32> = vec![3, 4, 5];
+    let numbers: Vec<i32> = ::std::vec![3, 4, 5];
     let mut total = 0;
     for n in &numbers {
         let n = *n;
@@ -76,15 +84,15 @@ fn main() {
         }
         total = total + n;
     }
-    println!("{} {}", total, sum(&numbers));
+    ::std::println!("{} {}", total, sum(&numbers));
     for i in 0..3 {
-        println!("{}", i);
+        ::std::println!("{}", i);
     }
     let mut tasks: Vec<Task> = make_tasks();
     titles(&tasks);
-    println!("{} open, then {}", finish_all(&mut tasks), finish_all(&mut tasks));
+    ::std::println!("{} open, then {}", finish_all(&mut tasks), finish_all(&mut tasks));
     let board = Board { tasks: make_tasks() };
-    println!("{}", board.open_count());
+    ::std::println!("{}", Board::open_count(&board));
     let names: Vec<String> = words();
     for name in &names {
         shout(name);
@@ -96,5 +104,5 @@ fn main() {
     for t in make_tasks() {
         kept.push(t);
     }
-    println!("{}", kept.len());
+    ::std::println!("{}", kept.len());
 }

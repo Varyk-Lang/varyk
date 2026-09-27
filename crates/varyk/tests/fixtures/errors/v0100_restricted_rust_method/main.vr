@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let mut t = ext::Tally::new();
+    t.bump();
+    println!("{}", t.n);
+}

@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let counts = ext::Counts::new();
+    println!("{} {}", counts.total, counts.distinct());
+    let words = counts.by_word;
+}

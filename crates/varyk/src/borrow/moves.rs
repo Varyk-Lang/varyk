@@ -29,7 +29,7 @@ use super::{Context, roots};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
     HirBlock, HirExpr, HirExprKind, HirForHead, HirFunction, HirStmt, LocalId, LocalInfo,
-    field_root, is_block_like, is_place, leaves,
+    field_root, is_block_like, is_place, leaves, matched_in_place,
 };
 use crate::types::{ParamMode, Ty};
 
@@ -453,11 +453,13 @@ impl<R: Rule> Walker<'_, R> {
                 }
                 self.marks = union(after_then, self.marks.take());
             }
-            // A place is only looked at; a temporary is owned by the
-            // `match` (spec 3.2). Each arm starts where the scrutinee
-            // leaves off, and any may be the one that runs.
+            // A place is only looked at, and so is a temporary whose enum
+            // has a destructor (the backend matches it by reference to
+            // avoid E0509); any other temporary is owned by the `match`
+            // (spec 3.2). Each arm starts where the scrutinee leaves off,
+            // and any may be the one that runs.
             HirExprKind::Match { scrutinee, arms } => {
-                let head = if is_place(scrutinee) {
+                let head = if matched_in_place(self.cx.enums, scrutinee) {
                     Access::Read
                 } else {
                     Access::Move

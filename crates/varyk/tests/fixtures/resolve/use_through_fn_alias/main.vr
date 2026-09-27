@@ -1,0 +1,6 @@
+mod a;
+
+use a::g;
+use g::x;
+
+fn main() {}

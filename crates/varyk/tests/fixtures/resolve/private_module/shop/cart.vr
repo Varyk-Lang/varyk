@@ -1,0 +1,13 @@
+pub struct Cart {
+    n: i32,
+}
+
+impl Cart {
+    pub fn new() -> Cart {
+        Cart { n: 1 }
+    }
+}
+
+pub fn count() -> i32 {
+    1
+}

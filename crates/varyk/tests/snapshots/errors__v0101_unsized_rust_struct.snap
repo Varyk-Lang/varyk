@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust struct `ext::S`
+ --> crates/varyk/tests/fixtures/errors/v0101_unsized_rust_struct/main.vr:3:17
+  |
+3 | fn count(v: Vec<ext::S>) -> usize {
+  |                 ^^^^^^ Varyk cannot use the Rust struct `ext::S`
+  |
+  = note: the Rust struct `S` is not imported because it has no fixed size: its last field is a slice, `str`, or `dyn` type

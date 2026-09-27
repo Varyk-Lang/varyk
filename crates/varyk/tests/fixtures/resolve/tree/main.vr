@@ -1,0 +1,21 @@
+mod shop;
+
+fn take(a: shop::cart::Cart, b: crate::shop::cart::Cart, o: self::shop::Order) -> i32 {
+    a.total + b.total + o.n
+}
+
+fn main() {
+    let cart = shop::cart::Cart::new();
+    let other = crate::shop::cart::Cart { total: 2 };
+    let order = shop::Order { n: 1 };
+    let kind = shop::cart::pick();
+    match kind {
+        crate::shop::Kind::Word => {}
+        shop::Kind::Number(n) => println!("{}", n),
+    }
+    let sum = take(cart, other, order);
+    self::helper();
+    println!("{}", sum);
+}
+
+fn helper() {}

@@ -2,11 +2,11 @@
 source: crates/varyk/tests/codegen.rs
 expression: krate.cargo_toml
 ---
+[dependencies]
+
 [package]
+edition = "2024"
 name = "test_pkg"
 version = "0.0.0"
-edition = "2024"
 
 [workspace]
-
-[dependencies]

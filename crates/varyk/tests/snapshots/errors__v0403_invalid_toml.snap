@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0403]: this `Cargo.toml` is not valid TOML: unclosed table, expected `]`
+ --> crates/varyk/tests/fixtures/errors/v0403_invalid_toml/Cargo.toml:1:9
+  |
+1 | [package
+  |         ^ this `Cargo.toml` is not valid TOML: unclosed table, expected `]`

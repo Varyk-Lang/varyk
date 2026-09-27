@@ -1,0 +1,9 @@
+mod a;
+mod b;
+
+use a::Foo;
+use b::Foo;
+
+fn main() {
+    println!("{}", Foo());
+}

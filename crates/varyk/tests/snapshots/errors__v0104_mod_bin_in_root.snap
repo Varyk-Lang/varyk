@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0104]: a module of the entry file cannot be named `bin`, in any capitalization; use another name
+ --> crates/varyk/tests/fixtures/errors/v0104_mod_bin_in_root/main.vr:1:1
+  |
+1 | mod bin;
+  | ^^^^^^^^ a module of the entry file cannot be named `bin`, in any capitalization; use another name
+  |
+  = note: cargo treats the files in `src/bin/` as extra programs

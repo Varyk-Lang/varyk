@@ -1,0 +1,25 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+mod shop;
+mod util;
+mod a;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+use crate::shop::cart::Cart;
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+use crate::shop::cart;
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+use crate::util::helper;
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+use crate::a::B as C;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let x = crate::shop::cart::Cart::new();
+    let y = crate::shop::cart::Cart::new();
+    crate::util::helper();
+    let z = crate::a::B { n: 1 };
+    ::std::println!("{} {} {}", x.total, y.total, z.n);
+}

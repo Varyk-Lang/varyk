@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust struct `ext::U`
+ --> crates/varyk/tests/fixtures/errors/v0101_unit_rust_struct_value/main.vr:4:13
+  |
+4 |     let u = ext::U;
+  |             ^^^^^^ Varyk cannot use the Rust struct `ext::U`
+  |
+  = note: the Rust struct `U` is not imported because it is a unit struct, which Varyk does not import yet; give it a named field

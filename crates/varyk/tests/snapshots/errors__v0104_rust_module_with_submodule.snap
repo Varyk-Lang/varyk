@@ -1,9 +1,12 @@
 ---
 source: crates/varyk/tests/errors.rs
+assertion_line: 104
 expression: stderr
 ---
-error[V0104]: cannot parse `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_submodule/ext.rs`: declares a nested module `inner`, which is not supported: only the module file itself is copied
- --> crates/varyk/tests/fixtures/errors/v0104_rust_module_with_submodule/main.vr:1:1
+error[V0104]: `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_submodule/ext.rs` declares a module `inner`; a `.rs` module cannot have submodules here, so move the code into `ext.rs`
+ --> crates/varyk/tests/fixtures/errors/v0104_rust_module_with_submodule/ext.rs:1:5
   |
-1 | mod ext;
-  | ^^^^^^^^ cannot parse `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_submodule/ext.rs`: declares a nested module `inner`, which is not supported: only the module file itself is copied
+1 | mod inner;
+  |     ^^^^^ `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_submodule/ext.rs` declares a module `inner`; a `.rs` module cannot have submodules here, so move the code into `ext.rs`
+  |
+  = note: only the `.rs` file itself is copied into the generated crate

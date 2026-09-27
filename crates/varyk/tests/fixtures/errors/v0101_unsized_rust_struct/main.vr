@@ -1,0 +1,7 @@
+mod ext;
+
+fn count(v: Vec<ext::S>) -> usize {
+    v.len()
+}
+
+fn main() {}

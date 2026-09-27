@@ -2,20 +2,22 @@
 source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"fn make() -> string {\\n    \\\"m\\\"\\n}\\n\\nfn show(s: string) {\\n    println!(\\\"{}\\\", s);\\n}\\n\\nfn clear(mut s: string) {\\n    s = \\\"\\\";\\n}\\n\\nfn f(c: bool, name: string) -> bool {\\n    show(if c { make() } else { \\\"lit\\\" });\\n    clear(if c { make() } else { make() });\\n    println!(\\\"{}\\\", if c { make() } else { \\\"y\\\" });\\n    (if c { make() } else { \\\"y\\\" }) == name\\n}\\n\\nfn main() {\\n    println!(\\\"{}\\\", f(true, \\\"m\\\"));\\n}\\n\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn make() -> String {
     "m".to_string()
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn show(s: &str) {
-    println!("{}", s);
+    ::std::println!("{}", s);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn clear(s: &mut String) {
     *s = "".to_string();
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn f(c: bool, name: &str) -> bool {
     show(&(if c {
         make()
@@ -27,7 +29,7 @@ fn f(c: bool, name: &str) -> bool {
     } else {
         make()
     }));
-    println!("{}", if c {
+    ::std::println!("{}", if c {
         make()
     } else {
         "y".to_string()
@@ -39,6 +41,7 @@ fn f(c: bool, name: &str) -> bool {
     }).as_str() == name
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
-    println!("{}", f(true, "m"));
+    ::std::println!("{}", f(true, "m"));
 }

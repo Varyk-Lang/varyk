@@ -1,0 +1,10 @@
+mod ext;
+
+fn main() {
+    let m = ext::Matcher::new("a");
+    let a = m.into_inner();
+    let b = m.name();
+    let c = ext::Matcher::is_match(m, "a");
+    let d = m.new("a");
+    let e = m.words;
+}

@@ -1,0 +1,13 @@
+mod ext;
+
+enum Local {
+    A,
+}
+
+fn main() {
+    let x = Local::A;
+    match x {
+        ext::Wrap::Value(v) => {}
+        _ => {}
+    }
+}

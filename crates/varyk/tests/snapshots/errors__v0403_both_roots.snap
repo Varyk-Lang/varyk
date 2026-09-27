@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0403]: this package has both `src/main.vr` and `src/lib.vr`; keep one
+ --> crates/varyk/tests/fixtures/errors/v0403_both_roots/Cargo.toml:2:8
+  |
+2 | name = "both"
+  |        ^^^^^^ this package has both `src/main.vr` and `src/lib.vr`; keep one
+  |
+  = note: a Varyk package is a program started from `src/main.vr` or a library in `src/lib.vr`

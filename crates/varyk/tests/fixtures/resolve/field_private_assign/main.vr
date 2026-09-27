@@ -1,0 +1,6 @@
+mod shop;
+
+fn main() {
+    let mut c = shop::mk();
+    c.n = 2;
+}
