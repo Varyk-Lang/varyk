@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0403]: this program cannot be called `deps`: Cargo, Rust's build tool, keeps its own `deps` folder where it would put the program
+ --> crates/varyk/tests/fixtures/errors/v0403_program_name/Cargo.toml:2:8
+  |
+2 | name = "deps"
+  |        ^^^^^^ this program cannot be called `deps`: Cargo, Rust's build tool, keeps its own `deps` folder where it would put the program
+  |
+  = note: pick another name, or make the package a library (`src/lib.vr`), which may use this name

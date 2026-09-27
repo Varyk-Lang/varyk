@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `use` does not support grouped imports in Varyk; write one `use` per name
+ --> crates/varyk/tests/fixtures/errors/v0001_use_grouped_import/main.vr:3:8
+  |
+3 | use a::{B, C};
+  |        ^^^^^^ `use` does not support grouped imports in Varyk; write one `use` per name

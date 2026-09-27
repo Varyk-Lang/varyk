@@ -1,0 +1,5 @@
+mod ext;
+
+fn main() {
+    let p = ext::Point { x: 1 };
+}

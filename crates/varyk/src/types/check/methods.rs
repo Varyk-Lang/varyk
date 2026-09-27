@@ -4,11 +4,11 @@
 
 use varyk_syntax::{Expr, Ident, Span};
 
-use super::{FnChecker, RANGE_USIZE_NOTE, usize_note};
+use super::{FnChecker, RANGE_USIZE_NOTE, unsupported_rust_signature, usize_note};
 use crate::builtins::{self, Owner};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirExpr, HirExprKind, MethodRef};
-use crate::resolve::{LookupError, UserType, not_visible};
+use crate::resolve::{Callee, LookupError, UserType, not_visible};
 use crate::types::{IntKind, Ty};
 
 impl FnChecker<'_> {
@@ -47,17 +47,52 @@ impl FnChecker<'_> {
                         ));
                         return None;
                     }
-                    Err(LookupError::Unknown) => {
-                        self.diagnostics.push(Diagnostic::new(
-                            codes::V0100,
-                            method.span,
-                            no_method,
-                        ));
+                    Err(LookupError::PrivateModule { module }) => {
+                        let diagnostic =
+                            self.symbols
+                                .private_module(module, "method", &path, method.span);
+                        self.diagnostics.push(diagnostic);
                         return None;
                     }
+                    Err(LookupError::Unknown) => {
+                        let mut diagnostic = Diagnostic::new(codes::V0100, method.span, no_method);
+                        if let Some(note) = self.symbols.skipped_member_note(owner, &method.name) {
+                            diagnostic = diagnostic.with_note(note);
+                        }
+                        self.diagnostics.push(diagnostic);
+                        return None;
+                    }
+                    Err(LookupError::NoParent { .. }) => {
+                        unreachable!("a member lookup follows no path")
+                    }
                 };
-                let sig = &self.symbols.fns[id.0 as usize];
-                if sig.self_mode.is_none() {
+                let (self_mode, params, ret, found) = match id {
+                    Callee::Varyk(id) => {
+                        let sig = &self.symbols.fns[id.0 as usize];
+                        let params = sig.params.iter().map(|p| p.1.clone()).collect();
+                        (sig.self_mode, params, sig.ret.clone(), MethodRef::Varyk(id))
+                    }
+                    Callee::Imported(id) => {
+                        let sig = &self.symbols.imported[id.0 as usize];
+                        if !sig.callable || !self.symbols.usable_from(sig.within, self.module) {
+                            self.diagnostics.push(unsupported_rust_signature(
+                                &path,
+                                sig,
+                                method.span,
+                            ));
+                            return None;
+                        }
+                        let params = sig.params.iter().map(|p| p.0.clone()).collect();
+                        (
+                            sig.self_mode,
+                            params,
+                            sig.ret.clone(),
+                            MethodRef::Imported(id),
+                        )
+                    }
+                    Callee::Builtin(_) => unreachable!("a type's members are never built-ins"),
+                };
+                if self_mode.is_none() {
                     let message = format!(
                         "`{path}` has no `self`, so it is not called on a value; call it as \
                          `{path}(..)`"
@@ -66,8 +101,7 @@ impl FnChecker<'_> {
                         .push(Diagnostic::new(codes::V0100, method.span, message));
                     return None;
                 }
-                let params = sig.params.iter().map(|p| p.1.clone()).collect();
-                (MethodRef::Varyk(id), params, sig.ret.clone())
+                (found, params, ret)
             }
             Ty::Vec(_) | Ty::String => {
                 let (owner, element) = match &receiver.ty {

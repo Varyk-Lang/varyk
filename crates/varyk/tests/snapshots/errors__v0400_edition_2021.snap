@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0400]: this package must use edition "2024"
+ --> crates/varyk/tests/fixtures/errors/v0400_edition_2021/Cargo.toml:4:11
+  |
+4 | edition = "2021"
+  |           ^^^^^^ this package must use edition "2024"
+  |
+  = note: Varyk generates Rust 2024 code; write `edition = "2024"` under `[package]`

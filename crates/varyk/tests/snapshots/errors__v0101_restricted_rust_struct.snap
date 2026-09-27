@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust struct `ext::Point`
+ --> crates/varyk/tests/fixtures/errors/v0101_restricted_rust_struct/main.vr:4:13
+  |
+4 |     let p = ext::Point { x: 1 };
+  |             ^^^^^^^^^^ Varyk cannot use the Rust struct `ext::Point`
+  |
+  = note: the Rust struct `Point` is not imported because it is `pub(crate)` in the Rust file; Varyk imports only plain `pub`, so write `pub struct Point` in the Rust file

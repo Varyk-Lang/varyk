@@ -1,0 +1,3 @@
+pub fn get() -> crate::Config {
+    crate::Config { n: 1 }
+}

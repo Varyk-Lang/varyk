@@ -9,7 +9,7 @@ mod item;
 mod stmt;
 mod ty;
 
-use crate::ast::Program;
+use crate::ast::{PathStart, Program};
 use crate::error::{FixIt, SyntaxError, V0001, V0002};
 use crate::span::{FileId, Span};
 use crate::token::{Token, TokenKind};
@@ -116,6 +116,27 @@ impl<'a> Parser<'a> {
         Span::new(self.file, from.start, to.end)
     }
 
+    /// Consumes a path-start keyword (`crate`, `self`, `super`) and the
+    /// `::` right after it, when the current token is one of the three
+    /// AND is immediately followed by `::` (spec 3.1, 3.3); a keyword used
+    /// any other way (a method receiver, a bare misuse) is left alone, for
+    /// the caller to handle as it already does. Consumes nothing and
+    /// returns [`PathStart::None`] otherwise.
+    fn take_path_start(&mut self) -> PathStart {
+        let leading = match self.peek() {
+            Some(TokenKind::CrateKw) => PathStart::Crate,
+            Some(TokenKind::SelfKw) => PathStart::SelfMod,
+            Some(TokenKind::SuperKw) => PathStart::Super,
+            _ => return PathStart::None,
+        };
+        if self.peek_at(1) != Some(&TokenKind::ColonColon) {
+            return PathStart::None;
+        }
+        self.bump(); // the keyword
+        self.bump(); // `::`
+        leading
+    }
+
     /// Consumes the current token if its kind equals `kind`, without
     /// recording an error either way if it does not match.
     fn bump_if(&mut self, kind: &TokenKind) -> bool {
@@ -193,7 +214,42 @@ impl<'a> Parser<'a> {
                 self.push_error(
                     V0001,
                     span,
-                    "`self` is a keyword and can only be used as a method's first parameter",
+                    "`self` is a keyword and can only be used as a method's first parameter, \
+                     or to start a path (`self::name`)",
+                );
+                Err(())
+            }
+            Some(TokenKind::CrateKw) => {
+                let span = self.current_span();
+                self.bump();
+                self.push_error(
+                    V0001,
+                    span,
+                    "`crate` is a keyword and can only start a path, followed by `::`",
+                );
+                Err(())
+            }
+            Some(TokenKind::SuperKw) => {
+                let span = self.current_span();
+                let after_super = self.pos >= 2
+                    && self.tokens[self.pos - 1].kind == TokenKind::ColonColon
+                    && self.tokens[self.pos - 2].kind == TokenKind::SuperKw;
+                self.bump();
+                let message = if after_super {
+                    "`super::super` is not supported; write the path from `crate::` instead"
+                } else {
+                    "`super` is a keyword and can only start a path, followed by `::`"
+                };
+                self.push_error(V0001, span, message);
+                Err(())
+            }
+            Some(TokenKind::UseKw) => {
+                let span = self.current_span();
+                self.bump();
+                self.push_error(
+                    V0001,
+                    span,
+                    "`use` is a keyword and can only start a `use` item",
                 );
                 Err(())
             }

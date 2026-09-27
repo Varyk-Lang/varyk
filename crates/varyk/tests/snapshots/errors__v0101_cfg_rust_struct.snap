@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust struct `ext::Cart`
+ --> crates/varyk/tests/fixtures/errors/v0101_cfg_rust_struct/main.vr:3:12
+  |
+3 | fn show(c: ext::Cart) {}
+  |            ^^^^^^^^^ Varyk cannot use the Rust struct `ext::Cart`
+  |
+  = note: the Rust struct `Cart` is not imported because it is behind `#[cfg]`, so it may not exist in the build

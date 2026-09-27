@@ -1,0 +1,7 @@
+pub fn T() -> i32 {
+    1
+}
+
+pub struct T {
+    pub n: i32,
+}

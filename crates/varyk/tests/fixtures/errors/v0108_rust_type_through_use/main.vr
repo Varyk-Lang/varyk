@@ -1,0 +1,6 @@
+mod ext;
+mod other;
+
+fn main() {
+    let item = ext::make();
+}

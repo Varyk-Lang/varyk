@@ -1,0 +1,11 @@
+mod ext;
+
+fn main() {
+    match ext::make_guard() {
+        ext::Guard::Held(a) => {
+            let mut b = a;
+            b.add(1);
+        }
+        ext::Guard::Empty => {}
+    }
+}

@@ -14,7 +14,7 @@ fn check_source(entry: SourceFile) -> (Result<HirProgram, Vec<Diagnostic>>, Vec<
     let mut sources = Vec::new();
     let result = resolve(entry, &mut sources)
         .and_then(|resolved| typecheck(resolved, &sources))
-        .and_then(analyze);
+        .and_then(|hir| analyze(hir, &sources));
     (result, sources)
 }
 
@@ -1202,6 +1202,65 @@ fn a_let_that_only_renames_a_lent_value_is_not_v0306() {
         "fn f() {\n    let s = mk();\n    let b = s == { let t = s; t };\n}\n",
     ));
     assert_eq!(d.code, codes::V0306, "{d:#?}");
+}
+
+/// A binding of an arm whose body is not a block, passed to a `mut`
+/// parameter, gets a fix-it wrapping the body in a block that copies it
+/// first, and the fixed program passes.
+#[test]
+fn a_match_binding_passed_to_mut_in_an_expression_arm_gets_a_block_fix_it() {
+    let text = "fn make() -> Option<string> {\n    Some(\"a\")\n}\n\nfn change(mut s: string) {\n    s = \"b\";\n}\n\nfn main() {\n    match make() {\n        Some(s) => change(s),\n        None => {}\n    }\n}\n";
+    let (d, _) = one_error(text);
+    assert_eq!(d.code, codes::V0303, "{d:#?}");
+    let fix_it = d.fix_it.expect("a fix-it");
+    assert_eq!(fix_it.replacement, "{ let mut s = s; change(s) }");
+    let mut fixed = text.to_string();
+    fixed.replace_range(
+        fix_it.span.start as usize..fix_it.span.end as usize,
+        &fix_it.replacement,
+    );
+    ok(&fixed);
+}
+
+/// Two bindings of one arm whose body is not a block, both passed to
+/// `mut` parameters: one fix-it copies both, the other diagnostic has
+/// none, so no two fix-its replace the same text, and the fixed program
+/// passes.
+#[test]
+fn two_match_bindings_passed_to_mut_in_one_expression_arm_get_one_fix_it() {
+    let text = "enum P {\n    Two(string, string),\n    Empty,\n}\n\nfn make() -> P {\n    P::Two(\"a\", \"b\")\n}\n\nfn both(mut a: string, mut b: string) {\n    a = \"c\";\n    b = \"d\";\n}\n\nfn main() {\n    match make() {\n        P::Two(a, b) => both(a, b),\n        P::Empty => {}\n    }\n}\n";
+    let (diagnostics, _) = errors(text);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(diagnostics.iter().all(|d| d.code == codes::V0303));
+    let fix_it = diagnostics[0].fix_it.clone().expect("a fix-it");
+    assert_eq!(
+        fix_it.replacement,
+        "{ let mut a = a; let mut b = b; both(a, b) }"
+    );
+    assert!(diagnostics[1].fix_it.is_none(), "{diagnostics:#?}");
+    let mut fixed = text.to_string();
+    fixed.replace_range(
+        fix_it.span.start as usize..fix_it.span.end as usize,
+        &fix_it.replacement,
+    );
+    ok(&fixed);
+}
+
+/// The note of the index V0306 says, in Rust terms, why the order matters.
+#[test]
+fn changing_a_vec_in_its_own_index_is_v0306_with_the_borrow_note() {
+    let (d, _) = one_error(
+        "fn bump(mut v: Vec<i32>) -> usize {\n    v.push(1);\n    0\n}\n\nfn main() {\n    let mut v: Vec<i32> = Vec::new();\n    v[bump(v)] = 2;\n}\n",
+    );
+    assert_eq!(d.code, codes::V0306, "{d:#?}");
+    assert_eq!(
+        d.notes,
+        vec![
+            "in Rust terms, `v` is borrowed mutably to get at the element before the index is \
+             worked out"
+                .to_string()
+        ]
+    );
 }
 
 // --- V0305: use after move --------------------------------------------------
@@ -2651,4 +2710,169 @@ fn a_binding_of_a_read_only_parameter_passed_to_a_mut_parameter_says_to_mark_it_
         "{d:#?}"
     );
     assert_mut_fix_it(&d, &sources, "f(m: Msg)", "m:");
+}
+
+// --- A payload of a temporary of an enum that runs code when dropped -------
+
+#[test]
+fn a_string_payload_of_a_drop_temporary_to_a_mut_param_is_v0303_saying_to_clone() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/errors/v0303_drop_payload_to_mut_param/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    let d = &diagnostics[0];
+    assert_eq!(d.code, codes::V0303);
+    assert!(d.message.contains("`s` stays inside `Guard`"), "{d:#?}");
+    assert!(d.message.contains("`let mut s = s.clone();`"), "{d:#?}");
+    assert!(has_note(d, "`Guard` implements `Drop`"), "{d:#?}");
+    let fix = d.fix_it.as_ref().expect("fix-it");
+    assert_eq!(fix.replacement, " let mut s = s.clone();");
+    let at = span_of(&sources, "=> {").end;
+    assert_eq!(fix.span, Span::new(FileId(0), at, at));
+}
+
+#[test]
+fn an_enum_a_macro_may_give_a_destructor_names_the_file_and_the_macro_not_an_impl() {
+    let (result, _) =
+        check_path("crates/varyk/tests/fixtures/errors/v0303_drop_unsure_from_macro/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let d = &diagnostics[0];
+    assert!(d.message.contains("which may run code"), "{d:#?}");
+    assert!(
+        has_note(
+            d,
+            "Varyk cannot rule out that `Msg` runs code when it is thrown away (in Rust terms, \
+             whether it has an `impl Drop`), \
+             because `helper.rs` has a macro, `quiet!`, whose text mentions `Drop`"
+        ),
+        "{d:#?}"
+    );
+    assert!(!has_note(d, "`Msg` implements `Drop`"), "{d:#?}");
+}
+
+#[test]
+fn an_enum_given_a_destructor_through_an_alias_names_the_alias() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/drop_unsure_alias/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    let d = &diagnostics[0];
+    assert_eq!(d.code, codes::V0303);
+    assert!(
+        has_note(
+            d,
+            "Varyk cannot rule out that `Msg` runs code when it is thrown away (in Rust terms, \
+             whether it has an `impl Drop`), \
+             because `hook.rs` implements `Drop` for `G`, a name that could stand for any type"
+        ),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_drop_temporary_binding_kept_through_a_match_value_says_why_once_and_offers_clone() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/errors/v0304_drop_binding_kept_by_match/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    // No second error about returning the outer `s`.
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    let d = &diagnostics[0];
+    assert_eq!(d.code, codes::V0304);
+    assert!(
+        d.message.ends_with("cannot be kept in the outer `s`"),
+        "{d:#?}"
+    );
+    assert!(
+        has_note(
+            d,
+            "copy it with `.clone()` to keep it (in Rust terms, `Msg` implements `Drop`)"
+        ),
+        "{d:#?}"
+    );
+    let fix = d.fix_it.as_ref().expect("fix-it");
+    assert_eq!(fix.replacement, ".clone()");
+    assert_eq!(fix.span.start, span_of(&sources, "=> s,").start + 4);
+}
+
+#[test]
+fn a_drop_temporary_binding_assigned_to_an_outer_let_says_why_and_offers_clone() {
+    let (result, _) =
+        check_path("crates/varyk/tests/fixtures/interop/drop_payload_assigned/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    let d = &diagnostics[0];
+    assert_eq!(d.code, codes::V0304);
+    assert!(
+        has_note(d, "`s` stays inside the `Msg` matched on"),
+        "{d:#?}"
+    );
+    assert_eq!(
+        d.fix_it.as_ref().map(|fix| fix.replacement.as_str()),
+        Some(".clone()")
+    );
+}
+
+#[test]
+fn a_struct_payload_of_a_drop_temporary_changed_through_a_let_names_the_let_and_offers_no_fix() {
+    let (result, _) =
+        check_path("crates/varyk/tests/fixtures/interop/drop_payload_changed/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    let d = &diagnostics[0];
+    assert_eq!(d.code, codes::V0303);
+    assert_eq!(
+        d.message,
+        "`add` may change `b`, but `b` stays inside `Guard`, which runs code when it is thrown \
+         away, so it cannot be changed here"
+    );
+    assert!(d.fix_it.is_none(), "{d:#?}");
+}
+
+#[test]
+fn a_payload_kept_from_a_drop_enum_offers_clone_only_for_a_string_and_names_the_enum() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/drop_payload_kept/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
+    assert!(diagnostics.iter().all(|d| d.code == codes::V0304));
+    // A stored enum: the `Acc` payload can be read, not kept.
+    let stored = &diagnostics[0];
+    assert!(
+        has_note(stored, "`a` can be read here, but not kept"),
+        "{stored:#?}"
+    );
+    assert!(
+        !stored.notes.iter().any(|n| n.contains(".clone()")),
+        "{stored:#?}"
+    );
+    // A temporary: the note names the enum and says why.
+    let temporary = &diagnostics[1];
+    assert!(
+        has_note(
+            temporary,
+            "`a` stays inside the `Guard` matched on, which runs code when it is thrown away"
+        ),
+        "{temporary:#?}"
+    );
+    assert!(
+        !temporary.notes.iter().any(|n| n.contains(".clone()")),
+        "{temporary:#?}"
+    );
+    // A `string` payload can be copied.
+    let text = &diagnostics[2];
+    assert!(
+        has_note(text, "copy it with `.clone()` to keep it"),
+        "{text:#?}"
+    );
+}
+
+#[test]
+fn a_type_name_starting_with_a_vowel_takes_an() {
+    let (d, _) = one_error(
+        "struct Acc {\n    name: string,\n}\n\nfn mk() -> Acc {\n    Acc { name: \"a\" }\n}\n\nfn f() -> string {\n    mk().name\n}\n\nfn main() {}\n",
+    );
+    assert!(d.message.contains("kept inside an `Acc`,"), "{d:#?}");
+    assert_eq!(super::article("P"), "a");
+    assert_eq!(super::article("Order"), "an");
+    assert_eq!(super::article("User"), "a");
+    assert_eq!(super::article("Unit"), "a");
+    assert_eq!(super::article("Item"), "an");
 }

@@ -1,5 +1,5 @@
 pub struct Task {
-    id: i32,
+    pub id: i32,
 }
 
 struct Hidden {

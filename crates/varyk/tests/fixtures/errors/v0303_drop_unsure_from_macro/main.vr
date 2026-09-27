@@ -1,0 +1,24 @@
+mod helper;
+
+enum Msg {
+    Text(string),
+    Quit,
+}
+
+fn make() -> Msg {
+    Msg::Text("hi")
+}
+
+fn shout(mut s: string) {
+    s = "hey";
+    println!("{}", s);
+}
+
+fn main() {
+    match make() {
+        Msg::Text(s) => {
+            shout(s);
+        }
+        Msg::Quit => {}
+    }
+}

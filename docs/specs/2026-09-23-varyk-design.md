@@ -2,10 +2,15 @@
 
 Date: 2026-09-23.
 
-**Status.** Milestone 1 is implemented. Varyk is experimental and pre-0.1:
-any syntax, diagnostic code, or command-line flag in this document may change
-until a 0.1 release, which is not scheduled. Discussion happens in the issues
-of this repository.
+**Status.** Milestones 1–3 are implemented. Varyk is experimental and
+pre-1.0; a breaking change bumps the minor version. Discussion happens in
+the issues of this repository.
+
+*Editor's note, 2026-09-27:* §1's wording was updated to the services
+framing ("a programming language for backend services", formerly "a systems
+programming language"), §2's audiences were reordered to put backend
+developers first, and §3's principle 2 now names that developer as the first
+tie-breaker, as `docs/design.md` does; the compiler design is unchanged.
 
 This is the design specification the compiler is built from. Shorter
 documents derived from it are `docs/design.md`, `docs/language.md`, and
@@ -13,9 +18,10 @@ documents derived from it are `docs/design.md`, `docs/language.md`, and
 
 ## 1. Summary
 
-Varyk is a systems programming language with Rust-like safety and Go-like
-simplicity. It compiles to Rust and runs on the Rust ecosystem, in the same way
-TypeScript compiles to JavaScript and runs on the JavaScript ecosystem.
+Varyk is a programming language for backend services with Rust-like safety
+and Go-like simplicity. It compiles to Rust and runs on the Rust ecosystem, in
+the same way TypeScript compiles to JavaScript and runs on the JavaScript
+ecosystem.
 
 The name is Lithuanian for "go!" or "go on!", the imperative of *varyti*.
 Files use the `.vr` extension. The compiler binary is `varyk`. The compiler is
@@ -42,17 +48,17 @@ This section describes the language Varyk is designed to become. Section 4
 lists what milestone 1 implements, and section 8 schedules the rest. Varyk
 must be attractive to four audiences at once.
 
-A developer arriving from JavaScript, TypeScript, Go, or Python sees:
+A developer building services in Go, TypeScript, or Python sees:
 
 - native speed and memory safety without a garbage collector;
 - `async`/`await` that looks like JavaScript, with a built-in runtime
-  (milestone 3);
+  (milestone 5);
 - one string type, no reference sigils, no lifetime annotations;
 - one toolchain and one package registry, inherited from Cargo and crates.io
-  (milestone 2);
+  (milestone 3);
 - the TypeScript story: adopt gradually, drop to the underlying language when
   needed, publish packages other people consume without knowing the source
-  language (milestone 2).
+  language (milestone 3).
 
 A Rust developer sees:
 
@@ -64,16 +70,7 @@ A Rust developer sees:
 - `.rs` files next to `.vr` files in the same package, built by the same
   `cargo`;
 - Varyk packages are Cargo packages and publish to crates.io as ordinary
-  crates (milestone 2).
-
-A person who has never programmed sees:
-
-- one way to do each thing, a small grammar, and no symbols that have to
-  be memorized before the first program makes sense;
-- error messages written in plain words that say what to change, without
-  assuming Rust vocabulary such as "borrow" or "lifetime";
-- a language reference short enough to read in one sitting, and a beginner's
-  guide written for them (milestone 4).
+  crates (milestone 3).
 
 An AI coding agent sees:
 
@@ -89,6 +86,14 @@ An AI coding agent sees:
 - a language reference short enough to fit in a prompt;
 - one way to do each thing; `varyk check` for surface errors without invoking
   cargo, `varyk build` for the full check.
+
+Someone writing their first program sees:
+
+- one way to do each thing, a small grammar, and no symbols that have to
+  be memorized before the first program makes sense;
+- error messages written in plain words that say what to change, without
+  assuming Rust vocabulary such as "borrow" or "lifetime";
+- a language reference short enough to read in one sitting.
 
 ### Prior art
 
@@ -124,8 +129,9 @@ In priority order. When two conflict, the earlier one wins.
    are preserved. The generated Rust is checked by rustc, and Varyk never works
    around rustc with unsafe code.
 2. **Newcomer first, human or agent.** Every tie-breaker on the surface
-   language goes toward someone who has never programmed, then toward the
-   developer who has never written Rust. AI agents
+   language goes toward the developer building services who has never
+   written Rust. Learnability is a value in its own right: the language and
+   its diagnostics should be learnable without a Rust background. AI agents
    are first-class writers of Varyk. Where their needs and human readability
    diverge, human readability wins.
 3. **Rust syntax with sigils inferred.** Functions borrow their arguments by
@@ -187,7 +193,7 @@ Unsupported features must fail loudly. Nothing may silently mis-compile.
   "unsupported" diagnostic when used, so a Varyk identifier is always a valid
   Rust identifier.
 - Items: `fn`, `struct`, `mod name;`, each optionally preceded by `pub`.
-  Fields of a `pub struct` are public. Field-level `pub` is milestone 2.
+  Fields of a `pub struct` are public. Field-level `pub` is milestone 3.
 - The entry file must define `fn main()` with no parameters and no return
   value. Modules must not define `main`.
 - Types: `bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`,
@@ -295,8 +301,8 @@ The rules for what may flow into an owned slot:
   afterwards, whatever its representation;
 - a **borrowed place** is an error, with a diagnostic naming the parameter.
   Converting it would be a hidden copy of the string's bytes, which principle
-  1 forbids. Milestone 2 adds lifetime inference for borrowed returns and an
-  explicit copy spelling.
+  1 forbids. Milestone 4 adds lifetime inference for borrowed returns, and
+  milestone 2 an explicit copy spelling.
 
 The table illustrates the rules. The exact reference and dereference
 operators in generated code are chosen by type, as section 6.3 describes;
@@ -332,7 +338,7 @@ two of the languages section 2 targets.
 In milestone 1, return values are always owned. A literal return converts, an
 owned value moves, and returning a borrowed place, such as
 `fn name(user: User) -> string { user.name }`, is rejected by the rule in
-section 4.2. Lifetime inference for borrowed returns is milestone 2 work, and
+section 4.2. Lifetime inference for borrowed returns is milestone 4 work, and
 the HIR is designed to carry it.
 
 ### 4.5 Modules and Rust interop
@@ -348,7 +354,7 @@ referenced through their module path, as in
 A `.vr` module is compiled like the entry file, except that it must not define
 `main`. Its items are visible to the importer only when declared `pub`.
 Milestone 1 supports one level: modules declared in the entry file only, no
-nested `mod`, and no `mod.vr` directories. Nesting is milestone 2.
+nested `mod`, and no `mod.vr` directories. Nesting is milestone 3.
 
 Every module, Varyk or Rust, becomes `src/<name>.rs` in the generated crate,
 declared by a `mod <name>;` line in the generated `main.rs`, so the generated
@@ -506,7 +512,7 @@ varyk/
 
 `varyk-syntax` is separate so a formatter and language server can reuse it
 without depending on semantic analysis. A `varyk-std` crate for JSON, logging,
-HTTP, and the async runtime arrives in milestone 3.
+HTTP, and the async runtime arrives in milestone 5.
 
 ### 6.2 Pipeline
 
@@ -603,7 +609,7 @@ are warnings generated code triggers routinely; the last two are rustc's
 compile-time refusals of constant overflow and division by zero, allowed so
 that such a program panics at run time with Rust's own message, as it would
 with non-constant operands. In milestone 1 the attribute also covers copied
-`.rs` modules; per-file handling is milestone 2.
+`.rs` modules; per-file handling is milestone 3.
 
 The generated Rust is emitted by the backend in a deterministic, readable
 style, and builds do not depend on rustfmt being installed. `--emit-rust`
@@ -624,7 +630,7 @@ Rust and where that Rust can be inspected with `--emit-rust`. None of the six
 examples reach this path, and Varyk's own checks catch the common mistakes
 before cargo runs.
 
-Milestone 2 adds a source map from generated lines to Varyk spans and reports
+Milestone 3 adds a source map from generated lines to Varyk spans and reports
 Rust-layer errors as Varyk diagnostics at the Varyk location, keeping errors
 in copied `.rs` modules in the user's own terms. Improving the wording of
 those errors, case by case, is ongoing work after that.
@@ -693,7 +699,7 @@ to the `.vr` files.
 
 ### 6.8 Packages and Cargo
 
-A Varyk package is a Cargo package. From milestone 2 on, its manifest is
+A Varyk package is a Cargo package. From milestone 3 on, its manifest is
 `Cargo.toml`, its dependencies are declared the Cargo way, `cargo add` works
 unchanged, and any Varyk-specific settings go under Cargo's
 `[package.metadata.varyk]` table. There is no separate Varyk manifest.
@@ -705,7 +711,7 @@ manifest.
 `varyk` drives `cargo`: it transpiles into a shadow crate under `target/varyk/`
 and invokes cargo there, keeping diagnostics under Varyk's control. The
 alternative, a `build.rs` that lets plain `cargo build` drive Varyk so existing
-Cargo tooling needs no Varyk-aware steps, arrives in milestone 2 as a
+Cargo tooling needs no Varyk-aware steps, arrives in milestone 3 as a
 `varyk init` template; it requires the `varyk` binary on the path of whoever
 builds the package.
 
@@ -736,12 +742,12 @@ surface on one page: syntax, types, the ownership rules, the string rules, and
 the diagnostics a writer is likely to meet, ending with the list of codes. It
 is deliberately short enough to paste into a prompt and is updated in the same
 change as any surface addition. A test that checks it against the parser is
-milestone 2.
+milestone 4.
 
 ## 8. Roadmap
 
-`docs/roadmap.md` is the living version of this section and uses the same
-milestone titles.
+Superseded by `docs/roadmap.md`, the living roadmap. This section is kept as
+written on 2026-09-23; its milestone numbers and titles are out of date.
 
 - **Milestone 1: compiler skeleton and the borrow-by-default proof.** This
   spec: six examples, modules, interop proof.
@@ -802,11 +808,26 @@ Recorded, deliberately unanswered.
   with a fix-it.
 - What error-handling ergonomics beyond `Result` and `?` are worth adding?
 - Should Rust enums and generic types from `.rs` modules be imported
-  automatically, as structs will be in milestone 3?
+  automatically, as structs will be in milestone 3? Half-answered in
+  milestone 3: enums are imported automatically; generic types remain open.
 - Should `match` on an owned local move it, as in Rust, so that its parts
   can be taken out without a copy? Milestone 2 borrows every place it
   matches on, so an owned `Option<Task>` local can only be opened by
   matching on the call that produced it.
+- Should Varyk code ever `use` a crate directly, once traits exist? The
+  facade rule of the milestone-3 spec (section 1) is the answer until then,
+  and may remain it. An experiment, listed as unscheduled in the roadmap.
+- Will generics ever be Varyk surface syntax? Milestone 3 assumes not and
+  designs the facade around that.
+- Should a Varyk library be importable from Varyk without a facade, given
+  that its public API is already Varyk-shaped?
+- The site's hero shows a service as milestone 5 is meant to write it, and
+  that example assumes four things this spec has not decided: standard
+  modules `http`, `db`, and `json` reachable without `use`; one shared
+  `Error` type so `?` works across them; automatic serde derivation for
+  structs; and expected-type inference for a query result. Each is settled
+  by the milestone-5 spec, and the site copies the real example once it
+  exists.
 
 ## 10. Decisions log
 

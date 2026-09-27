@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0111]: `use` cannot name a variant; `Shape` can already be used here, so write `Shape::Circle`
+ --> crates/varyk/tests/fixtures/errors/v0111_use_variant/main.vr:5:5
+  |
+5 | use Shape::Circle;
+  |     ^^^^^^^^^^^^^ `use` cannot name a variant; `Shape` can already be used here, so write `Shape::Circle`

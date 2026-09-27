@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0403]: `[package]` needs a `name`
+ --> crates/varyk/tests/fixtures/errors/v0403_missing_name/Cargo.toml:1:2
+  |
+1 | [package]
+  |  ^^^^^^^ `[package]` needs a `name`

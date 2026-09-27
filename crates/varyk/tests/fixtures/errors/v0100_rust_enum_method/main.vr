@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    let k = ext::make();
+    println!("{}", k.count());
+}

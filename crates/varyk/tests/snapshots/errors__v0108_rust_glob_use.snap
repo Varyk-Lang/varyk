@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: `ext::two` cannot be called from Varyk, because `ext.rs` could redefine the types its signature names
+ --> crates/varyk/tests/fixtures/errors/v0108_rust_glob_use/main.vr:4:20
+  |
+4 |     println!("{}", ext::two());
+  |                    ^^^^^^^^^^ `ext::two` cannot be called from Varyk, because `ext.rs` could redefine the types its signature names
+  |
+  = note: this Rust file has a glob `use` (`use ...::*`), which could bring in its own `i32`; replace the glob with the names the file needs

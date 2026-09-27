@@ -1,0 +1,6 @@
+mod util;
+pub mod shape;
+
+pub fn area(width: i64, height: i64) -> i64 {
+    util::scale(width * height, 1)
+}

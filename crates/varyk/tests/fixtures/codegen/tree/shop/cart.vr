@@ -1,0 +1,23 @@
+pub mod item;
+
+pub struct Cart {
+    pub total: i32,
+}
+
+impl Cart {
+    pub fn new() -> Cart {
+        Cart { total: super::start() }
+    }
+
+    pub fn add(mut self, item: self::item::Item) {
+        self.total = self.total + item::cost(item);
+    }
+}
+
+pub fn size(cart: Cart) -> super::Size {
+    if cart.total > 4 {
+        super::Size::Large(cart.total)
+    } else {
+        crate::shop::Size::Small
+    }
+}

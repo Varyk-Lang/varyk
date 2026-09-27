@@ -1,0 +1,5 @@
+mod ext;
+
+fn main() {
+    let t = ext::total();
+}

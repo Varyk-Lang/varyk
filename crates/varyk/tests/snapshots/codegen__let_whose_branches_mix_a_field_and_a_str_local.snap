@@ -2,12 +2,12 @@
 source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn main() {\\n    let user = User { name: \\\"Ann\\\" };\\n    let other = \\\"Bob\\\";\\n    let n = if true {\\n        user.name\\n    } else {\\n        other\\n    };\\n    println!(\\\"{}\\\", n);\\n}\\n\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 struct User {
     name: String,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let user = User { name: "Ann".to_string() };
     let other = "Bob";
@@ -16,5 +16,5 @@ fn main() {
     } else {
         other
     };
-    println!("{}", n);
+    ::std::println!("{}", n);
 }

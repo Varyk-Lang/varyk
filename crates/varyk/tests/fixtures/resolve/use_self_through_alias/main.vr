@@ -1,0 +1,6 @@
+mod a;
+
+use self::aa::g;
+use a as aa;
+
+fn main() {}

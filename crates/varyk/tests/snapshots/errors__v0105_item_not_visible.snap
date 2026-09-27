@@ -2,11 +2,11 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0105]: function `math::square` is not marked `pub`, so it can only be used inside its own module
+error[V0105]: function `math::square` is not marked `pub`, so it can only be used inside its own module and the modules within it
  --> crates/varyk/tests/fixtures/errors/v0105_item_not_visible/main.vr:4:20
   |
 4 |     println!("{}", math::square(7));
-  |                    ^^^^^^^^^^^^ function `math::square` is not marked `pub`, so it can only be used inside its own module
+  |                    ^^^^^^^^^^^^ function `math::square` is not marked `pub`, so it can only be used inside its own module and the modules within it
   |
  ::: crates/varyk/tests/fixtures/errors/v0105_item_not_visible/math.vr:1:1
   |

@@ -10,7 +10,8 @@ pub use varyk_syntax::{V0001, V0002, V0003, V0010, V0011, V0012};
 
 /// Unknown name.
 pub const V0100: &str = "V0100";
-/// Unknown type.
+/// Unknown type, or a Rust struct Varyk did not import (generic, tuple,
+/// or unit).
 pub const V0101: &str = "V0101";
 /// Unknown field.
 pub const V0102: &str = "V0102";
@@ -18,16 +19,28 @@ pub const V0102: &str = "V0102";
 pub const V0103: &str = "V0103";
 /// Module file missing, ambiguous, unparseable, or named `main`.
 pub const V0104: &str = "V0104";
-/// Item not visible, needs `pub`.
+/// Item or field not visible, needs `pub`; or a struct literal with
+/// fields that cannot be set here.
 pub const V0105: &str = "V0105";
-/// Missing or malformed `main`.
+/// Missing or malformed `main`, or `main` in a library's `src/lib.vr`.
 pub const V0106: &str = "V0106";
 /// `String` or `str` spelled where `string` is meant.
 pub const V0107: &str = "V0107";
-/// Unsupported Rust signature.
+/// Unsupported Rust signature, or a field whose Rust type Varyk cannot
+/// use.
 pub const V0108: &str = "V0108";
 /// A struct that contains itself, directly or through other structs.
 pub const V0109: &str = "V0109";
+/// `use` of a crate this compiler recognizes by name (`std`, `core`,
+/// `alloc`, and a package's `[dependencies]`);
+/// Varyk code reaches crates through a `.rs` module in the package. A
+/// leading name it does not recognize as a crate is V0100 instead (with a
+/// note), so a typo of a local module name is not misreported as one.
+pub const V0110: &str = "V0110";
+/// A path Varyk cannot follow: a variant, `super` in the crate root, or a
+/// `use` leading name that is a module declared elsewhere in the crate,
+/// reachable only through `crate::`.
+pub const V0111: &str = "V0111";
 /// Type mismatch.
 pub const V0200: &str = "V0200";
 /// Wrong argument count.
@@ -66,3 +79,21 @@ pub const V0306: &str = "V0306";
 /// A place changed or given away while another name for part of it is
 /// still used later.
 pub const V0307: &str = "V0307";
+/// The package's edition is not 2024.
+pub const V0400: &str = "V0400";
+/// `workspace = true` in the manifest, or a target-specific dependency
+/// table; not supported yet.
+pub const V0401: &str = "V0401";
+/// A target table (`[lib]`, `[[bin]]`, ...) with a `path`: a package's
+/// roots are fixed at `src/main.vr` and `src/lib.vr`.
+pub const V0402: &str = "V0402";
+/// This `Cargo.toml` cannot be used: unreadable, not valid TOML, no
+/// `[package]` `name`, an invalid or reserved `name`, or both or neither
+/// of `src/main.vr` and `src/lib.vr`.
+pub const V0403: &str = "V0403";
+/// The Rust rustc compiled from a generated file was rejected, at the
+/// Varyk line that produced it; carries rustc's message and code and asks
+/// for a bug report, since Varyk's own checks should have caught this
+/// first (spec 5). An error or warning in a copied `.rs` module is the
+/// user's own Rust and is not this code: it passes through at their file.
+pub const V0900: &str = "V0900";

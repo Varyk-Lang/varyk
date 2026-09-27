@@ -6,11 +6,12 @@ project coherent, and where to find everything else.
 
 ## What this is
 
-Varyk is an experimental programming language that compiles to Rust. The
-compiler is a Rust workspace: `crates/varyk-syntax` (lexer, parser, AST) and
-`crates/varyk` (diagnostics, resolver, type checker, borrow analysis, Rust
-backend, cargo driver, CLI). The design lives in `docs/specs/`; read the
-current spec before changing what the language accepts or how it compiles.
+Varyk is an experimental programming language for backend services that
+compiles to Rust. The compiler is a Rust workspace: `crates/varyk-syntax`
+(lexer, parser, AST) and `crates/varyk` (diagnostics, resolver, type
+checker, borrow analysis, Rust backend, cargo driver, CLI). The design lives
+in `docs/specs/`; read the current spec before changing what the language
+accepts or how it compiles.
 
 ## The gate
 
@@ -24,8 +25,9 @@ cargo test --workspace
 
 CI runs the same on stable and on the minimum supported Rust version, 1.85.
 Do not use language features newer than 1.85 (let-chains, for example).
-The twelve programs under `examples/` must keep building and printing their
-expected output; `crates/varyk/tests/examples.rs` checks that.
+The programs under `examples/`, single files and the packages in
+`examples/packages/`, must keep building and printing their expected
+output; `crates/varyk/tests/examples.rs` checks that.
 
 ## Rules that are not obvious from the code
 
@@ -38,12 +40,22 @@ expected output; `crates/varyk/tests/examples.rs` checks that.
   that passes `varyk check` should compile under rustc; when you find one
   that does not, fix the check, not the docs.
 - **The Rust layer is rustc's job.** A `.rs` module is copied into the
-  generated crate as it is. `varyk check` reads its public function
-  signatures and rejects the few things that can never build there (a
-  dependency, a file include, a nested module file); it does not validate
+  generated crate as it is. `varyk check` reads its public functions,
+  structs, methods, and enums, and rejects the few things that can never
+  build there (a crate the package does not depend on, a file include, a
+  nested module file); it does not validate
   the Rust inside, and it is not meant to. `varyk build` is the authority
   for Rust code, and a `.rs` file that rustc rejects is a bug in that file.
   Do not extend the importer to chase further ways Rust code can fail.
+- **`Cargo.toml` is cargo's job the same way.** `varyk check` reads what
+  Varyk needs from it, refuses what no crate Varyk builds could honor (a
+  fixed list of keys, workspace inheritance, `[patch]`, `[lints]`, extra
+  targets, ...), and checks the shape of what it accepts; the syntax of
+  values it does not interpret is cargo's to check. Every crate Varyk
+  builds uses the package's own manifest (`Package::isolated_manifest`), so
+  cargo's verdict is the same under `varyk build`, `varyk publish`, and
+  plain `cargo build`, and a manifest cargo rejects is a bug in that
+  manifest. Do not chase further ways cargo can reject a manifest.
 - **No hidden allocation.** The compiler inserts exactly one allocation, a
   string literal placed into an owned slot. Never solve an ownership
   problem by emitting `.clone()` or `.to_string()` on anything else.
@@ -70,16 +82,22 @@ the version and go in the changelog; `docs:`, `test:`, `ci:`, `chore:`,
 concern per commit: squash-merge a single-concern pull request under a
 conventional title, rebase-merge a multi-concern one with a conventional
 commit per concern. release-please turns the history on `main` into a
-release pull request; merging that tags `varyk-vX.Y.Z` and
-`varyk-syntax-vX.Y.Z` and publishes both crates after approval in the
-`release` environment. Never create release tags by hand. Details and the
+release pull request; merging that is the release decision: it tags
+`varyk-vX.Y.Z` and `varyk-syntax-vX.Y.Z` and publishes both crates, with no
+further approval. Never create release tags by hand. Details and the
 full prefix table are in `CONTRIBUTING.md`.
 
 ## Where things are
 
+- `crates/varyk/src/` `package.rs` reads `Cargo.toml`; `resolve/` loads
+  the module tree and resolves names, `use`, and visibility; `interop/`
+  imports `.rs` modules with `syn`; `driver/` writes the generated tree and
+  runs cargo, `init`, `emit`, and `publish`
 - `docs/specs/` the design the compiler is built from, with its decisions log
 - `docs/language.md` the one-page reference, including every diagnostic code
 - `docs/roadmap.md` what comes next; `docs/plans/` implementation plans and
   the follow-ups left from each milestone
+  (`2026-09-23-milestone-1-followups.md`,
+  `2026-09-26-milestone-3-followups.md`)
 - `docs/open-questions.md` design questions deliberately not yet answered
 - `SECURITY.md`, `TRADEMARKS.md`, `LICENSE-MIT`, `LICENSE-APACHE`

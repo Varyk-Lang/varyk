@@ -2,13 +2,16 @@
 //! (spec 3.1, 3.2): their place info, and the wording of the diagnostics
 //! about changing or keeping them.
 
-use varyk_syntax::{FixIt, Span};
+use varyk_syntax::{FixIt, SourceFile, Span};
 
 use super::{FnAnalyzer, place_root, roots};
 use crate::diagnostics::Diagnostic;
 use crate::hir::{
     HirArm, HirBlock, HirExpr, HirExprKind, HirForHead, LocalId, Origin, PlaceInfo, is_place,
+    matched_in_place,
 };
+use crate::resolve::EnumId;
+use crate::types::Ty;
 
 /// What a `match` pattern binding or a `for` variable is bound to, for the
 /// wording of the diagnostics about it (spec 3.1, 3.4).
@@ -26,6 +29,13 @@ pub(super) struct Bound {
     /// Just inside the arm's or loop's body when it is a block: where a
     /// `let mut n = n;` can go.
     body_start: Option<Span>,
+    /// The arm's body when it is not a block: what a block holding a
+    /// `let mut n = n;` and then it can replace.
+    arm_body: Option<Span>,
+    /// The name of the enum a `match` on a temporary looks inside because
+    /// it runs code when it is thrown away (spec 3.4): the binding is part
+    /// of it, and gone with it.
+    dropped: Option<EnumId>,
 }
 
 impl FnAnalyzer<'_> {
@@ -34,17 +44,21 @@ impl FnAnalyzer<'_> {
     /// rooted where the scrutinee is, and one of a Copy value is a copy; on
     /// a temporary, every binding owns its value. None can be changed.
     pub(super) fn pattern(&mut self, scrutinee: &HirExpr, arm: &HirArm) {
-        let place = is_place(scrutinee);
+        let place = matched_in_place(self.cx.enums, scrutinee);
         let root = place_root(scrutinee);
         let origin = self.head_origin(scrutinee);
         let owned_local = matches!(scrutinee.kind, HirExprKind::Local(id)
             if !self.is_param(id) && !self.local(id).place.borrowed);
-        let body_start = match &arm.body.kind {
+        let dropped = match scrutinee.ty {
+            Ty::Enum(id) if place && !is_place(scrutinee) => Some(id),
+            _ => None,
+        };
+        let (body_start, arm_body) = match &arm.body.kind {
             HirExprKind::Block(block) => {
                 let at = block.span.start + 1;
-                Some(Span::new(block.span.file, at, at))
+                (Some(Span::new(block.span.file, at, at)), None)
             }
-            _ => None,
+            _ => (None, Some(arm.body.span)),
         };
         for (local, whole) in arm.pattern.bindings() {
             let index = local.0 as usize;
@@ -56,7 +70,9 @@ impl FnAnalyzer<'_> {
             };
             self.blame[index] = Some(local);
             if alias {
-                self.refers[index] = (false, roots(scrutinee));
+                // An alias into a temporary (of an enum with a
+                // destructor) is gone once the `match` ends.
+                self.refers[index] = (!is_place(scrutinee), roots(scrutinee));
             }
             self.patterns[index] = Some(Bound {
                 looped: false,
@@ -64,6 +80,8 @@ impl FnAnalyzer<'_> {
                 whole: whole && matches!(scrutinee.kind, HirExprKind::Local(_)),
                 owned_local,
                 body_start,
+                arm_body,
+                dropped,
             });
         }
     }
@@ -98,6 +116,8 @@ impl FnAnalyzer<'_> {
             whole: false,
             owned_local: false,
             body_start: Some(Span::new(body.span.file, at, at)),
+            arm_body: None,
+            dropped: None,
         });
     }
 
@@ -117,17 +137,22 @@ impl FnAnalyzer<'_> {
     /// `match` pattern or a `for` bound, which is read-only (spec 3.1): an
     /// alias says to change the original; a copy or an owned value gets
     /// the fix-it `let mut n = n;` at the start of its arm's or loop's
-    /// block.
+    /// block. `written` is the name changed at `span`: `binding` itself,
+    /// or a `let` that took `binding`'s value.
     pub(super) fn binding_unchangeable(
         &self,
         code: &'static str,
         span: Span,
         binding: LocalId,
+        written: LocalId,
         callee: &str,
     ) -> Diagnostic {
         let bound = self.patterns[binding.0 as usize].expect("a pattern binding");
         let info = self.local(binding);
         let name = &info.name;
+        if let (Some(id), true) = (bound.dropped, info.place.borrowed) {
+            return self.dropped_unchangeable(code, span, binding, written, callee, bound, id);
+        }
         let lead = if callee.is_empty() {
             String::new()
         } else {
@@ -191,16 +216,88 @@ impl FnAnalyzer<'_> {
                          first make a changeable copy with `let mut {name} = {name};`"
                     ),
                 );
-                if let Some(at) = bound.body_start {
-                    diagnostic = diagnostic.with_fix_it(FixIt {
-                        span: at,
-                        replacement: format!(" let mut {name} = {name};"),
-                    });
+                if let Some(fix_it) = self.first_in_body(bound, format!("let mut {name} = {name};"))
+                {
+                    diagnostic = diagnostic.with_fix_it(fix_it);
                 }
                 diagnostic
             }
         };
         diagnostic.with_label(info.span, format!("`{name}` is bound here"))
+    }
+
+    /// [`Self::binding_unchangeable`] for `binding`, which stays inside a
+    /// temporary of enum `id`, which runs code when it is thrown away: a
+    /// `string` can be copied with `.clone()` and the copy changed; nothing
+    /// else can be changed here at all.
+    #[allow(clippy::too_many_arguments)]
+    fn dropped_unchangeable(
+        &self,
+        code: &'static str,
+        span: Span,
+        binding: LocalId,
+        written: LocalId,
+        callee: &str,
+        bound: Bound,
+        id: EnumId,
+    ) -> Diagnostic {
+        let info = self.local(binding);
+        let name = &info.name;
+        let shown = &self.local(written).name;
+        let lead = if callee.is_empty() {
+            String::new()
+        } else {
+            format!("`{callee}` may change `{shown}`, but ")
+        };
+        let def = &self.cx.enums[id.0 as usize];
+        let owner = &def.name;
+        let runs = def.drops.as_ref().map_or("runs", |cause| cause.runs());
+        let stays = format!(
+            "{lead}`{shown}` stays inside `{owner}`, which {runs} code when it is thrown away, so \
+             it cannot be changed here"
+        );
+        let mut diagnostic = if info.ty == Ty::String {
+            let copy = format!("let mut {shown} = {name}.clone();");
+            let mut diagnostic = Diagnostic::new(
+                code,
+                span,
+                format!("{stays}; to change it, first make a changeable copy with `{copy}`"),
+            );
+            if let (Some(fix_it), true) = (self.first_in_body(bound, copy), written == binding) {
+                diagnostic = diagnostic.with_fix_it(fix_it);
+            }
+            diagnostic
+        } else {
+            Diagnostic::new(code, span, stays)
+        };
+        if let Some(cause) = &def.drops {
+            diagnostic = diagnostic.with_note(cause.note(owner));
+        }
+        diagnostic.with_label(info.span, format!("`{name}` is bound here"))
+    }
+
+    /// The fix-it putting `stmt` first in the body of `bound`'s arm or
+    /// loop: inserted inside a block, or, for an arm whose body is not a
+    /// block, a block made of `stmt` and that body; `None` when neither is
+    /// known.
+    fn first_in_body(&self, bound: Bound, stmt: String) -> Option<FixIt> {
+        if let Some(at) = bound.body_start {
+            return Some(FixIt {
+                span: at,
+                replacement: format!(" {stmt}"),
+            });
+        }
+        let body = bound.arm_body?;
+        let text = self
+            .cx
+            .sources
+            .get(body.file.0 as usize)?
+            .text
+            .get(body.start as usize..body.end as usize)?;
+        Some(FixIt {
+            span: body,
+            replacement: format!("{{ {stmt} {text} }}"),
+        })
     }
 
     /// For `leaf`, a name a `match` on an owned `let` bound: what to do to
@@ -210,15 +307,107 @@ impl FnAnalyzer<'_> {
         let HirExprKind::Local(id) = leaf.kind else {
             return None;
         };
+        self.binding_advice(id)
+    }
+
+    /// For `id`, a name a `match` on a temporary of an enum with a
+    /// destructor bound (an alias gone once the `match` ends): why it
+    /// cannot be kept, and, for a `string`, to copy it with `.clone()`.
+    pub(super) fn dropped_advice(&self, id: LocalId) -> Option<String> {
         let bound = self.patterns[id.0 as usize]?;
-        let root = &self.local(bound.root?).name;
-        let name = &self.local(id).name;
+        if bound.dropped.is_none() || !self.local(id).place.borrowed {
+            return None;
+        }
+        self.binding_advice(id)
+    }
+
+    /// [`Self::match_on_the_call`] for the binding `id`.
+    fn binding_advice(&self, id: LocalId) -> Option<String> {
+        let bound = self.patterns[id.0 as usize]?;
+        let info = self.local(id);
+        let name = &info.name;
+        // Only a `string` has a `clone`.
+        let keep = if info.ty == Ty::String {
+            "copy it with `.clone()` to keep it".to_string()
+        } else {
+            format!("`{name}` can be read here, but not kept")
+        };
+        if let Some(dropped) = bound.dropped {
+            let def = &self.cx.enums[dropped.0 as usize];
+            let owner = &def.name;
+            let runs = def.drops.as_ref().map_or("runs", |cause| cause.runs());
+            let aside = def
+                .drops
+                .as_ref()
+                .map_or_else(String::new, |cause| format!(" ({})", cause.aside(owner)));
+            return Some(format!(
+                "`{name}` stays inside the `{owner}` matched on, which {runs} code when it is \
+                 thrown away, so nothing can take `{name}` out of it; {keep}{aside}"
+            ));
+        }
+        let root_info = self.local(bound.root?);
+        let root = &root_info.name;
+        let drops = match root_info.ty {
+            Ty::Enum(e) => {
+                let def = &self.cx.enums[e.0 as usize];
+                def.drops
+                    .as_ref()
+                    .map(|cause| (cause.runs(), cause.aside(&def.name)))
+            }
+            _ => None,
+        };
         bound.owned_local.then(|| {
+            if let Some((runs, aside)) = drops {
+                return format!(
+                    "`match` on a stored value only looks inside it, so `{name}` stays inside \
+                     `{root}`, and the type of `{root}` {runs} code when it is thrown away, so \
+                     nothing can take `{name}` out of it; {keep} ({aside})"
+                );
+            }
             format!(
                 "`match` on a stored value only looks inside it, so `{name}` stays inside \
                  `{root}`; to take it out, `match` on the call that made `{root}` instead of \
                  storing its result with `let` first"
             )
         })
+    }
+}
+
+/// Makes the fix-its of [`FnAnalyzer::first_in_body`] that each wrap the
+/// same arm body in a block one fix-it: the first diagnostic gets a block
+/// holding every copy and then the body, and the others lose theirs, so
+/// no two fix-its replace the same text.
+pub(super) fn merge_arm_fix_its(sources: &[SourceFile], diagnostics: &mut [Diagnostic]) {
+    for first in 0..diagnostics.len() {
+        let Some(fix_it) = &diagnostics[first].fix_it else {
+            continue;
+        };
+        let body = fix_it.span;
+        let Some(text) = sources
+            .get(body.file.0 as usize)
+            .and_then(|file| file.text.get(body.start as usize..body.end as usize))
+        else {
+            continue;
+        };
+        let end = format!(" {text} }}");
+        let stmt = |fix_it: &FixIt| {
+            (fix_it.span == body && body.start < body.end)
+                .then(|| fix_it.replacement.strip_prefix("{ ")?.strip_suffix(&end))
+                .flatten()
+                .map(str::to_string)
+        };
+        let Some(mut stmts) = stmt(fix_it) else {
+            continue;
+        };
+        for later in &mut diagnostics[first + 1..] {
+            if let Some(more) = later.fix_it.as_ref().and_then(stmt) {
+                stmts.push(' ');
+                stmts.push_str(&more);
+                later.fix_it = None;
+            }
+        }
+        if let Some(fix_it) = &mut diagnostics[first].fix_it {
+            fix_it.replacement = format!("{{ {stmts}{end}");
+        }
     }
 }

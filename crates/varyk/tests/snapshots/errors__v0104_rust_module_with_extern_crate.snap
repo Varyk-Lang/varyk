@@ -2,8 +2,8 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0104]: cannot parse `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/ext.rs`: depends on the crate `serde`, which is not supported: the generated crate has no dependencies
- --> crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/main.vr:1:1
+error[V0104]: `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/ext.rs` uses the crate `serde`, but a single file has no dependencies; make a package with `varyk init`, move `main.vr` and its module files into its `src/` (replacing the `src/main.vr` it wrote), and add `serde` under `[dependencies]`
+ --> crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/ext.rs:1:14
   |
-1 | mod ext;
-  | ^^^^^^^^ cannot parse `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/ext.rs`: depends on the crate `serde`, which is not supported: the generated crate has no dependencies
+1 | extern crate serde;
+  |              ^^^^^ `crates/varyk/tests/fixtures/errors/v0104_rust_module_with_extern_crate/ext.rs` uses the crate `serde`, but a single file has no dependencies; make a package with `varyk init`, move `main.vr` and its module files into its `src/` (replacing the `src/main.vr` it wrote), and add `serde` under `[dependencies]`

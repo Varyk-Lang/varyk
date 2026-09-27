@@ -2,16 +2,17 @@
 source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"fn show(s: string) {\\n    println!(\\\"{}\\\", s);\\n}\\n\\nfn make() -> string {\\n    \\\"made\\\"\\n}\\n\\nfn main() {\\n    let s = make();\\n    show(s);\\n    show(make());\\n}\\n\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn show(s: &str) {
-    println!("{}", s);
+    ::std::println!("{}", s);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn make() -> String {
     "made".to_string()
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let s = make();
     show(&s);

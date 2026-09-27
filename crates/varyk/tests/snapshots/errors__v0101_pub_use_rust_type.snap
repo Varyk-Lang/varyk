@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust type `ext::Map`
+ --> crates/varyk/tests/fixtures/errors/v0101_pub_use_rust_type/main.vr:3:12
+  |
+3 | fn show(m: ext::Map) {}
+  |            ^^^^^^^^ Varyk cannot use the Rust type `ext::Map`
+  |
+  = note: `Map` is not imported because it is a `pub use` re-export in `ext.rs`; write the type's own `pub struct` in that file, or, if it comes from another module of this package, name that module

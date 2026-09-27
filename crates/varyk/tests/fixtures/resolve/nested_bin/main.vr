@@ -1,0 +1,5 @@
+mod tools;
+
+fn main() {
+    tools::bin::run();
+}

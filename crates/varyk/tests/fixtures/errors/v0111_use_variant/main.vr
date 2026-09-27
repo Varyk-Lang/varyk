@@ -1,0 +1,7 @@
+enum Shape {
+    Circle(f64),
+}
+
+use Shape::Circle;
+
+fn main() {}

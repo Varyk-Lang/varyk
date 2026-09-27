@@ -1,0 +1,5 @@
+mod ext;
+
+fn main() {
+    let u = ext::U;
+}

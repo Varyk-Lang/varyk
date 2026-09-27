@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0100]: cannot find function `ext::total`
+ --> crates/varyk/tests/fixtures/errors/v0100_cfg_rust_function/main.vr:4:20
+  |
+4 |     println!("{}", ext::total());
+  |                    ^^^^^^^^^^ cannot find function `ext::total`
+  |
+  = note: `total` exists in the Rust file but is behind `#[cfg]`; Varyk does not import such functions

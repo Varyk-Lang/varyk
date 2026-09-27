@@ -9,3 +9,4 @@ error[V0108]: unsupported Rust signature: `ext::first` cannot be called from Var
   |                    ^^^^^^^^^^^^^ unsupported Rust signature: `ext::first` cannot be called from Varyk
   |
   = note: the Rust signature is `fn first<T>(value: T) -> T`
+  = note: Varyk cannot call a generic function; add a `pub fn` without type parameters to the Rust module that calls it

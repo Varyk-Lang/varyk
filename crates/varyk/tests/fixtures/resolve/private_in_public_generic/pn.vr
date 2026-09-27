@@ -1,0 +1,7 @@
+struct Hidden {}
+
+pub enum E {
+    A(Hidden),
+}
+
+pub fn f(x: Option<Hidden>) {}

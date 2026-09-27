@@ -126,6 +126,49 @@ fn call_args(expr: &HirExpr) -> &[HirExpr] {
     }
 }
 
+// --- Paths (spec 2.10, 3.1) --------------------------------------------------
+
+/// Every path position (type, call, associated call, struct literal,
+/// variant value, variant pattern) accepts a `crate::`/`self::`/`super::`
+/// prefix and any depth (spec 3.1).
+#[test]
+fn paths_through_nested_modules_check_in_every_position() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/resolve/tree/main.vr");
+    let program = result.unwrap_or_else(|d| panic!("tree should check: {d:#?}"));
+    let main = function(&program, "main");
+    let HirExprKind::Call { callee, .. } = &stmt_expr(main, 0).kind else {
+        panic!("shop::cart::Cart::new() is a call")
+    };
+    let Callee::Varyk(new) = callee else {
+        panic!("a Varyk callee")
+    };
+    assert_eq!(program.function(*new).name, "new");
+    let HirExprKind::StructLit { id, .. } = &stmt_expr(main, 1).kind else {
+        panic!("crate::shop::cart::Cart {{ .. }} is a struct literal")
+    };
+    assert_eq!(program.structs[id.0 as usize].name, "Cart");
+}
+
+#[test]
+fn super_in_the_crate_root_is_v0111() {
+    let (d, sources) = one_error("fn helper() {}\nfn main() {\n    super::helper();\n}\n");
+    assert_eq!(d.code, codes::V0111);
+    assert_eq!(d.span, span_of(&sources, "super"));
+}
+
+#[test]
+fn an_unknown_nested_module_in_a_call_or_pattern_is_v0100_naming_the_path() {
+    let (d, _) = one_error("fn main() {\n    shop::cart::Cart::new();\n}\n");
+    assert_eq!(d.code, codes::V0100);
+    assert!(d.message.contains("shop::cart::Cart"), "{d:#?}");
+    let (d, _) = one_error(
+        "enum Shape {\n    Point,\n}\nfn main() {\n    match Shape::Point {\n        \
+         shop::cart::Kind::Word => {}\n        _ => {}\n    }\n}\n",
+    );
+    assert_eq!(d.code, codes::V0100);
+    assert!(d.message.contains("shop::cart::Kind"), "{d:#?}");
+}
+
 // --- Literal typing ---------------------------------------------------------
 
 #[test]
@@ -1282,6 +1325,77 @@ fn a_private_method_or_associated_function_from_another_module_is_v0105() {
     }
 }
 
+// --- Field-level `pub` (spec 3.4) --------------------------------------------
+
+#[test]
+fn reading_a_private_field_from_another_module_is_v0105_with_the_two_way_note() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/resolve/field_private_read/main.vr");
+    let diagnostics = result.expect_err("a private field is not visible from another module");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0105, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "c.n", "n"));
+    assert!(
+        d.notes
+            .iter()
+            .any(|n| n.contains("make the field public with `pub`")
+                && n.contains("a `pub fn` on the struct")),
+        "{d:#?}"
+    );
+    assert!(d.fix_it.is_some(), "{d:#?}");
+}
+
+#[test]
+fn assigning_a_private_field_from_another_module_is_v0105() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/resolve/field_private_assign/main.vr");
+    let diagnostics = result.expect_err("a private field is not visible from another module");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0105, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "c.n = 2", "n"));
+    assert!(d.fix_it.is_some(), "{d:#?}");
+}
+
+#[test]
+fn a_struct_literal_naming_a_private_field_from_another_module_is_v0105_with_literal_wording() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/errors/v0105_private_field_in_literal/main.vr");
+    let diagnostics =
+        result.expect_err("a private field cannot be named in another module's literal");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0105, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "Cart { n: 1 }", "n"));
+    assert!(
+        d.message.contains("`Cart { .. }` cannot be written here"),
+        "{d:#?}"
+    );
+    assert!(d.fix_it.is_some(), "{d:#?}");
+}
+
+#[test]
+fn the_same_literal_check_applies_when_the_struct_is_named_through_a_use_alias() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/resolve/field_private_literal_alias/main.vr");
+    let diagnostics = result.expect_err("a `use` alias does not bypass field privacy");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0105, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "Cart { n: 1 }", "n"));
+}
+
+#[test]
+fn a_struct_method_reads_its_own_private_field_when_called_from_another_module() {
+    let (result, _) =
+        check_path("crates/varyk/tests/fixtures/resolve/field_private_via_method/main.vr");
+    result.expect("a method of the struct's own module reads its private field freely");
+}
+
+#[test]
+fn a_child_module_reads_its_parents_private_field() {
+    let (result, _) =
+        check_path("crates/varyk/tests/fixtures/resolve/field_private_child_module/main.vr");
+    result.expect("a descendant module reads a private field of its ancestor's struct");
+}
+
 #[test]
 fn indexing_types_the_element_and_takes_a_usize() {
     let program = ok(&format!(
@@ -1900,4 +2014,188 @@ fn a_name_that_is_a_unit_variant_of_its_own_enum_is_v0103() {
         "",
         "    let Red = Shape::Point;\n    let Circle = s;",
     ));
+}
+
+// --- Imported structs (M3 spec 4.1, 4.2) ---------------------------------
+
+#[test]
+fn misusing_an_imported_struct_says_what_to_change() {
+    let (result, sources) = check_path("crates/varyk/tests/fixtures/interop/struct_misuse/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let found: Vec<(&str, Span)> = diagnostics.iter().map(|d| (d.code, d.span)).collect();
+    assert_eq!(
+        found,
+        vec![
+            (codes::V0108, span_of(&sources, "into_inner")),
+            (codes::V0108, span_of(&sources, "name")),
+            (codes::V0100, span_of(&sources, "ext::Matcher::is_match")),
+            (codes::V0100, {
+                let call = span_of(&sources, "m.new");
+                Span::new(call.file, call.start + 2, call.end)
+            }),
+            (codes::V0105, span_of(&sources, "words")),
+        ],
+        "{diagnostics:#?}"
+    );
+    assert!(
+        diagnostics[0]
+            .notes
+            .iter()
+            .any(|n| n.contains("`&self` or `&mut self`"))
+    );
+    assert!(
+        diagnostics[1]
+            .notes
+            .iter()
+            .any(|n| n.contains("`fn name(&self) -> &str`"))
+    );
+    assert!(diagnostics[4].fix_it.is_none(), "{:#?}", diagnostics[4]);
+}
+
+#[test]
+fn calling_a_rust_method_varyk_skipped_says_why_in_a_note() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/skipped_methods/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let found: Vec<(&str, &str)> = diagnostics
+        .iter()
+        .map(|d| (d.code, d.notes.first().map_or("", String::as_str)))
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (
+                codes::V0100,
+                "`c` exists in the Rust file but is `const`; Varyk does not import such \
+                 methods; call it from a plain `pub fn` of another name in an `impl A` block"
+            ),
+            (
+                codes::V0100,
+                "`a` exists in the Rust file but is `async`; Varyk does not import such \
+                 methods; call it from a plain `pub fn` of another name in an `impl A` block"
+            ),
+            (
+                codes::V0100,
+                "`t` exists in the Rust file but is behind `#[cfg]`; Varyk does not import such \
+                 methods; such a method may not exist in the build"
+            ),
+            (
+                codes::V0100,
+                "a parameter of `g` is behind `#[cfg]`, so `g` may not exist with this shape in \
+                 the build; Varyk does not import such methods"
+            ),
+            (
+                codes::V0100,
+                "`clone` exists in the Rust file but is a trait method; Varyk does not import \
+                 such methods; add a `pub fn clone` to a plain `impl A` block"
+            ),
+        ],
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn imported_method_calls_carry_their_imported_ref() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/matcher/main.vr");
+    let program = result.expect("should type-check");
+    let tally = function(&program, "tally");
+    let tail = tally.body.tail.as_deref().expect("tally ends in an `if`");
+    let HirExprKind::If { cond, .. } = &tail.kind else {
+        panic!("tally starts with an `if`");
+    };
+    assert!(matches!(
+        cond.kind,
+        HirExprKind::MethodCall {
+            method: MethodRef::Imported(_),
+            ..
+        }
+    ));
+}
+
+// --- Imported enums (M3 spec 4.3, 4.4) -----------------------------------
+
+/// A Varyk struct field and a Varyk enum payload naming an imported enum
+/// type-check without panicking (regression: the resolver's
+/// recursive-type check used to index an imported `EnumId` past the end
+/// of its per-item table, built for Varyk-declared enums only).
+#[test]
+fn a_varyk_struct_field_and_enum_payload_naming_an_imported_enum_type_check() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/resolve/rust_enums/main.vr");
+    result.expect("should type-check");
+}
+
+// --- An imported item naming a type behind a private module (M3 4.2) ------
+
+#[test]
+fn an_imported_call_and_field_naming_a_type_behind_a_private_module_work_where_it_is_seen() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/hidden_type_inside/main.vr");
+    if let Err(diagnostics) = result {
+        panic!("expected success, got {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn an_imported_call_and_field_naming_a_type_behind_a_private_module_are_v0108_elsewhere() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/interop/hidden_type_outside/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let found: Vec<(&str, Span)> = diagnostics.iter().map(|d| (d.code, d.span)).collect();
+    assert_eq!(
+        found,
+        vec![
+            (codes::V0108, span_of(&sources, "shop::api::make()")),
+            (codes::V0108, {
+                let field = span_of(&sources, "b.h.x");
+                Span::new(field.file, field.start + 2, field.start + 3)
+            }),
+        ],
+        "{diagnostics:#?}"
+    );
+    assert!(
+        diagnostics[0]
+            .notes
+            .iter()
+            .any(|n| n.contains("which only `shop` can see")),
+        "{diagnostics:#?}"
+    );
+}
+
+/// The opaque-variant note puts `an` before a name starting with a vowel.
+#[test]
+fn opaque_variant_note_uses_the_right_article() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/opaque_enum_article/main.vr");
+    let diagnostics = result.expect_err("a variant of an opaque enum is V0100");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0100);
+    assert!(
+        d.notes.iter().any(|n| n.contains("pass an `E` around")),
+        "{d:#?}"
+    );
+}
+
+/// A free function with a parameter behind `#[cfg]`, and a `#[test]`
+/// function, each say which in the note.
+#[test]
+fn calling_a_rust_function_skipped_for_a_cfg_parameter_or_test_says_which() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/skipped_cfg_fns/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let found: Vec<_> = diagnostics
+        .iter()
+        .map(|d| (d.code, d.notes.first().map_or("", String::as_str)))
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (
+                codes::V0100,
+                "a parameter of `f` is behind `#[cfg]`, so `f` may not exist with this shape in \
+                 the build; Varyk does not import such functions"
+            ),
+            (
+                codes::V0100,
+                "`t` exists in the Rust file but is marked `#[test]`; Varyk does not import such \
+                 functions"
+            ),
+        ],
+        "{diagnostics:#?}"
+    );
 }

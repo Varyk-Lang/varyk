@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0111]: `aa` is a name made by another `use`; a `use` path starts with `crate::`, `self::`, `super::`, or a module declared in this file; write `use a::g as gg;`
+ --> crates/varyk/tests/fixtures/errors/v0111_use_through_alias/main.vr:4:5
+  |
+4 | use aa::g as gg;
+  |     ^^ `aa` is a name made by another `use`; a `use` path starts with `crate::`, `self::`, `super::`, or a module declared in this file; write `use a::g as gg;`

@@ -1,0 +1,6 @@
+mod shapes;
+
+use shapes::Shape::Point;
+use shapes::Shape;
+
+fn main() {}

@@ -1,0 +1,5 @@
+mod Shop;
+
+fn main() {
+    println!("{}", Shop::two());
+}

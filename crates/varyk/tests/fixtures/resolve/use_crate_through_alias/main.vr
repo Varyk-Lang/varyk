@@ -1,0 +1,6 @@
+mod a;
+
+use crate::aa::g;
+use a as aa;
+
+fn main() {}

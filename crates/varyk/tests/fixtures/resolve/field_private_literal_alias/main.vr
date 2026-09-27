@@ -1,0 +1,7 @@
+mod shop;
+
+use crate::shop::Cart;
+
+fn main() {
+    let c = Cart { n: 1 };
+}

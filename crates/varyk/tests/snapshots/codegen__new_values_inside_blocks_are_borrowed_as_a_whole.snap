@@ -2,28 +2,32 @@
 source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn make() -> User {\\n    User { name: \\\"Ann\\\" }\\n}\\n\\nfn text() -> string {\\n    \\\"t\\\"\\n}\\n\\nfn show(s: string) {\\n    println!(\\\"{}\\\", s);\\n}\\n\\nfn show_user(user: User) {\\n    println!(\\\"{}\\\", user.name);\\n}\\n\\nfn main() {\\n    let c = true;\\n    let s = text();\\n    show(if c { text() } else { make().name });\\n    show({ let a = make(); a.name });\\n    show({ let t = s; t });\\n    show_user({ let u = make(); u });\\n    println!(\\\"{}\\\", if c { make().name } else { \\\"lit\\\" });\\n}\\n\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 struct User {
     name: String,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn make() -> User {
     User { name: "Ann".to_string() }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn text() -> String {
     "t".to_string()
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn show(s: &str) {
-    println!("{}", s);
+    ::std::println!("{}", s);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn show_user(user: &User) {
-    println!("{}", user.name);
+    ::std::println!("{}", user.name);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let c = true;
     let s = text();
@@ -44,7 +48,7 @@ fn main() {
         let u = make();
         u
     }));
-    println!("{}", if c {
+    ::std::println!("{}", if c {
         make().name
     } else {
         "lit".to_string()

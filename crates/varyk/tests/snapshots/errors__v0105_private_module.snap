@@ -1,0 +1,17 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0105]: module `cart` is private to `shop`, so function `shop::cart::count` cannot be used here; write `pub mod cart;`
+ --> crates/varyk/tests/fixtures/errors/v0105_private_module/main.vr:4:20
+  |
+4 |     println!("{}", shop::cart::count());
+  |                    ^^^^^^^^^^^^^^^^^ module `cart` is private to `shop`, so function `shop::cart::count` cannot be used here; write `pub mod cart;`
+  |
+ ::: crates/varyk/tests/fixtures/errors/v0105_private_module/shop.vr:1:1
+  |
+1 | mod cart;
+  | --- declared here without `pub`
+  |
+  = note: a module declared without `pub` can be used only by the module that declares it and the modules inside that one
+help: insert `pub ` before `mod`

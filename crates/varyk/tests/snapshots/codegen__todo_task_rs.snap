@@ -2,16 +2,19 @@
 source: crates/varyk/tests/codegen.rs
 expression: "file(&krate, \"src/task.rs\")"
 ---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 pub enum Status {
     Open,
     Done,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 pub struct Task {
-    pub title: String,
-    pub status: Status,
+    title: String,
+    status: Status,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 impl Task {
     pub fn new(title: &str) -> Task {
         Task { title: title.to_string(), status: Status::Open }
@@ -29,11 +32,11 @@ impl Task {
     }
 
     pub fn label(&self) -> String {
-        let mark = if self.is_done() {
+        let mark = if Task::is_done(self) {
             "x"
         } else {
             " "
         };
-        format!("[{}] {}", mark, self.title)
+        ::std::format!("[{}] {}", mark, self.title)
     }
 }

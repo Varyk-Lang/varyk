@@ -1,0 +1,9 @@
+[package]
+name = "failing"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+warns = { path = "../warns" }
+
+[workspace]

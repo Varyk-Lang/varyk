@@ -2,32 +2,33 @@
 source: crates/varyk/tests/codegen.rs
 expression: main
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
 mod task;
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn count_done(tasks: &Vec<crate::task::Task>) -> usize {
     let mut done = 0usize;
     for t in tasks {
-        if t.is_done() {
+        if crate::task::Task::is_done(t) {
             done = done + 1usize;
         }
     }
     done
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn print_all(tasks: &Vec<crate::task::Task>) {
     for t in tasks {
-        println!("{}", t.label());
+        ::std::println!("{}", crate::task::Task::label(t));
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let mut tasks: Vec<crate::task::Task> = Vec::new();
     tasks.push(crate::task::Task::new("Buy milk"));
     tasks.push(crate::task::Task::new("Write spec"));
     print_all(&tasks);
-    tasks[0usize].complete();
+    crate::task::Task::complete(&mut tasks[0usize]);
     print_all(&tasks);
-    println!("{} of {} done", count_done(&tasks), tasks.len());
+    ::std::println!("{} of {} done", count_done(&tasks), tasks.len());
 }

@@ -1,0 +1,5 @@
+mod a;
+
+use a::T::new;
+
+fn main() {}

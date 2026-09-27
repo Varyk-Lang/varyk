@@ -2,16 +2,17 @@
 source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"fn show(s: string) {\\n    println!(\\\"{}\\\", s);\\n}\\n\\nfn forward(s: string) {\\n    show(s);\\n}\\n\\nfn main() {\\n    let s = \\\"x\\\";\\n    show(s);\\n    show(\\\"y\\\");\\n    forward(s);\\n}\\n\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn show(s: &str) {
-    println!("{}", s);
+    ::std::println!("{}", s);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn forward(s: &str) {
     show(s);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let s = "x";
     show(s);

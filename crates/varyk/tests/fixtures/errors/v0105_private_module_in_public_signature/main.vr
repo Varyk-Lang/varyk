@@ -1,0 +1,6 @@
+mod shop;
+
+fn main() {
+    let v = shop::carts();
+    println!("{}", v.len());
+}

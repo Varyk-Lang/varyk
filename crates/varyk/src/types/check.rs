@@ -12,18 +12,21 @@
 use std::collections::HashMap;
 
 use varyk_syntax::{
-    BinaryOp, Block, Expr, ExprKind, FixIt, ForHead, Function, Ident, SourceFile, Span, Stmt,
-    UnaryOp,
+    BinaryOp, Block, Expr, ExprKind, FixIt, ForHead, Function, Ident, Item, Path, SourceFile, Span,
+    Stmt, UnaryOp, UseDecl,
 };
 
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
     HirBlock, HirEnum, HirExpr, HirExprKind, HirForHead, HirFunction, HirModule, HirModuleKind,
-    HirParam, HirProgram, HirStmt, HirStruct, LocalId, LocalInfo, PlaceInfo, is_place,
+    HirParam, HirProgram, HirStmt, HirStruct, HirUse, LocalId, LocalInfo, PlaceInfo, is_place,
 };
+use crate::interop::tidy_signature;
+use crate::package::Kind;
 use crate::resolve::{
-    Callee, FnId, FnSig, LookupError, ModuleId, ModuleKind, Resolved, Symbols, UserType,
-    not_visible, reserved_value_name,
+    Callee, FnId, FnSig, ImportedSig, LookupError, ModuleId, ModuleKind, Resolved, StructDef,
+    StructId, Symbols, Unusable, UserType, display_path, is_visible, no_parent, not_visible,
+    reserved_value_name, split_last,
 };
 use crate::types::{FloatKind, IntKind, ParamMode, Ty};
 
@@ -60,6 +63,11 @@ pub fn typecheck(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
+    // Ledger: every `FnSig` produced a function, in the same order, so
+    // `functions[i]` is always the lowering of `symbols.fns[i]`.
+    for (index, function) in functions.iter().enumerate() {
+        debug_assert!(function.id == FnId(index as u32));
+    }
 
     let structs = symbols
         .structs
@@ -68,6 +76,7 @@ pub fn typecheck(
             name: def.name.clone(),
             module: def.module,
             is_pub: def.is_pub,
+            imported: def.imported,
             fields: def.fields.clone(),
             span: def.span,
         })
@@ -79,21 +88,59 @@ pub fn typecheck(
             name: def.name.clone(),
             module: def.module,
             is_pub: def.is_pub,
+            imported: def.imported,
             variants: def.variants.clone(),
+            drops: def.drops.clone(),
             span: def.span,
         })
         .collect();
     let imported = symbols.imported.clone();
+    let paths: Vec<String> = (0..resolved.modules.len())
+        .map(|id| tree_path(&resolved, ModuleId(id as u32), sources))
+        .collect();
     let modules = resolved
         .modules
         .into_iter()
-        .map(|module| HirModule {
-            id: module.id,
-            name: module.name,
-            kind: match module.kind {
-                ModuleKind::Varyk(_) => HirModuleKind::Varyk,
-                ModuleKind::Rust(source) => HirModuleKind::Rust { source },
-            },
+        .zip(paths)
+        .map(|(module, path)| {
+            let uses = match &module.kind {
+                ModuleKind::Varyk(program) => {
+                    // `order` counts `Item::Use` entries as `register`
+                    // did, so each declaration reads back its own
+                    // resolved target even when two of them share a
+                    // local name across namespaces (spec 2.1) and a
+                    // lookup by name alone could not tell them apart.
+                    let mut order = 0;
+                    program
+                        .items
+                        .iter()
+                        .filter_map(|item| {
+                            let Item::Use(decl) = item else {
+                                return None;
+                            };
+                            let hir = hir_use(symbols, module.id, order, decl);
+                            order += 1;
+                            Some(hir)
+                        })
+                        .collect()
+                }
+                ModuleKind::Rust(_) => Vec::new(),
+            };
+            HirModule {
+                id: module.id,
+                name: module.name,
+                parent: module.parent,
+                is_pub: module.is_pub,
+                path,
+                uses,
+                kind: match module.kind {
+                    ModuleKind::Varyk(_) => HirModuleKind::Varyk,
+                    ModuleKind::Rust(source) => HirModuleKind::Rust {
+                        path: sources[module.file.0 as usize].path.clone(),
+                        source,
+                    },
+                },
+            }
         })
         .collect();
 
@@ -105,6 +152,57 @@ pub fn typecheck(
         imported,
         entry: resolved.entry,
     })
+}
+
+/// `decl`, the `order`-th `use` declared in `module` (source order):
+/// lowered to its emitted form, the canonical `crate::`-rooted path of
+/// whatever it names (spec 3.3), from
+/// [`Symbols::use_target_path_at`] rather than a lookup by name, since two
+/// declarations of one module can introduce the same local name in
+/// different namespaces (spec 2.1).
+fn hir_use(symbols: &Symbols, module: ModuleId, order: usize, decl: &UseDecl) -> HirUse {
+    let path = symbols
+        .use_target_path_at(module, order)
+        .expect("a `use` that resolved during `resolve` always has a recorded target");
+    HirUse {
+        path,
+        alias: decl.alias.as_ref().map(|alias| alias.name.clone()),
+        span: decl.span,
+    }
+}
+
+/// Module `id`'s generated file under `src/` (spec 2.3): `main.rs` for
+/// a binary's entry, `lib.rs` for a library's; else its ancestors' names as directories and its own as the
+/// file, `shop/cart.rs`, or `shop/mod.rs` for a module read from
+/// `shop/mod.vr`.
+fn tree_path(resolved: &Resolved, id: ModuleId, sources: &[SourceFile]) -> String {
+    let module = &resolved.modules[id.0 as usize];
+    let Some(parent) = module.parent else {
+        return match resolved.kind {
+            Kind::Binary => "main.rs",
+            Kind::Library => "lib.rs",
+        }
+        .to_string();
+    };
+    let mut dirs = Vec::new();
+    let mut current = parent;
+    while let Some(up) = resolved.modules[current.0 as usize].parent {
+        dirs.push(resolved.modules[current.0 as usize].name.as_str());
+        current = up;
+    }
+    dirs.reverse();
+    let from_mod_vr = sources[module.file.0 as usize]
+        .path
+        .file_name()
+        .is_some_and(|name| name == "mod.vr");
+    if from_mod_vr {
+        dirs.push(&module.name);
+        dirs.push("mod.rs");
+        return dirs.join("/");
+    }
+    let file = format!("{}.rs", module.name);
+    dirs.push(&file);
+    dirs.join("/")
 }
 
 /// A scope maps a name to its local, or to `None` for a binding whose
@@ -541,12 +639,8 @@ impl FnChecker<'_> {
             ExprKind::Float(text) => return self.float(text, expected, span),
             ExprKind::Bool(value) => (HirExprKind::Bool(*value), Ty::Bool),
             ExprKind::String(text) => (HirExprKind::String(text.clone()), Ty::String),
-            ExprKind::Path {
-                module,
-                type_,
-                name,
-            } => {
-                return self.path_value(module.as_ref(), type_.as_ref(), name, expected, span);
+            ExprKind::Path { path, name } => {
+                return self.path_value(path.as_ref(), name, expected, span);
             }
             ExprKind::Unary { op, operand } => {
                 return self.unary(*op, operand, expected, span, true);
@@ -561,7 +655,7 @@ impl FnChecker<'_> {
                     Ty::Struct(id) => self.symbols.structs[id.0 as usize]
                         .fields
                         .iter()
-                        .position(|(field, _)| *field == name.name),
+                        .position(|field| field.name == name.name),
                     _ => None,
                 };
                 let Some(field_index) = field else {
@@ -577,20 +671,34 @@ impl FnChecker<'_> {
                 let Ty::Struct(id) = base.ty else {
                     unreachable!("only a struct has fields")
                 };
+                if !field_visible(self.symbols, self.module, id, field_index) {
+                    let diagnostic = self.symbols.private_field(id, field_index, name.span);
+                    self.diagnostics.push(diagnostic);
+                    return None;
+                }
                 let def = &self.symbols.structs[id.0 as usize];
-                let ty = def.fields[field_index].1.clone();
+                if let Some(unusable) =
+                    def.fields[field_index]
+                        .unusable
+                        .as_ref()
+                        .filter(|unusable| {
+                            unusable.within.is_none()
+                                || !self.symbols.usable_from(unusable.within, self.module)
+                        })
+                {
+                    let diagnostic = unusable_field(def, field_index, unusable, name.span);
+                    self.diagnostics.push(diagnostic);
+                    return None;
+                }
+                let ty = def.fields[field_index].ty.clone();
                 let kind = HirExprKind::Field {
                     base: Box::new(base),
                     name: name.name.clone(),
                 };
                 (kind, ty)
             }
-            ExprKind::StructLit {
-                module,
-                name,
-                fields,
-            } => {
-                return self.struct_lit(module.as_ref(), name, fields, span);
+            ExprKind::StructLit { path, name, fields } => {
+                return self.struct_lit(path.as_ref(), name, fields, span);
             }
             ExprKind::Block(block) => {
                 let block = self.block(block, expected)?;
@@ -930,12 +1038,7 @@ impl FnChecker<'_> {
         expected: Option<Ty>,
         span: Span,
     ) -> Option<HirExpr> {
-        let ExprKind::Path {
-            module,
-            type_,
-            name,
-        } = &callee.kind
-        else {
+        let ExprKind::Path { path, name } = &callee.kind else {
             // A method call parses as `ExprKind::MethodCall`, never as a
             // `Call` with a `Field` or `MethodCall` callee; anything else
             // here (calling the result of a grouped expression, a method
@@ -948,14 +1051,22 @@ impl FnChecker<'_> {
             ));
             return None;
         };
-        if let Some(owner) = self.path_owner(module.as_ref(), type_.as_ref(), callee.span) {
-            let (owner, path) = owner?;
-            return self.type_member(owner, &path, name, Some(args), expected, callee.span, span);
+        if let Some(owner) = self.path_owner(path.as_ref(), callee.span) {
+            let (owner, owner_path) = owner?;
+            return self.type_member(
+                owner,
+                &owner_path,
+                name,
+                Some(args),
+                expected,
+                callee.span,
+                span,
+            );
         }
-        if module.is_none() && is_builtin_variant(&name.name) {
+        if path.is_none() && is_builtin_variant(&name.name) {
             return self.builtin_variant(&name.name, Some(args), expected, span);
         }
-        if module.is_none()
+        if path.is_none()
             && self
                 .scopes
                 .iter()
@@ -966,16 +1077,35 @@ impl FnChecker<'_> {
                 .push(Diagnostic::new(codes::V0100, callee.span, message));
             return None;
         }
-        let module_name = module.as_ref().map(|m| m.name.as_str());
-        let path = match module_name {
-            Some(module) => format!("{module}::{}", name.name),
+        // `path_owner` returned `None` (not `Some(None)`, already handled
+        // above): the path, if any, is a module path (spec 3.1).
+        let module_path = path.as_ref();
+        let path = match module_path {
+            Some(module) => display_path(module, &name.name),
             None => name.name.clone(),
         };
-        let found = match self.symbols.lookup_fn(self.module, module_name, &name.name) {
+        let found = match self.symbols.lookup_fn(self.module, module_path, &name.name) {
             Ok(found) => found,
             Err(error) => {
-                let hint = Some(module_name.unwrap_or(name.name.as_str()));
-                self.lookup_error(error, "function", &path, callee.span, hint);
+                // `m::M(1)` for a `.rs` tuple struct Varyk did not import
+                // (M3 spec 4.1): V0101 saying why.
+                let skipped = self.symbols.skipped_item(
+                    self.module,
+                    module_path,
+                    &name.name,
+                    &path,
+                    callee.span,
+                );
+                if let (LookupError::Unknown, Some(diagnostic)) = (error, skipped) {
+                    self.diagnostics.push(diagnostic);
+                    return None;
+                }
+                // The last module segment may be a type written without
+                // its module (`Task::new()`): look for it elsewhere.
+                let hint = module_path
+                    .and_then(|p| p.segments.last())
+                    .map_or(name.name.as_str(), |s| s.name.as_str());
+                self.lookup_error(error, "function", &path, callee.span, Some(hint));
                 return None;
             }
         };
@@ -990,25 +1120,9 @@ impl FnChecker<'_> {
             }
             Callee::Imported(id) => {
                 let sig = &self.symbols.imported[id.0 as usize];
-                if !sig.callable {
-                    let mut diagnostic = Diagnostic::new(
-                        codes::V0108,
-                        span,
-                        format!("unsupported Rust signature: `{path}` cannot be called from Varyk"),
-                    )
-                    .with_note(format!(
-                        "the Rust signature is `{}`",
-                        tidy_signature(&sig.signature)
-                    ));
-                    // Only a `&String` parameter gets the hint, not a
-                    // `-> &String` return.
-                    let params = sig.signature.split("->").next().unwrap_or_default();
-                    if params.contains("& String") {
-                        diagnostic = diagnostic.with_note(
-                            "take `&str` instead of `&String` in the Rust function; `&str` maps to a shared borrow of `string`",
-                        );
-                    }
-                    self.diagnostics.push(diagnostic);
+                if !sig.callable || !self.symbols.usable_from(sig.within, self.module) {
+                    self.diagnostics
+                        .push(unsupported_rust_signature(&path, sig, span));
                     return None;
                 }
                 (
@@ -1062,25 +1176,23 @@ impl FnChecker<'_> {
         checked.into_iter().collect()
     }
 
-    /// `Name { .. }`, or `m::Name { .. }` for a `pub` struct of module
-    /// `m` (spec 2.10).
+    /// `Name { .. }`, or `path::Name { .. }` for a `pub` struct of the
+    /// module `path` names (spec 2.10, 3.1).
     fn struct_lit(
         &mut self,
-        module: Option<&Ident>,
+        module: Option<&Path>,
         name: &Ident,
         fields: &[(Ident, Expr)],
         span: Span,
     ) -> Option<HirExpr> {
         let (path, path_span) = match module {
             Some(module) => (
-                format!("{}::{}", module.name, name.name),
+                display_path(module, &name.name),
                 Span::new(name.span.file, module.span.start, name.span.end),
             ),
             None => (name.name.clone(), name.span),
         };
-        let found =
-            self.symbols
-                .lookup_type(self.module, module.map(|m| m.name.as_str()), &name.name);
+        let found = self.symbols.lookup_type(self.module, module, &name.name);
         let id = match found {
             Ok(UserType::Struct(id)) => id,
             Ok(UserType::Enum(_)) => {
@@ -1089,10 +1201,16 @@ impl FnChecker<'_> {
                     .push(Diagnostic::new(codes::V0101, path_span, message));
                 return None;
             }
+            Err(LookupError::NoParent { span }) => {
+                self.diagnostics.push(no_parent(span));
+                return None;
+            }
             Err(LookupError::Unknown) => {
-                if let Some(module) = module {
+                // `Shape::Circle { .. }`: a variant with named fields.
+                if let Some((prefix, last)) = module.and_then(split_last) {
                     if let Ok(UserType::Enum(enum_id)) =
-                        self.symbols.lookup_type(self.module, None, &module.name)
+                        self.symbols
+                            .lookup_type(self.module, prefix.as_ref(), &last.name)
                     {
                         let def = &self.symbols.enums[enum_id.0 as usize];
                         if def.variant(&name.name).is_some() {
@@ -1106,9 +1224,14 @@ impl FnChecker<'_> {
                         }
                     }
                 }
-                let message = format!("unknown struct `{path}`");
-                self.diagnostics
-                    .push(Diagnostic::new(codes::V0101, path_span, message));
+                let diagnostic = self
+                    .symbols
+                    .skipped_item(self.module, module, &name.name, &path, path_span)
+                    .unwrap_or_else(|| {
+                        let message = format!("unknown struct `{path}`");
+                        Diagnostic::new(codes::V0101, path_span, message)
+                    });
+                self.diagnostics.push(diagnostic);
                 return None;
             }
             Err(LookupError::NotVisible { decl, keyword }) => {
@@ -1116,14 +1239,56 @@ impl FnChecker<'_> {
                     .push(not_visible("struct", &path, path_span, decl, keyword));
                 return None;
             }
+            Err(LookupError::PrivateModule { module }) => {
+                let diagnostic = self
+                    .symbols
+                    .private_module(module, "struct", &path, path_span);
+                self.diagnostics.push(diagnostic);
+                return None;
+            }
         };
         let def = &self.symbols.structs[id.0 as usize];
+        // An imported struct's literal needs every field visible and
+        // usable (M3 spec 4.1); the Rust module's constructor is the way.
+        if def.imported {
+            let blocked: Vec<String> = (0..def.fields.len())
+                .filter(|&index| {
+                    !field_visible(self.symbols, self.module, id, index)
+                        || def.fields[index].unusable.as_ref().is_some_and(|unusable| {
+                            unusable.within.is_none()
+                                || !self.symbols.usable_from(unusable.within, self.module)
+                        })
+                })
+                .map(|index| format!("`{}`", def.fields[index].name))
+                .collect();
+            if !blocked.is_empty() {
+                let message = format!(
+                    "`{path} {{ .. }}` cannot be written in Varyk, because the Rust struct has \
+                     {} Varyk cannot set: {}",
+                    if blocked.len() == 1 {
+                        "a field"
+                    } else {
+                        "fields"
+                    },
+                    blocked.join(", ")
+                );
+                self.diagnostics
+                    .push(
+                        Diagnostic::new(codes::V0105, path_span, message).with_note(format!(
+                            "make one with a function of the Rust module instead, such as a \
+                         `pub fn new` in an `impl {} {{ .. }}` block there",
+                            def.name
+                        )),
+                    );
+                return None;
+            }
+        }
 
         let mut failed = false;
         let mut seen: HashMap<usize, Span> = HashMap::new();
         let mut lowered = Vec::new();
         for (field, value) in fields {
-            let Some(index) = def.fields.iter().position(|(f, _)| *f == field.name) else {
+            let Some(index) = def.fields.iter().position(|f| f.name == field.name) else {
                 let message = format!("struct `{}` has no field `{}`", def.name, field.name);
                 self.diagnostics
                     .push(Diagnostic::new(codes::V0102, field.span, message));
@@ -1141,8 +1306,16 @@ impl FnChecker<'_> {
                 failed = true;
                 continue;
             }
+            // Recorded as seen even when private, so the missing-field
+            // check below does not also complain about it.
             seen.insert(index, field.span);
-            let ty = def.fields[index].1.clone();
+            if !field_visible(self.symbols, self.module, id, index) {
+                let diagnostic = self.symbols.private_field_in_literal(id, index, field.span);
+                self.diagnostics.push(diagnostic);
+                failed = true;
+                continue;
+            }
+            let ty = def.fields[index].ty.clone();
             match self
                 .expr(value, Some(ty.clone()))
                 .and_then(|v| self.expect(v, &ty))
@@ -1157,7 +1330,7 @@ impl FnChecker<'_> {
             .iter()
             .enumerate()
             .filter(|(index, _)| !seen.contains_key(index))
-            .map(|(_, (field, _))| format!("`{field}`"))
+            .map(|(_, field)| format!("`{}`", field.name))
             .collect();
         if !missing.is_empty() {
             let message = format!(
@@ -1418,11 +1591,15 @@ impl FnChecker<'_> {
         hint: Option<&str>,
     ) {
         let mut diagnostic = match error {
+            LookupError::NoParent { span } => no_parent(span),
             LookupError::Unknown => {
                 Diagnostic::new(codes::V0100, span, format!("cannot find {what} `{path}`"))
             }
             LookupError::NotVisible { decl, keyword } => {
                 not_visible(what, path, span, decl, keyword)
+            }
+            LookupError::PrivateModule { module } => {
+                self.symbols.private_module(module, what, path, span)
             }
         };
         if matches!(error, LookupError::Unknown) {
@@ -1451,6 +1628,45 @@ impl FnChecker<'_> {
             Ty::Unit => "()".to_string(),
         }
     }
+}
+
+/// V0108 at `span` for touching field `field` of the imported struct
+/// `def`, whose Rust type does not map (M3 spec 4.1): it names the type
+/// and what to change.
+fn unusable_field(def: &StructDef, field: usize, unusable: &Unusable, span: Span) -> Diagnostic {
+    let decl = &def.fields[field];
+    let rust_ty = tidy_signature(&unusable.rust_ty);
+    let diagnostic = Diagnostic::new(
+        codes::V0108,
+        span,
+        if unusable.within.is_some() {
+            format!(
+                "field `{}` of `{}` has the Rust type `{rust_ty}`, which cannot be used here",
+                decl.name, def.name
+            )
+        } else {
+            format!(
+                "field `{}` of `{}` has the Rust type `{rust_ty}`, which Varyk cannot use",
+                decl.name, def.name
+            )
+        },
+    )
+    .with_label(decl.span, "the Rust field is declared here");
+    match &unusable.note {
+        Some(note) => diagnostic.with_note(note.clone()),
+        None => diagnostic.with_note(
+            "make the field private in the Rust module and add `pub fn` methods that use it",
+        ),
+    }
+}
+
+/// Whether field `field` (its index into struct `id`'s fields) is
+/// visible from module `from` (spec 3.4): a field's declaring module is
+/// its struct's own, so this is [`is_visible`] applied there, without
+/// re-deriving the rule.
+fn field_visible(symbols: &Symbols, from: ModuleId, id: StructId, field: usize) -> bool {
+    let def = &symbols.structs[id.0 as usize];
+    is_visible(symbols, from, def.module, def.fields[field].is_pub)
 }
 
 fn binary_expr(op: BinaryOp, lhs: HirExpr, rhs: HirExpr, ty: Ty, span: Span) -> HirExpr {
@@ -1550,23 +1766,61 @@ fn block_diverges(block: &HirBlock) -> bool {
     block.stmts.iter().any(stmt_diverges) || block.tail.as_deref().is_some_and(expr_diverges)
 }
 
-/// Respaces a signature's token-stream text (`fn f < T > (x : & T)`) the
-/// way a person writes it (`fn f<T>(x: &T)`), for V0108's note.
-fn tidy_signature(tokens: &str) -> String {
-    let mut out = String::new();
-    let mut prev = "";
-    for token in tokens.split_whitespace() {
-        // A group prints as one piece (`(value`), so compare the edges.
-        let glue_to_prev = token.starts_with([',', ':', ';', ')', '>', '(', '<'])
-            || prev.ends_with(['(', '<', '&'])
-            || prev.ends_with("::");
-        if !out.is_empty() && !glue_to_prev {
-            out.push(' ');
-        }
-        out.push_str(token);
-        prev = token;
+/// V0108 at `span` for a call to the imported `path` whose Rust signature
+/// Varyk cannot call, or cannot call from here (one naming a type only
+/// some modules can see): the signature, and what to change.
+fn unsupported_rust_signature(path: &str, sig: &ImportedSig, span: Span) -> Diagnostic {
+    // The signature is fine; the file could redefine what it names.
+    if let Some(file) = &sig.redefined_in {
+        let message = format!(
+            "`{path}` cannot be called from Varyk, because `{file}` could redefine the types \
+             its signature names"
+        );
+        let diagnostic = Diagnostic::new(codes::V0108, span, message);
+        return match &sig.note {
+            Some(note) => diagnostic.with_note(note.clone()),
+            None => diagnostic,
+        };
     }
-    out
+    let message = if sig.callable {
+        format!(
+            "`{path}` cannot be called here, because its Rust signature names a type this \
+             module cannot see"
+        )
+    } else {
+        format!("unsupported Rust signature: `{path}` cannot be called from Varyk")
+    };
+    let mut diagnostic = Diagnostic::new(codes::V0108, span, message).with_note(format!(
+        "the Rust signature is `{}`",
+        tidy_signature(&sig.signature)
+    ));
+    if let Some(note) = &sig.note {
+        diagnostic = diagnostic.with_note(note.clone());
+    }
+    // Only a `&String` parameter gets the hint, not a `-> &String` return.
+    let params = sig.signature.split("->").next().unwrap_or_default();
+    if params.contains("& String") {
+        diagnostic = diagnostic.with_note(
+            "take `&str` instead of `&String` in the Rust function; `&str` maps to a shared borrow of `string`",
+        );
+    }
+    diagnostic
+}
+
+/// V0100 at `span` for naming a variant (`full`, its full path) of the
+/// opaque imported enum `name` (M3 spec 4.3): `reason` says why the enum
+/// is opaque, as what it has ("has a variant, `A`, ...").
+fn opaque_variant(full: &str, name: &str, reason: &str, span: Span) -> Diagnostic {
+    Diagnostic::new(
+        codes::V0100,
+        span,
+        format!("Varyk cannot construct or match `{full}`"),
+    )
+    .with_note(format!(
+        "`{name}` {reason}, so Varyk can pass {} `{name}` around but cannot build one or \
+         look inside it; make one with a function in the `.rs` file",
+        crate::borrow::article(name)
+    ))
 }
 
 mod methods;

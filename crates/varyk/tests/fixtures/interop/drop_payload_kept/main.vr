@@ -1,0 +1,19 @@
+mod ext;
+
+fn main() {
+    let mut kept: Vec<ext::Acc> = Vec::new();
+    let g = ext::make_guard();
+    match g {
+        ext::Guard::Box(a) => kept.push(a),
+        _ => {}
+    }
+    match ext::make_guard() {
+        ext::Guard::Box(a) => kept.push(a),
+        _ => {}
+    }
+    let mut names: Vec<string> = Vec::new();
+    match ext::make_guard() {
+        ext::Guard::Held(s) => names.push(s),
+        _ => {}
+    }
+}

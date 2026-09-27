@@ -1,0 +1,5 @@
+// Varyk strings have no case conversion yet, so a title is a word set
+// between rules.
+pub fn title(word: string) -> string {
+    format!("== {} ==", word)
+}

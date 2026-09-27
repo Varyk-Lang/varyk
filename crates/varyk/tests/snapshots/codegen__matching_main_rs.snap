@@ -2,10 +2,9 @@
 source: crates/varyk/tests/codegen.rs
 expression: main
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
 mod geo;
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 enum Status {
     Open,
     Done,
@@ -13,11 +12,13 @@ enum Status {
     Count(i32),
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 struct Task {
     title: String,
     status: Status,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 impl Task {
     fn reopen(&mut self) {
         match &self.status {
@@ -30,6 +31,7 @@ impl Task {
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn describe(status: &Status) -> String {
     match status {
         Status::Open => "open".to_string(),
@@ -37,21 +39,23 @@ fn describe(status: &Status) -> String {
         Status::Named(name) => name.clone(),
         Status::Count(n) => {
             let n = *n;
-            format!("{} left", n)
+            ::std::format!("{} left", n)
         }
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn bump(status: &mut Status) {
     match &*status {
         Status::Count(n) => {
             let n = *n;
             *status = Status::Count(n + 1);
         }
-        other => println!("not a count"),
+        other => ::std::println!("not a count"),
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn area(shape: &crate::geo::Shape) -> f64 {
     match shape {
         crate::geo::Shape::Circle(r) => {
@@ -62,6 +66,7 @@ fn area(shape: &crate::geo::Shape) -> f64 {
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn parse(text: &str) -> Result<i32, String> {
     if text == "one" {
         return Ok(1);
@@ -69,12 +74,13 @@ fn parse(text: &str) -> Result<i32, String> {
     Err("unknown".to_string())
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
-    let mut tasks: Vec<Task> = vec![Task { title: "write".to_string(), status: Status::Done }];
-    tasks[0usize].reopen();
+    let mut tasks: Vec<Task> = ::std::vec![Task { title: "write".to_string(), status: Status::Done }];
+    Task::reopen(&mut tasks[0usize]);
     match &tasks[0usize].status {
-        Status::Open => println!("open"),
-        _ => println!("not open"),
+        Status::Open => ::std::println!("open"),
+        _ => ::std::println!("not open"),
     }
     let maybe: Option<i32> = Some(3);
     let n = match &maybe {
@@ -85,8 +91,8 @@ fn main() {
         None => 0,
     };
     match parse("one") {
-        Ok(value) => println!("{}", value),
-        Err(message) => println!("{}", message),
+        Ok(value) => ::std::println!("{}", value),
+        Err(message) => ::std::println!("{}", message),
     }
     let picked: Option<Task> = Some(Task { title: "pick".to_string(), status: Status::Named("x".to_string()) });
     let title = match &picked {
@@ -95,6 +101,6 @@ fn main() {
     };
     let mut count = Status::Count(2);
     bump(&mut count);
-    println!("{} {} {} {}", describe(&tasks[0usize].status), n, title, describe(&count));
-    println!("{}", area(&crate::geo::Shape::Circle(1.0)));
+    ::std::println!("{} {} {} {}", describe(&tasks[0usize].status), n, title, describe(&count));
+    ::std::println!("{}", area(&crate::geo::Shape::Circle(1.0)));
 }

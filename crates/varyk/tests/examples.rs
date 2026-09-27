@@ -1,12 +1,17 @@
 //! End-to-end tests for `varyk build` and `varyk run`: every
 //! example builds through cargo and prints its expected output (milestone-1
-//! spec section 5, milestone-2 spec section 4). These invoke cargo, so they are slower than the rest.
+//! spec section 5, milestone-2 spec section 4, milestone-3 spec section 7).
+//! These invoke cargo, so they are slower than the rest.
 
 mod common;
 
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{varyk, varyk_with_env};
+use common::{example_dir, varyk, varyk_with_env};
+use varyk::backend::{Backend, CrateInfo, RustBackend};
+use varyk_syntax::{FileId, SourceFile};
 
 fn stdout_of(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout should be valid utf-8")
@@ -60,6 +65,17 @@ fn run_interop() {
     assert_runs("examples/interop/main.vr", "Hello from Rust, Varyk!\n");
 }
 
+/// An imported Rust struct (M3 spec 4.1, 4.2) over `std` only: a private
+/// `Vec<String>` inside, built with `new`, used through `&self` and
+/// `&mut self` methods and a `pub` field.
+#[test]
+fn run_interop_imported_struct() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/interop/matcher/main.vr",
+        "2 true\n2 words\n",
+    );
+}
+
 #[test]
 fn run_enums() {
     assert_runs("examples/enums.vr", "3.14\n6\n0\n");
@@ -101,6 +117,37 @@ fn run_with_trailing_arguments_still_prints_the_greeting() {
     let output = varyk(&["run", "examples/hello.vr", "--", "a", "b"]);
     assert!(output.status.success(), "stderr: {}", stderr_of(&output));
     assert_eq!(stdout_of(&output), "Hello, world!\n");
+}
+
+/// The Rust sample in `README.md`, the fenced block after
+/// `<!-- emit-rust: examples/borrowing.vr -->`, is exactly the backend's
+/// `src/main.rs` for that example, before any rustfmt: `--emit-rust`
+/// formats it only when rustfmt is installed, and the minimal 1.85
+/// toolchain has none.
+#[test]
+fn the_readme_rust_sample_is_the_current_backend_output() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme = fs::read_to_string(root.join("README.md")).expect("read README.md");
+    let marker = "<!-- emit-rust: examples/borrowing.vr -->\n```rust\n";
+    let start = readme
+        .find(marker)
+        .expect("the README marks its Rust sample")
+        + marker.len();
+    let sample = &readme[start..start + readme[start..].find("```").expect("a closing fence")];
+
+    let path = root.join("examples/borrowing.vr");
+    let text = fs::read_to_string(&path).expect("read examples/borrowing.vr");
+    let mut sources = Vec::new();
+    let entry = SourceFile::new(FileId(0), path, text);
+    let program = varyk::check_file(entry, varyk::package::Kind::Binary, None, &mut sources)
+        .unwrap_or_else(|diagnostics| panic!("borrowing should check: {diagnostics:#?}"));
+    let generated = RustBackend.generate(&program, &CrateInfo::single_file("borrowing".into()));
+    let main_rs = generated
+        .files
+        .iter()
+        .find(|file| file.path == "src/main.rs")
+        .expect("a src/main.rs");
+    assert_eq!(sample, main_rs.text, "README.md sample differs");
 }
 
 #[test]
@@ -174,8 +221,13 @@ fn run_with_a_configured_target_still_finds_the_executable() {
     assert_eq!(stdout_of(&output), "Hello, world!\n");
 }
 
+/// The fixture's type error is in `broken.rs`, a copied `.rs` module: M3
+/// spec 5 says this is the user's own Rust, so it is shown at their file
+/// and line, verbatim, and never behind M1's "generated Rust did not
+/// compile" note (which is only for a rustc message this cannot map back
+/// to source at all).
 #[test]
-fn run_on_a_rust_layer_error_exits_one_with_the_note_before_cargo_output() {
+fn run_on_a_rust_layer_error_shows_it_at_the_users_file_and_line() {
     let output = varyk(&[
         "run",
         "crates/varyk/tests/fixtures/rust_layer_error/main.vr",
@@ -185,12 +237,209 @@ fn run_on_a_rust_layer_error_exits_one_with_the_note_before_cargo_output() {
 
     let stderr = stderr_of(&output);
     assert!(
-        stderr.starts_with(
-            "error: the generated Rust did not compile; run with --emit-rust to inspect it\n"
-        ),
+        stderr.contains("crates/varyk/tests/fixtures/rust_layer_error/broken.rs:2"),
         "stderr: {stderr}"
     );
     assert!(stderr.contains("mismatched types"), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("the generated Rust did not compile"),
+        "stderr: {stderr}"
+    );
+}
+
+/// Under `--message-format=json`, the same `.rs` error is one JSON
+/// object on stdout, at the user's own file.
+#[test]
+fn a_rust_layer_error_in_json_mode_is_an_object_at_the_users_file() {
+    let output = varyk(&[
+        "--message-format=json",
+        "build",
+        "crates/varyk/tests/fixtures/rust_layer_error/main.vr",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = stdout_of(&output);
+    let first = stdout.lines().next().expect("one object per line");
+    let value: serde_json::Value = serde_json::from_str(first).expect("a JSON object");
+    assert_eq!(
+        value["file"],
+        "crates/varyk/tests/fixtures/rust_layer_error/broken.rs"
+    );
+    assert_eq!(value["line"], 2);
+    assert_eq!(value["level"], "error");
+    assert_eq!(value["rustc_code"], "E0308");
+    assert_eq!(value["message"], "mismatched types");
+    assert!(value["notes"].is_array(), "{value}");
+    for line in stdout.lines() {
+        serde_json::from_str::<serde_json::Value>(line).expect("every line is JSON");
+    }
+    assert!(
+        !stderr_of(&output).contains("mismatched types"),
+        "the error is not also printed as text"
+    );
+}
+
+/// Under `run`, stdout is the program's own: Varyk's JSON objects (here a
+/// warning from a `.rs` module) go to stderr instead, so the program's
+/// output stays exactly what it printed.
+#[test]
+fn run_in_json_mode_keeps_stdout_for_the_program() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("json_run")
+        .join(std::process::id().to_string());
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create the program directory");
+    fs::write(
+        dir.join("main.vr"),
+        "mod noisy;\n\nfn main() {\n    println!(\"{}\", noisy::one());\n}\n",
+    )
+    .expect("write main.vr");
+    fs::write(
+        dir.join("noisy.rs"),
+        "pub fn one() -> i32 {\n    let unused = 2;\n    1\n}\n",
+    )
+    .expect("write noisy.rs");
+    let entry = dir.join("main.vr");
+    let output = varyk(&[
+        "--message-format=json",
+        "run",
+        entry.to_str().expect("a UTF-8 path"),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "1\n");
+    let stderr = stderr_of(&output);
+    let warning = stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|value| value["level"] == "warning")
+        .unwrap_or_else(|| panic!("a JSON warning on stderr: {stderr}"));
+    assert!(
+        warning["file"]
+            .as_str()
+            .is_some_and(|f| f.ends_with("noisy.rs")),
+        "{warning}"
+    );
+
+    // A failed build under `run`: nothing on stdout either.
+    let output = varyk(&[
+        "--message-format=json",
+        "run",
+        "crates/varyk/tests/fixtures/rust_layer_error/main.vr",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout_of(&output), "");
+    let stderr = stderr_of(&output);
+    let first = stderr.lines().next().expect("one object per line");
+    let value: serde_json::Value = serde_json::from_str(first).expect("a JSON object");
+    assert_eq!(value["rustc_code"], "E0308");
+}
+
+/// `use_it.rs` calls `defs::add` with one argument too many: the
+/// diagnostic's primary span is in `use_it.rs`, but rustc's "function
+/// defined here" note points at a *different* copied module, `defs.rs`
+/// (fix round 1: this used to leak `src/defs.rs`, the internal tree
+/// path, since only the primary span's file was rewritten).
+#[test]
+fn run_on_a_cross_module_rust_layer_error_rewrites_every_copied_path() {
+    let output = varyk(&[
+        "run",
+        "crates/varyk/tests/fixtures/rust_layer_cross_module/main.vr",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout_of(&output), "");
+
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("crates/varyk/tests/fixtures/rust_layer_cross_module/use_it.rs"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("crates/varyk/tests/fixtures/rust_layer_cross_module/defs.rs"),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("src/defs.rs"), "stderr: {stderr}");
+    assert!(!stderr.contains("src/use_it.rs"), "stderr: {stderr}");
+}
+
+#[test]
+fn a_rust_module_warning_builds_and_the_generated_rust_has_no_inner_attribute() {
+    let output = varyk(&[
+        "build",
+        "--emit-rust",
+        "crates/varyk/tests/fixtures/rust_warning/main.vr",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+
+    let stdout = stdout_of(&output);
+    // Item-level `#[allow(..)]` attributes replace M1's crate-wide
+    // `#![allow(..)]` (spec 2.3); the root file has no inner attribute,
+    // so the same tree works as a crate root and inside `include!`.
+    assert!(
+        !stdout.contains("#!["),
+        "an inner attribute remains: {stdout}"
+    );
+    assert!(
+        stdout.contains("#[allow("),
+        "no item-level attribute: {stdout}"
+    );
+
+    // The warning in the copied `.rs` module passes through at the
+    // user's path and line (spec 5); it never names a generated-file path.
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("crates/varyk/tests/fixtures/rust_warning/unused.rs:2:9"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("target/varyk"),
+        "stderr names a generated path: {stderr}"
+    );
+}
+
+/// A `.rs` module nested under a `.vr` module is not covered by any
+/// generated lint attribute: no `mod` line carries one (spec 2.3, 5), so
+/// its warning shows at the user's path and a deny-level lint in it
+/// fails the build instead of panicking at run time.
+#[test]
+fn a_rust_module_under_a_varyk_module_keeps_its_warnings_and_deny_lints() {
+    let output = varyk(&[
+        "build",
+        "crates/varyk/tests/fixtures/nested_rust_warning/main.vr",
+    ]);
+    let stderr = stderr_of(&output);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("unused variable: `unused`")
+            && stderr.contains("crates/varyk/tests/fixtures/nested_rust_warning/outer/ext.rs:2:9"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("target/varyk"),
+        "stderr names a generated path: {stderr}"
+    );
+
+    let output = varyk(&[
+        "build",
+        "crates/varyk/tests/fixtures/nested_rust_overflow/main.vr",
+    ]);
+    let stderr = stderr_of(&output);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("this arithmetic operation will overflow")
+            && stderr
+                .contains("crates/varyk/tests/fixtures/nested_rust_overflow/outer/ext.rs:2:18"),
+        "stderr: {stderr}"
+    );
+
+    // The one lint about a `mod` line itself, a module name not in snake
+    // case, is allowed on that line, so generated code stays silent.
+    let output = varyk(&[
+        "build",
+        "crates/varyk/tests/fixtures/upper_module_name/main.vr",
+    ]);
+    let stderr = stderr_of(&output);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(!stderr.contains("warning"), "stderr: {stderr}");
 }
 
 #[test]
@@ -203,4 +452,151 @@ fn run_on_a_constant_division_by_zero_builds_and_panics_at_run_time() {
         "stderr: {stderr}"
     );
     assert!(stderr.contains("divide by zero"), "stderr: {stderr}");
+}
+
+// --- The milestone-3 example packages (M3 spec 7) ---------------------------
+//
+// Each lives under `examples/packages/`, outside the compiler's workspace.
+// The tests build a copy of each ([`example_dir`]), never the source tree.
+
+/// `examples/packages/<name>`, absolute; only read, never built.
+fn package(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/packages")
+        .join(name)
+}
+
+/// Runs `cargo <args>` in `dir` with `VARYK` set to the `varyk` under
+/// test, and asserts it succeeds.
+fn cargo_in(dir: &Path, args: &[&str]) -> Output {
+    let output = Command::new(env!("CARGO"))
+        .args(args)
+        .current_dir(dir)
+        .env("VARYK", env!("CARGO_BIN_EXE_varyk"))
+        .output()
+        .expect("failed to spawn cargo");
+    assert!(
+        output.status.success(),
+        "cargo {args:?} in {dir:?}: {:?}\nstderr: {}",
+        output.status,
+        stderr_of(&output)
+    );
+    output
+}
+
+/// Each test process, and each call, builds its own copy of an example,
+/// so two `cargo test` runs in one checkout, or two tests of one run,
+/// never clear each other's files.
+#[test]
+fn an_example_copy_is_private_to_this_process() {
+    let dir = example_dir("units");
+    let pid = std::process::id().to_string();
+    assert_eq!(
+        dir.parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name),
+        Some(pid.as_ref()),
+        "{dir:?}"
+    );
+    assert!(dir.join("src/lib.vr").is_file(), "{dir:?}");
+    // Every call is a copy of its own: another test's copy of `units` is
+    // never cleared by this one.
+    let other = example_dir("units");
+    assert_ne!(dir, other);
+    assert!(dir.join("src/lib.vr").is_file(), "{dir:?}");
+}
+
+const GREETING_OUTPUT: &str = "== Greetings ==\nHello, Ada!\nHello, Grace!\n== 2 greeted ==\n";
+
+/// `greeting` is `varyk init greeting` committed as is (spec 7.1), plus
+/// its own modules; `src/main.vr` is the one `init` file it replaces.
+#[test]
+fn greeting_keeps_the_files_varyk_init_writes() {
+    let dir = package("greeting");
+    for (path, content) in varyk::driver::init::files("greeting", false) {
+        if path == Path::new("src/main.vr") {
+            continue;
+        }
+        let committed = fs::read_to_string(dir.join(&path)).expect("an init file");
+        assert_eq!(committed, content, "{path:?} differs from `varyk init`");
+    }
+}
+
+/// `greeting` builds two ways with the same output (spec 7.1): `varyk run`
+/// through the hidden crate, and plain `cargo run` through `build.rs` and
+/// the `include!` stub.
+#[test]
+fn greeting_runs_the_same_through_varyk_and_through_cargo() {
+    let dir = example_dir("greeting");
+    let main = dir.join("src/main.vr");
+    assert_runs(main.to_str().expect("utf-8 path"), GREETING_OUTPUT);
+
+    let output = cargo_in(&dir, &["run", "--quiet"]);
+    assert_eq!(stdout_of(&output), GREETING_OUTPUT);
+}
+
+/// `matcher` (spec 7.2) wraps `regex-lite` in a `.rs` facade; the one
+/// test that fetches from crates.io. The deliberate unused variable in
+/// `text.rs` warns at the user's file, never at a generated path.
+#[test]
+fn matcher_runs_through_its_facade_and_shows_the_rust_warning() {
+    let dir = example_dir("matcher");
+    let main = dir.join("src/main.vr");
+    let output = varyk(&["run", main.to_str().expect("utf-8 path")]);
+    assert!(
+        output.status.success(),
+        "status: {:?}, stderr: {}",
+        output.status,
+        stderr_of(&output)
+    );
+    assert_eq!(
+        stdout_of(&output),
+        "apple: word, 0 digit runs\n\
+         42: the number 42, 1 digit runs\n\
+         route 66 or 101: word, 2 digit runs\n\
+         2 of 3 contain digits\n"
+    );
+
+    let stderr = stderr_of(&output).replace('\\', "/");
+    assert!(
+        stderr.contains("unused variable: `trimmed`"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("/matcher/src/text.rs:"), "stderr: {stderr}");
+    assert!(!stderr.contains("target/varyk"), "stderr: {stderr}");
+}
+
+/// `units` (spec 7.3): the publish assembly, through the library API so
+/// nothing reaches the registry, then `cargo package` on it, then
+/// `consumer/`, a plain Rust binary with a `path` dependency on the
+/// assembled crate.
+#[test]
+fn units_assembles_packages_and_serves_a_cargo_only_consumer() {
+    let dir = example_dir("units");
+    let mut sources = Vec::new();
+    let package = varyk::package::load(&dir.join("Cargo.toml"), &mut sources).expect("loads");
+    let text = fs::read_to_string(&package.entry).expect("read src/lib.vr");
+    let entry = SourceFile::new(FileId(sources.len() as u32), package.entry.clone(), text);
+    let program = varyk::check_file(
+        entry,
+        package.kind,
+        Some(varyk::Dependencies {
+            crates: &[],
+            dev: &[],
+        }),
+        &mut sources,
+    )
+    .unwrap_or_else(|diagnostics| panic!("units should check: {diagnostics:#?}"));
+    let info = CrateInfo {
+        name: package.name.clone(),
+        manifest: package.isolated_manifest(),
+    };
+    let generated = RustBackend.generate(&program, &info);
+    let dest = varyk::driver::publish::assemble(&package, &generated).expect("assembles");
+    assert_eq!(dest, dir.join("target/varyk/package/units"));
+
+    cargo_in(&dest, &["package", "--no-verify", "--quiet"]);
+
+    let output = cargo_in(&dir.join("consumer"), &["run", "--quiet"]);
+    assert_eq!(stdout_of(&output), "7 meters\n");
 }

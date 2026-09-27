@@ -1,0 +1,5 @@
+mod ext;
+
+pub fn greet() -> i32 {
+    ext::two()
+}

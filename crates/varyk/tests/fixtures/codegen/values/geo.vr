@@ -4,5 +4,5 @@ pub enum Shape {
 }
 
 pub struct User {
-    name: string,
+    pub name: string,
 }

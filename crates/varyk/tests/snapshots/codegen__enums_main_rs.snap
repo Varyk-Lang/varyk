@@ -2,14 +2,14 @@
 source: crates/varyk/tests/codegen.rs
 expression: "file(&krate, \"src/main.rs\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 enum Shape {
     Circle(f64),
     Rect(f64, f64),
     Point,
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn area(shape: &Shape) -> f64 {
     match shape {
         Shape::Circle(radius) => {
@@ -25,9 +25,10 @@ fn area(shape: &Shape) -> f64 {
     }
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
-    let shapes: Vec<Shape> = vec![Shape::Circle(1.0), Shape::Rect(2.0, 3.0), Shape::Point];
+    let shapes: Vec<Shape> = ::std::vec![Shape::Circle(1.0), Shape::Rect(2.0, 3.0), Shape::Point];
     for shape in &shapes {
-        println!("{}", area(shape));
+        ::std::println!("{}", area(shape));
     }
 }

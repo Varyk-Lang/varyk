@@ -2,8 +2,7 @@
 source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"fn same(c: bool, a: string) -> bool {\\n    (if c { a } else { \\\"b\\\" }) == \\\"x\\\"\\n}\\n\\nfn main() {\\n    println!(\\\"{}\\\", same(true, \\\"x\\\"));\\n}\\n\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn same(c: bool, a: &str) -> bool {
     (if c {
         a
@@ -12,6 +11,7 @@ fn same(c: bool, a: &str) -> bool {
     }) == "x"
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
-    println!("{}", same(true, "x"));
+    ::std::println!("{}", same(true, "x"));
 }

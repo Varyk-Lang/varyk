@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0303]: `shout` may change `s`, but `s` stays inside `Guard`, which runs code when it is thrown away, so it cannot be changed here; to change it, first make a changeable copy with `let mut s = s.clone();`
+  --> crates/varyk/tests/fixtures/errors/v0303_drop_payload_to_mut_param/main.vr:11:19
+   |
+10 |         ext::Guard::Held(s) => {
+   |                          - `s` is bound here
+11 |             shout(s);
+   |                   ^ `shout` may change `s`, but `s` stays inside `Guard`, which runs code when it is thrown away, so it cannot be changed here; to change it, first make a changeable copy with `let mut s = s.clone();`
+   |
+   = note: in Rust terms, `Guard` implements `Drop`, so `match` only borrows it and nothing can be moved out of it
+help: insert `let mut s = s.clone();`

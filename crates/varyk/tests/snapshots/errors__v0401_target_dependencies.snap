@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0401]: dependencies for only some platforms are not supported yet
+ --> crates/varyk/tests/fixtures/errors/v0401_target_dependencies/Cargo.toml:6:21
+  |
+6 | [target.'cfg(unix)'.dependencies]
+  |                     ^^^^^^^^^^^^ dependencies for only some platforms are not supported yet
+  |
+  = note: these are in a `[target.'cfg(..)'.dependencies]` table; list them under `[dependencies]` instead

@@ -1,0 +1,6 @@
+mod shop;
+
+fn main() {
+    let c = shop::mk();
+    println!("{}", c.n);
+}

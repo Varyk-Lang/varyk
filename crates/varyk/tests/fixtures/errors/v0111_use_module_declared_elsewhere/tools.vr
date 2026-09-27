@@ -1,0 +1,5 @@
+use shop::price;
+
+pub fn run() {
+    println!("{}", price());
+}

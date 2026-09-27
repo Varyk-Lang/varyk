@@ -26,9 +26,16 @@ pub enum TokenKind {
     Match,
     For,
     In,
-    /// `self`, spec 2.1. `Self` is unrelated and still lexes as
-    /// [`TokenKind::ReservedKeyword`]: milestone 2 has no way to write it.
+    /// `self`, spec 2.1, also a path prefix (spec 3.1, 3.3). `Self` is
+    /// unrelated and still lexes as [`TokenKind::ReservedKeyword`]: Varyk
+    /// has no way to write it.
     SelfKw,
+    /// `crate`, a path prefix naming the crate root (spec 3.1, 3.3).
+    CrateKw,
+    /// `super`, a path prefix naming the parent module (spec 3.1, 3.3).
+    SuperKw,
+    /// `use`, spec 3.3.
+    UseKw,
 
     /// Any other Rust keyword or reserved word, carrying its text.
     ReservedKeyword(String),

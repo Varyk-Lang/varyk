@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `use` does not support glob imports in Varyk; write the name you want
+ --> crates/varyk/tests/fixtures/errors/v0001_use_glob_import/main.vr:3:8
+  |
+3 | use a::*;
+  |        ^ `use` does not support glob imports in Varyk; write the name you want

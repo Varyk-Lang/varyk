@@ -1,0 +1,10 @@
+mod cart;
+
+struct Base {
+    n: i32,
+}
+
+pub fn count() -> i32 {
+    let v = cart::make();
+    v[0].n
+}

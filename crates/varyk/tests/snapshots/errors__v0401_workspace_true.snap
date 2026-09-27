@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0401]: `regex` cannot be taken from the workspace yet; write it out here
+ --> crates/varyk/tests/fixtures/errors/v0401_workspace_true/Cargo.toml:7:11
+  |
+7 | regex = { workspace = true }
+  |           ^^^^^^^^^ `regex` cannot be taken from the workspace yet; write it out here
+  |
+  = note: `workspace = true` inherits a setting from a Cargo workspace, which Varyk does not support yet

@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0103]: the name `Cart` is defined more than once
+ --> crates/varyk/tests/fixtures/errors/v0103_use_name_clash/main.vr:7:18
+  |
+3 | / struct Cart {
+4 | |     total: i32,
+5 | | }
+  | |_- `Cart` first defined here
+6 |
+7 |   use crate::shop::Cart;
+  |                    ^^^^ the name `Cart` is defined more than once

@@ -1,0 +1,22 @@
+mod shop;
+mod util;
+mod a;
+
+use crate::shop::cart::Cart;
+use shop::cart;
+use crate::util::helper;
+use a::B as C;
+use shop::Kind;
+
+fn main() {
+    let x = Cart::new();
+    let y = cart::Cart::new();
+    helper();
+    let z = C { n: 1 };
+    let k = Kind::Word;
+    match k {
+        Kind::Word => {}
+        Kind::Number(n) => println!("{}", n),
+    }
+    println!("{} {} {}", x.total, y.total, z.n);
+}

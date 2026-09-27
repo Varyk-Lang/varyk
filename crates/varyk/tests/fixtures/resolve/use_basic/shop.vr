@@ -1,0 +1,6 @@
+pub mod cart;
+
+pub enum Kind {
+    Word,
+    Number(i32),
+}

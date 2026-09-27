@@ -1,0 +1,16 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: field `by_word` of `Counts` has the Rust type `HashMap<String, i32>`, which Varyk cannot use
+ --> crates/varyk/tests/fixtures/errors/v0108_unusable_rust_field/main.vr:6:24
+  |
+6 |     let words = counts.by_word;
+  |                        ^^^^^^^ field `by_word` of `Counts` has the Rust type `HashMap<String, i32>`, which Varyk cannot use
+  |
+ ::: crates/varyk/tests/fixtures/errors/v0108_unusable_rust_field/ext.rs:5:9
+  |
+5 |     pub by_word: HashMap<String, i32>,
+  |         ------- the Rust field is declared here
+  |
+  = note: make the field private in the Rust module and add `pub fn` methods that use it

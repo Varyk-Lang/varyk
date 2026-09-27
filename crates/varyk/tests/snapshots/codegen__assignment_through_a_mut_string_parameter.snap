@@ -2,17 +2,18 @@
 source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"fn set(mut name: string) {\\n    name = \\\"x\\\";\\n}\\n\\nfn forward(mut name: string) {\\n    set(name);\\n    println!(\\\"{}\\\", name);\\n}\\n\\nfn main() {\\n    let mut name = \\\"a\\\";\\n    forward(name);\\n}\\n\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn set(name: &mut String) {
     *name = "x".to_string();
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn forward(name: &mut String) {
     set(name);
-    println!("{}", name);
+    ::std::println!("{}", name);
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let mut name = "a".to_string();
     forward(&mut name);

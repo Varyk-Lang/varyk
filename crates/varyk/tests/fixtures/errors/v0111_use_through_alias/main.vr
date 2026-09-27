@@ -1,0 +1,8 @@
+mod a;
+
+use a as aa;
+use aa::g as gg;
+
+fn main() {
+    println!("{}", gg());
+}

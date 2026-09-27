@@ -1,0 +1,6 @@
+mod shop;
+
+fn main() {
+    let h = shop::api::make();
+    println!("{}", h.x);
+}

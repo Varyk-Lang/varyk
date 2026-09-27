@@ -1,0 +1,17 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+mod shop;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let item = crate::shop::cart::item::Item { price: 3 };
+    let mut cart = crate::shop::cart::Cart::new();
+    crate::shop::cart::Cart::add(&mut cart, &item);
+    ::std::println!("{}", cart.total);
+    match crate::shop::cart::size(&cart) {
+        crate::shop::Size::Small => ::std::println!("small"),
+        crate::shop::Size::Large(n) => ::std::println!("large {}", n),
+    }
+}

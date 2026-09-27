@@ -1,0 +1,25 @@
+pub mod case;
+
+pub struct Greeter {
+    pub heading: string,
+    count: i32,
+}
+
+impl Greeter {
+    pub fn new(word: string) -> Greeter {
+        Greeter { heading: case::title(word), count: 0 }
+    }
+
+    pub fn greet(mut self, name: string) -> string {
+        self.count = self.count + 1;
+        greeting(name)
+    }
+
+    pub fn total(self) -> i32 {
+        self.count
+    }
+}
+
+pub fn greeting(name: string) -> string {
+    format!("Hello, {}!", name)
+}

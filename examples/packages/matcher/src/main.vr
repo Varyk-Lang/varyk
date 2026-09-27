@@ -1,0 +1,31 @@
+// expected output:
+// apple: word, 0 digit runs
+// 42: the number 42, 1 digit runs
+// route 66 or 101: word, 2 digit runs
+// 2 of 3 contain digits
+
+mod text;
+
+fn describe(kind: text::Kind) -> string {
+    match kind {
+        text::Kind::Word => "word",
+        text::Kind::Number(n) => format!("the number {}", n),
+    }
+}
+
+fn main() {
+    let digits = text::Matcher::new("[0-9]+");
+    let mut inputs: Vec<string> = Vec::new();
+    inputs.push("apple");
+    inputs.push("42");
+    inputs.push("route 66 or 101");
+
+    let mut with_digits: usize = 0;
+    for s in inputs {
+        if digits.is_match(s) {
+            with_digits = with_digits + 1;
+        }
+        println!("{}: {}, {} digit runs", s, describe(text::classify(s)), digits.count(s));
+    }
+    println!("{} of {} contain digits", with_digits, inputs.len());
+}

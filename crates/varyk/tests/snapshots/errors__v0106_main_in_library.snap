@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0106]: a library must not define `main`
+ --> crates/varyk/tests/fixtures/errors/v0106_main_in_library/src/lib.vr:5:1
+  |
+5 | fn main() {
+  | ^^^^^^^ a library must not define `main`
+  |
+  = note: `src/lib.vr` is a library; a program starts from `src/main.vr`

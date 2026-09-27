@@ -1,0 +1,30 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/shop/cart.rs\")"
+---
+pub mod item;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub struct Cart {
+    pub total: i32,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+impl Cart {
+    pub fn new() -> Cart {
+        Cart { total: crate::shop::start() }
+    }
+
+    pub fn add(&mut self, item: &crate::shop::cart::item::Item) {
+        self.total = self.total + crate::shop::cart::item::cost(item);
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub fn size(cart: &Cart) -> crate::shop::Size {
+    if cart.total > 4 {
+        crate::shop::Size::Large(cart.total)
+    } else {
+        crate::shop::Size::Small
+    }
+}

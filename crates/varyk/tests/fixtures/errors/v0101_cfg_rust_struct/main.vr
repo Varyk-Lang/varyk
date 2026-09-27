@@ -1,0 +1,5 @@
+mod ext;
+
+fn show(c: ext::Cart) {}
+
+fn main() {}

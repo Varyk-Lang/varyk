@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    let m = ext::Matcher { label: "colors" };
+    println!("{}", m.label);
+}

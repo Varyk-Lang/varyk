@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0402]: `[[bin]]` is not supported yet
+ --> crates/varyk/tests/fixtures/errors/v0402_target_path/Cargo.toml:6:3
+  |
+6 | [[bin]]
+  |   ^^^ `[[bin]]` is not supported yet
+  |
+  = note: a Varyk package is one program from `src/main.vr` or one library from `src/lib.vr`, which cargo finds by its defaults; target tables are not read

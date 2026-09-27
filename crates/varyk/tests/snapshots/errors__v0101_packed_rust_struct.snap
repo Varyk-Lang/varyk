@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: Varyk cannot use the Rust struct `ext::S`
+ --> crates/varyk/tests/fixtures/errors/v0101_packed_rust_struct/main.vr:3:12
+  |
+3 | fn show(s: ext::S) {
+  |            ^^^^^^ Varyk cannot use the Rust struct `ext::S`
+  |
+  = note: the Rust struct `S` is not imported because it is `#[repr(packed)]`, so its fields cannot be borrowed

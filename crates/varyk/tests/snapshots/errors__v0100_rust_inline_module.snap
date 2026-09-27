@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0100]: `ext::inner` is a module inside the Rust file `ext.rs`, and Varyk cannot look into it
+ --> crates/varyk/tests/fixtures/errors/v0100_rust_inline_module/main.vr:4:5
+  |
+4 |     ext::inner::f();
+  |     ^^^^^^^^^^ `ext::inner` is a module inside the Rust file `ext.rs`, and Varyk cannot look into it
+  |
+  = note: Varyk reads only the top-level items of a Rust file; move what you need out of `mod inner` to the top level of `ext.rs`, or into a `.rs` file of its own

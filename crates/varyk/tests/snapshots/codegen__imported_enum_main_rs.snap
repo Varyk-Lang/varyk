@@ -1,0 +1,26 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod kind;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn describe(k: &crate::kind::Kind) -> i32 {
+    match k {
+        crate::kind::Kind::Word(n) => {
+            let n = *n;
+            n
+        }
+        crate::kind::Kind::Number(n) => {
+            let n = *n;
+            n * 2
+        }
+        crate::kind::Kind::Unit => 0,
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let k = crate::kind::classify(4);
+    ::std::println!("{}", describe(&k));
+}

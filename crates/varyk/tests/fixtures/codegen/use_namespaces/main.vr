@@ -1,0 +1,11 @@
+mod a;
+mod b;
+
+use crate::a::Foo;
+use crate::b::Foo;
+
+fn main() {
+    let x = Foo { n: 1 };
+    let y = Foo();
+    println!("{} {}", x.n, y);
+}

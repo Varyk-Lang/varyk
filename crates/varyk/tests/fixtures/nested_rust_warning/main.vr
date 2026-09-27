@@ -1,0 +1,5 @@
+mod outer;
+
+fn main() {
+    println!("{}", outer::greet());
+}

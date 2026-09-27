@@ -2,8 +2,7 @@
 source: crates/varyk/tests/codegen.rs
 expression: "file(&krate, \"src/main.rs\")"
 ---
-#![allow(dead_code, unused_variables, unused_mut, arithmetic_overflow, unconditional_panic)]
-
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn sum(values: &Vec<i32>) -> i32 {
     let mut total = 0;
     for value in values {
@@ -13,16 +12,17 @@ fn sum(values: &Vec<i32>) -> i32 {
     total
 }
 
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let mut values: Vec<i32> = Vec::new();
     values.push(10);
     values.push(20);
     values.push(30);
-    println!("{}", values.len());
+    ::std::println!("{}", values.len());
     for i in 0usize..values.len() {
-        println!("{}", values[i]);
+        ::std::println!("{}", values[i]);
     }
-    println!("{}", sum(&values));
+    ::std::println!("{}", sum(&values));
     values.pop();
-    println!("{}", values.len());
+    ::std::println!("{}", values.len());
 }

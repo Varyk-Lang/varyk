@@ -1,0 +1,8 @@
+mod ext;
+mod other;
+
+struct Local {
+    n: i32,
+}
+
+fn main() {}

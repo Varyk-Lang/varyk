@@ -1,0 +1,12 @@
+---
+source: crates/varyk/src/driver/messages.rs
+expression: human
+---
+error[V0900]: mismatched types (E0308)
+ --> main.vr:1:1
+  |
+1 | fn main() {}
+  | ^^^^ mismatched types (E0308)
+  |
+  = note: this is a bug in Varyk, not in your program: its own checks should have caught this before rustc ran; please report it at https://github.com/Varyk-Lang/varyk/issues
+  = note: run `varyk build --emit-rust` to see the generated Rust

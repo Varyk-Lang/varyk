@@ -1,0 +1,3 @@
+pub fn touch() {
+    super::f();
+}

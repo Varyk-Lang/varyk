@@ -1,0 +1,11 @@
+mod a;
+
+use a::T;
+
+struct T {
+    n: i32,
+}
+
+fn main() {
+    println!("{}", T());
+}

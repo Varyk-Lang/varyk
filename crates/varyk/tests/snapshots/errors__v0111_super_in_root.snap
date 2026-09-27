@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0111]: `super` goes to the module that declares this one, but this is the entry file, which nothing declares
+ --> crates/varyk/tests/fixtures/errors/v0111_super_in_root/main.vr:4:5
+  |
+4 |     super::helper();
+  |     ^^^^^ `super` goes to the module that declares this one, but this is the entry file, which nothing declares
+  |
+  = note: to name an item of the entry file, write `crate::` or leave the prefix out
+  = note: in Rust terms, the crate root has no parent module

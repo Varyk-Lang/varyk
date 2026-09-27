@@ -1,0 +1,14 @@
+mod kind;
+
+fn describe(k: kind::Kind) -> i32 {
+    match k {
+        kind::Kind::Word(n) => n,
+        kind::Kind::Number(n) => n * 2,
+        kind::Kind::Unit => 0,
+    }
+}
+
+fn main() {
+    let k = kind::classify(4);
+    println!("{}", describe(k));
+}

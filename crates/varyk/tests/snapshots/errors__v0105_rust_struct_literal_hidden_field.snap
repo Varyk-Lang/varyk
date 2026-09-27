@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0105]: `ext::Matcher { .. }` cannot be written in Varyk, because the Rust struct has a field Varyk cannot set: `words`
+ --> crates/varyk/tests/fixtures/errors/v0105_rust_struct_literal_hidden_field/main.vr:4:13
+  |
+4 |     let m = ext::Matcher { label: "colors" };
+  |             ^^^^^^^^^^^^ `ext::Matcher { .. }` cannot be written in Varyk, because the Rust struct has a field Varyk cannot set: `words`
+  |
+  = note: make one with a function of the Rust module instead, such as a `pub fn new` in an `impl Matcher { .. }` block there
