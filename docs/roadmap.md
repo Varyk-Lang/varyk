@@ -98,6 +98,10 @@ sub-project in its own repository. The full definition of done is section
 
 Gated on three open questions in the spec: serde derivation (automatic or
 attribute syntax), the async runtime shape, and ownership-transfer syntax.
+The bar for the milestone is one golden path: a users API on a database is
+`varyk init`, one file, and `varyk run` away, within fifteen minutes of
+`cargo install varyk`, and `varyk build --release` leaves an ordinary native
+executable. Promotion waits for it.
 
 - [ ] `varyk-std` crate
 - [ ] Derivation of serde traits for Varyk structs, per the open question
@@ -109,6 +113,8 @@ attribute syntax), the async runtime shape, and ownership-transfer syntax.
 - [ ] Configuration from the environment
 - [ ] `varyk test`
 - [ ] `async`/`await` on a built-in tokio runtime, `spawn` as a built-in, `Send`/`Sync`/`Pin` kept out of the surface syntax and their failures mapped to Varyk diagnostics
+- [ ] `varyk add`, a pass-through to `cargo add`, so the golden path never leaves the `varyk` command
+- [ ] An agent evaluation: the examples written by a model from `docs/language.md` alone, pass rates published, before any page claims that agents write Varyk well
 
 ## Milestone 6: tooling and beyond
 

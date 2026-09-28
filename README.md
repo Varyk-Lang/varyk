@@ -1,36 +1,86 @@
 # Varyk
 
-Varyk is an experimental programming language for backend services, with
-Rust-like safety and Go-like simplicity, that compiles to Rust, created by
-[Vlad Mickevic](https://github.com/vlamic).
+Build backend services simply. Ship Rust binaries.
 
-It is a small language for APIs, workers, and command-line tools: you write
-Go-like application code and ship a native binary with no garbage collector
-and the Rust ecosystem behind it. The service batteries (HTTP, JSON,
-databases, `async`) are milestone 5 on the [roadmap](docs/roadmap.md).
+Varyk is a small language for APIs, workers, and microservices, created by
+[Vlad Mickevic](https://github.com/vlamic). It removes Rust's ownership
+ceremony and keeps Rust's safety, speed, ecosystem, and deployment model:
+you write Go-like application code, the compiler turns it into readable
+Rust, rustc checks it, and you ship one native binary. Rust's safety, Go's
+simplicity.
 
-Varyk exists to make Rust available to everyone.
+- No garbage collector, and no runtime beyond Rust's own.
+- No lifetime annotations, no `&` or `&mut` to choose at a call site, and
+  one string type.
+- One native binary to deploy, with no language runtime to install.
+- Cargo and crates.io underneath: a Varyk package is a Cargo package.
+- Readable generated Rust, yours to keep.
+- Drop into Rust whenever you need it, in a `.rs` file beside your Varyk,
+  in the same build.
 
-Rust is one of the safest and fastest languages there are, and one of the
-hardest to learn. Its guarantees belong in every program, but its complexity
-keeps most people out, whether they come from another language or are
-writing their first program. Varyk keeps what makes Rust strong: memory
-safety without a garbage collector, native speed, and the Rust ecosystem. It
-removes the complexity that stands between developers and those benefits:
-first developers building services in Go, TypeScript, or Python, then
-developers coming from Rust, and AI agents writing code.
+```sh
+cargo install varyk
+```
+
+The service batteries (HTTP, JSON, databases, `async`) are milestone 5 on
+the [roadmap](docs/roadmap.md); what works today is under
+[Status](#status).
+
+## Use Varyk until you need Rust
+
+A Varyk package is a Cargo package: a `Cargo.toml` and a `src/main.vr` or
+`src/lib.vr`. `varyk init` writes one that both `varyk run` and plain
+`cargo build` compile, and `varyk publish` ships it to crates.io as a plain
+Rust crate that needs no Varyk to use. There is nothing to bootstrap: every
+crate on crates.io is available from the first day, and every Varyk package
+joins them.
+
+| Layer | File | |
+|---|---|---|
+| Your service | `src/main.vr` | Varyk. It never names a crate, and it never writes a reference. |
+| Your facade | `src/text.rs` | Rust. It wraps what the program needs in plain functions, structs, and enums, which Varyk imports like a module of its own. |
+| Any crate | crates.io | Added with `cargo add`. Need Stripe, AWS, or Kafka? Use the Rust crate. |
+
+`examples/packages/matcher` wraps `regex-lite` this way:
+
+```rust
+// src/text.rs
+pub struct Matcher {
+    re: regex_lite::Regex,
+}
+
+impl Matcher {
+    pub fn new(pattern: &str) -> Matcher { /* ... */ }
+    pub fn is_match(&self, s: &str) -> bool { /* ... */ }
+    pub fn count(&self, s: &str) -> usize { /* ... */ }
+}
+```
+
+```varyk
+// src/main.vr
+mod text;
+
+fn main() {
+    let digits = text::Matcher::new("[0-9]+");
+    println!("{}", digits.count("route 66 or 101"));
+}
+```
+
+Need something Varyk doesn't provide? Use the Rust crate. Need Rust itself,
+for the one hot loop or the borrow-heavy library? Write it in the `.rs`
+file and call it from Varyk. Varyk is for the application: kernels,
+database engines, custom allocators, and borrow-heavy libraries stay in
+Rust, in the same build.
+
+## How it works
 
 Varyk compiles to Rust and runs on the Rust ecosystem, the way TypeScript
-compiles to JavaScript, though Varyk is not a superset of Rust. The Rust
-compiler checks everything Varyk generates, so the guarantees are Rust's
-own. Varyk code lives in `.vr` files, Rust code can live in `.rs` files next
-to them, and the two build together.
-
-Varyk is for the application. Kernels, database engines, custom allocators,
-and borrow-heavy libraries stay in Rust, in a `.rs` file beside your Varyk,
-in the same build.
-
-## An example
+compiles to JavaScript, though Varyk is not a superset of Rust. Most of
+Rust's surface is the spelling of decisions the compiler can make on its
+own: which `&` to write, which string type, which lifetime. Varyk keeps
+Rust's ownership model inside the compiler and takes the spelling out of
+the language. The Rust compiler checks everything Varyk generates, so the
+guarantees are Rust's own.
 
 `examples/borrowing.vr`:
 
@@ -89,44 +139,23 @@ fn main() {
 }
 ```
 
-The generated Rust is checked by the Rust compiler like any other Rust code.
-Varyk keeps Rust's safety model and adds no garbage collector.
+`varyk build` writes that Cargo project under `target/varyk/` and hands it
+to cargo; rustc and the full borrow checker check it like any other Rust
+code, and Varyk never uses `unsafe` to get around them. The project is
+readable, and it is yours.
 
-## Packages and crates
+## Who it is for
 
-A Varyk package is a Cargo package: a `Cargo.toml` and a `src/main.vr` or
-`src/lib.vr`. `varyk init` writes one that both `varyk run` and plain
-`cargo build` compile, and `varyk publish` ships it to crates.io as a plain
-Rust crate that needs no Varyk to use.
-
-`cargo add` works unchanged. Varyk code reaches a crate through a facade, a
-`.rs` file in the package that wraps it: the facade wraps what the program
-needs in plain functions, structs, and enums, which Varyk imports like its
-own, and Varyk code never names a crate itself. `examples/packages/matcher`
-wraps `regex-lite` this way:
-
-```rust
-// src/text.rs
-pub struct Matcher {
-    re: regex_lite::Regex,
-}
-
-impl Matcher {
-    pub fn new(pattern: &str) -> Matcher { /* ... */ }
-    pub fn is_match(&self, s: &str) -> bool { /* ... */ }
-    pub fn count(&self, s: &str) -> usize { /* ... */ }
-}
-```
-
-```varyk
-// src/main.vr
-mod text;
-
-fn main() {
-    let digits = text::Matcher::new("[0-9]+");
-    println!("{}", digits.count("route 66 or 101"));
-}
-```
+Varyk exists so that ordinary backend services can be written simply and
+shipped as safe Rust. First, developers building services in Go,
+TypeScript, or Python, who want Go's simplicity and one-binary deployment
+without the garbage collector, with rustc catching the bugs those languages
+compile. Then developers coming from Rust, who want the same safety model
+with less ceremony for application code. And coding agents are unusually
+good at writing it: Rust syntax that models already know, minus the
+ownership decisions they most often get wrong, with rustc checking what the
+model wrote and diagnostics with codes and fix-its in machine-readable
+form.
 
 ## Try it
 
