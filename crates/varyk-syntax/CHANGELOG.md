@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.0](https://github.com/Varyk-Lang/varyk/compare/varyk-syntax-v0.0.2...varyk-syntax-v0.1.0) (2026-09-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* struct fields are private unless marked `pub`; a milestone-2 program that reads a field across a module boundary must add `pub` to the field.
+
+### Features
+
+* milestone 3, packages and interop ([ae30ac9](https://github.com/Varyk-Lang/varyk/commit/ae30ac9c7730651eb2488ece3f0782ba64f2c62c))
+
 ## [0.0.2](https://github.com/Varyk-Lang/varyk/compare/varyk-syntax-v0.0.1...varyk-syntax-v0.0.2) (2026-09-26)
 
 
