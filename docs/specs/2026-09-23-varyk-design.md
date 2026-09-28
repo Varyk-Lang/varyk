@@ -44,9 +44,19 @@ and `varyk run` invoke `cargo`.
 
 ## 2. Positioning
 
+Varyk's position (2026-09-29): build backend services simply, ship Rust
+binaries. A small language for APIs, workers, and microservices that removes
+Rust's ownership ceremony and keeps Rust's safety, performance, ecosystem,
+and deployment model. The choice it competes in is the one a team makes for
+a service, between Go, TypeScript, Python, and Rust, not a comparison with
+Rust across every domain. Cargo and the `.rs` escape hatch are the second
+message, "use Varyk until you need Rust"; ownership inference is the
+mechanism, explained last; agents come fourth, as "unusually good at writing
+it", never as the headline.
+
 This section describes the language Varyk is designed to become. Section 4
 lists what milestone 1 implements, and section 8 schedules the rest. Varyk
-must be attractive to four audiences at once.
+must be attractive to four audiences at once, in this order.
 
 A developer building services in Go, TypeScript, or Python sees:
 
@@ -857,3 +867,4 @@ Recorded, deliberately unanswered.
 | String copy | `s.clone()`, strings only (2026-09-25) | Rust's own spelling; the cost is visible at the call |
 | Borrowed returns | deferred to milestone 4; `.clone()` is the milestone 2 answer (2026-09-25) | a performance feature, not a capability; kept out of the MVP |
 | String joining | `format!` only; `+` rejected with a fix-it (2026-09-25) | one spelling, allocation visible at the call |
+| Positioning | build backend services simply, ship Rust binaries; Cargo and the `.rs` escape hatch second; ownership inference as mechanism; agents fourth (2026-09-29) | the buying decision is Go, TypeScript, Python, Rust, or Varyk; "a simpler Rust for everyone" invites comparison with Rust in every domain and leads with mechanism |

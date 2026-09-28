@@ -1,11 +1,14 @@
 # Varyk design notes
 
-Varyk is a programming language for backend services with Rust-like safety
-and Go-like simplicity. It compiles to Rust and runs on the Rust ecosystem,
-in the same way TypeScript compiles to JavaScript and runs on the JavaScript
-ecosystem; the analogy is about the ecosystem relationship, not the grammar,
-and Varyk is not a superset of Rust. Varyk targets services first, the space
-Go occupies, and standalone binaries second.
+Varyk is a small language for backend services, APIs, workers, and
+microservices, that compiles to Rust: Go-like application code that ships as
+a native binary with Rust's safety, speed, and ecosystem. It runs on the
+Rust ecosystem in the same way TypeScript runs on the JavaScript ecosystem;
+the analogy is about the ecosystem relationship, not the grammar, and Varyk
+is not a superset of Rust. The choice Varyk competes in is the one a team
+makes for a service, between Go, TypeScript, Python, and Rust, so Varyk
+targets services first, the space Go occupies, and standalone binaries
+second. Ownership inference is how Varyk delivers that, not what it sells.
 
 These are the principles Varyk is built on and the decisions made so far,
 with the reason for each. The full design, including how the compiler works,
@@ -26,9 +29,9 @@ In priority order. When two conflict, the earlier one wins.
    parameter of type `String`) is converted at that line, and `--emit-rust`
    shows it. Aliasing rules are preserved. The generated Rust is checked by
    rustc, and Varyk never works around rustc with unsafe code.
-2. **Newcomer first, human or agent.** Every tie-breaker on the surface
-   language goes toward the developer building services who has never
-   written Rust. Learnability is a value in its own right: the language and
+2. **The service developer first, human or agent.** Every tie-breaker on
+   the surface language goes toward the developer building services who has
+   never written Rust. Learnability is a value in its own right: the language and
    its diagnostics should be learnable without a Rust background. AI agents
    are first-class writers of Varyk. Where their needs and human readability
    diverge, human readability wins.
@@ -68,6 +71,10 @@ In priority order. When two conflict, the earlier one wins.
 - Not every Rust niche. Embedded and `no_std` targets are out of scope.
 - Not for kernels, database engines, custom allocators, or borrow-heavy
   libraries; those stay in `.rs` files in the same build.
+- Not a road to all of Rust. Varyk does not add a mechanism so that a
+  program which belongs in Rust can be written in Varyk; the `.rs` file
+  beside it is the answer, and "use Varyk until you need Rust" is the
+  promise.
 
 ## Stability
 

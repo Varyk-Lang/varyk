@@ -43,7 +43,7 @@ use crate::package::{self, Kind, Package};
 #[command(
     name = "varyk",
     version,
-    about = "The Varyk compiler. Varyk is a small language for backend services that compiles to Rust."
+    about = "The Varyk compiler. Varyk is a small language for APIs, workers, and microservices that compiles to Rust."
 )]
 pub struct Cli {
     /// Diagnostic output format; applies to every subcommand.
