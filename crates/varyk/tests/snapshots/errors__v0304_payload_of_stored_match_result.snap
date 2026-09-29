@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: this value is kept inside `next`, so it cannot be given to `push`, which keeps what it is given
+  --> crates/varyk/tests/fixtures/errors/v0304_payload_of_stored_match_result/main.vr:14:43
+   |
+14 |         Some(Job::Run(name)) => done.push(name),
+   |                                           ^^^^ this value is kept inside `next`, so it cannot be given to `push`, which keeps what it is given
+   |
+   = note: `match` on a stored value only looks inside it, so `name` stays inside `next`, which was made by a `match`; to take the value out, move that `match` into a function that returns it and `match` on the call
+   = note: in Rust terms, a borrowed value cannot move into a place that owns it
+help: insert `.clone()` after `name`

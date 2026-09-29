@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let a = "one";
+    let b = "three";
+    println!("{}", ext::longer(a, b));
+}

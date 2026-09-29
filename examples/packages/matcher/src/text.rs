@@ -20,6 +20,7 @@ impl Matcher {
     }
 }
 
+#[derive(Clone, PartialEq)]
 pub enum Kind {
     Word,
     Number(i32),

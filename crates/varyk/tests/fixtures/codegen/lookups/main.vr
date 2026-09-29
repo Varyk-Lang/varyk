@@ -1,0 +1,44 @@
+enum Shape {
+    Circle(f64),
+    Square(f64),
+}
+
+fn area(r: f64) -> f64 {
+    r * r
+}
+
+fn or_zero(o: Option<i32>) -> i32 {
+    o.unwrap_or(0)
+}
+
+fn code(text: string) -> Result<i32, string> {
+    let parsed: Option<i32> = text.parse();
+    let n = parsed.ok_or("not a number")?;
+    Ok(n)
+}
+
+fn main() {
+    let words = vec!["to", "be", "or", "not", "to", "be"];
+    let mut counts: HashMap<string, i32> = HashMap::new();
+    for word in words {
+        let n = counts.get(word).unwrap_or(0);
+        counts.insert(word.clone(), n + 1);
+    }
+    println!("{}", counts.get("to").unwrap_or(0));
+
+    let lines = vec!["first", "second"];
+    if let Some(line) = lines.get(1) {
+        println!("second: {}", line);
+    }
+
+    let shapes = vec![Shape::Circle(1.5), Shape::Square(2.0)];
+    match shapes.get(0) {
+        Some(Shape::Circle(r)) => println!("{}", area(r)),
+        Some(Shape::Square(s)) => println!("{}", s),
+        None => {}
+    }
+
+    let stored: Option<i32> = Some(4);
+    println!("{} {}", or_zero(stored), stored.unwrap_or(1));
+    println!("{}", code("12").ok().unwrap_or(0));
+}

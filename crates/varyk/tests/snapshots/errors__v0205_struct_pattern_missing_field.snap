@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0205]: this pattern leaves out the field `y` of `Event::Click`; a pattern names every field, with `name: _` for one it does not need
+ --> crates/varyk/tests/fixtures/errors/v0205_struct_pattern_missing_field/main.vr:8:9
+  |
+8 |         Event::Click { x } => x,
+  |         ^^^^^^^^^^^^^^^^^^ this pattern leaves out the field `y` of `Event::Click`; a pattern names every field, with `name: _` for one it does not need
+  |
+  = note: Varyk has no `..` in patterns

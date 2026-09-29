@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0308]: this closure returns part of `fallback` in one place and part of `u` in another
+ --> crates/varyk/tests/fixtures/errors/v0308_map_two_roots/main.vr:9:88
+  |
+9 |     let shown = users.iter().map(|u| if u.nickname.is_empty() { fallback.name } else { u.nickname }).count();
+  |                                                                 -------------          ^^^^^^^^^^ this closure returns part of `fallback` in one place and part of `u` in another
+  |                                                                 |
+  |                                                                 part of `fallback` is returned here
+  |
+  = note: every value the closure returns must be new, or part of the same one thing; return copies in both places, with `.clone()`
+  = note: in Rust terms, the items would borrow from two values, which one lifetime cannot name

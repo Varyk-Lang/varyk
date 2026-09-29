@@ -2,31 +2,42 @@
 //! method of a user type's `impl` blocks or a row of the built-in table,
 //! `v[i]`, and `r?`.
 
-use varyk_syntax::{Expr, Ident, Span};
+use varyk_syntax::{Expr, ExprKind, Ident, Span};
 
-use super::{FnChecker, RANGE_USIZE_NOTE, unsupported_rust_signature, usize_note};
-use crate::builtins::{self, Owner};
+use super::{FnChecker, RANGE_USIZE_NOTE, closures, unsupported_rust_signature, usize_note};
+use crate::builtins::{self, BuiltinId, ClosureResult, Owner, ResultKind, Subst};
 use crate::diagnostics::{Diagnostic, codes};
-use crate::hir::{HirExpr, HirExprKind, MethodRef};
+use crate::hir::{HirExpr, HirExprKind, MethodRef, TryKind, VariantRef};
 use crate::resolve::{Callee, LookupError, UserType, not_visible};
 use crate::types::{IntKind, Ty};
 
 impl FnChecker<'_> {
     /// `receiver.method(args)` (spec 2.5, 2.6): a method of the receiver's
     /// type from its `impl` blocks, or a row of the built-in table for a
-    /// `Vec` or a `string`. A method the type does not have is V0100
-    /// naming the type (and, for a built-in type, listing its methods); a
-    /// non-`pub` method of another module's type is V0105.
+    /// `Vec`, a `string`, an `Option`, a `Result`, or a `HashMap` (M4 spec
+    /// 2.7), whose element rule the receiver must meet (V0200) and whose
+    /// `parse` takes its type from `expected`. A method the type does not
+    /// have is V0100 naming the type (and, for a built-in type, listing
+    /// its methods); a non-`pub` method of another module's type is V0105.
+    /// `ok_or` takes its error type from an expected `Result`, else from
+    /// its argument; a looked-into row whose payload is not Copy, and a
+    /// borrowed row, is `rooted` at its receiver.
     pub(super) fn method_call(
         &mut self,
         receiver: &Expr,
         method: &Ident,
         args: &[Expr],
+        expected: Option<Ty>,
         span: Span,
     ) -> Option<HirExpr> {
         let receiver = self.expr(receiver, None)?;
+        if method.name == "clone" && self.derived_clone(&receiver.ty) {
+            return self.clone_call(receiver, method, args, span);
+        }
         let type_name = self.ty_name(&receiver.ty);
         let no_method = format!("type `{type_name}` has no method `{}`", method.name);
+        // Arguments typed before the parameter types were known.
+        let mut typed = None;
         let (found, params, ret): (MethodRef, Vec<Ty>, Ty) = match &receiver.ty {
             Ty::Struct(_) | Ty::Enum(_) => {
                 let owner = match receiver.ty {
@@ -103,48 +114,304 @@ impl FnChecker<'_> {
                 }
                 (found, params, ret)
             }
-            Ty::Vec(_) | Ty::String => {
-                let (owner, element) = match &receiver.ty {
-                    Ty::Vec(element) => (Owner::Vec, (**element).clone()),
-                    _ => (Owner::String, Ty::String),
+            other => {
+                let Some((owner, subst)) = Owner::of(other) else {
+                    self.diagnostics.push(Diagnostic::new(
+                        codes::V0100,
+                        method.span,
+                        format!("type `{type_name}` has no methods"),
+                    ));
+                    return None;
                 };
                 let Some(id) = builtins::lookup(owner, &method.name, true) else {
-                    let message = format!(
-                        "{no_method}; the methods of a `{}` are {}",
-                        owner.name(),
-                        listing(&builtins::names(owner, true))
-                    );
-                    self.diagnostics
-                        .push(Diagnostic::new(codes::V0100, method.span, message));
+                    let calls = listing(&builtins::names(owner, true));
+                    let message = if owner == Owner::Chain {
+                        format!(
+                            "a chain has no call `{}`; the calls of a chain are {calls}",
+                            method.name
+                        )
+                    } else {
+                        format!(
+                            "{no_method}; the methods of {} are {calls}",
+                            owner_words(owner)
+                        )
+                    };
+                    let mut diagnostic = Diagnostic::new(codes::V0100, method.span, message);
+                    if matches!(owner, Owner::Option | Owner::Result) {
+                        diagnostic =
+                            diagnostic.with_note("use `match` to look at the value inside it");
+                    }
+                    self.diagnostics.push(diagnostic);
                     return None;
                 };
                 let entry = id.get();
-                let params = entry.params.iter().map(|p| p.ty(&element)).collect();
-                (MethodRef::Builtin(id), params, entry.result.ty(&element))
-            }
-            other => {
-                let mut diagnostic = Diagnostic::new(
-                    codes::V0100,
-                    method.span,
-                    format!("type `{type_name}` has no methods"),
-                );
-                if matches!(other, Ty::Option(_) | Ty::Result(..)) {
-                    diagnostic = diagnostic.with_note("use `match` to look at the value inside it");
+                if !entry.element.accepts(&subst.t) {
+                    let message = if owner == Owner::Chain {
+                        format!(
+                            "`{}` adds up numbers, and these items are `{}`",
+                            entry.name,
+                            self.ty_name(&subst.t)
+                        )
+                    } else {
+                        format!(
+                            "`{}` needs {}, and this is `{type_name}`",
+                            entry.name,
+                            entry.element.wanted()
+                        )
+                    };
+                    self.diagnostics
+                        .push(Diagnostic::new(codes::V0200, method.span, message));
+                    return None;
                 }
-                self.diagnostics.push(diagnostic);
-                return None;
+                let subst = match (entry.result, &expected, args) {
+                    (builtins::Shape::OptionOfExpected, ..) => {
+                        let expected = self.parsed_type(expected.as_ref(), span)?;
+                        builtins::Subst { expected, ..subst }
+                    }
+                    // `ok_or(e)`: `E` from an expected `Result<_, E>`, and
+                    // otherwise from the argument, typed first with
+                    // nothing expected.
+                    (builtins::Shape::ResultOfTAndE, Some(Ty::Result(_, e)), _) => {
+                        builtins::Subst {
+                            e: (**e).clone(),
+                            ..subst
+                        }
+                    }
+                    (builtins::Shape::ResultOfTAndE, _, [arg]) => {
+                        let arg = self.expr(arg, None)?;
+                        let e = arg.ty.clone();
+                        typed = Some(vec![arg]);
+                        builtins::Subst { e, ..subst }
+                    }
+                    _ => subst,
+                };
+                if entry.params.iter().any(|shape| shape.is_closure()) {
+                    let (args, subst) = self.closure_arguments(id, subst, args, expected, span)?;
+                    typed = Some(args);
+                    (MethodRef::Builtin(id), Vec::new(), entry.result.ty(&subst))
+                } else {
+                    let params = entry.params.iter().map(|p| p.ty(&subst)).collect();
+                    (MethodRef::Builtin(id), params, entry.result.ty(&subst))
+                }
             }
         };
-        let args = self.arguments(&method.name, &params, args, span)?;
+        let args = match typed {
+            Some(args) => args,
+            None => self.arguments(&method.name, &params, args, span)?,
+        };
+        // A looked-into result holds part of its receiver, unless its
+        // payload is Copy, when it is a plain `Option` of a copy (M4 spec
+        // 2.8). A chain's `find` is looked into by its items, which borrow
+        // analysis decides (M4 spec 3.3).
+        let rooted = match (found, &ret) {
+            (MethodRef::Builtin(id), Ty::Option(payload))
+                if id.get().result_kind == ResultKind::LookInside
+                    && id.get().owner != Owner::Chain
+                    && !payload.is_copy() =>
+            {
+                Some(0)
+            }
+            // A borrowed row's result is part of its receiver (M4 spec 3.1).
+            (MethodRef::Builtin(id), _) if id.get().result_kind == ResultKind::Borrowed => Some(0),
+            _ => None,
+        };
         Some(HirExpr {
             kind: HirExprKind::MethodCall {
                 receiver: Box::new(receiver),
                 method: found,
                 args,
+                rooted,
+                looked_into: false,
             },
             ty: ret,
             span,
         })
+    }
+
+    /// Whether `.clone()` on a value of type `ty` is the derived copy of
+    /// M4 spec 2.10 rather than a method of the type: on a number, `bool`,
+    /// `Option`, `Result`, `Vec`, or `HashMap`, and on a struct or enum
+    /// with no member of that name. `string` has its own row, and a chain
+    /// no `clone`.
+    fn derived_clone(&self, ty: &Ty) -> bool {
+        let owner = match ty {
+            Ty::Struct(id) => UserType::Struct(*id),
+            Ty::Enum(id) => UserType::Enum(*id),
+            Ty::Bool
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Option(_)
+            | Ty::Result(..)
+            | Ty::Vec(_)
+            | Ty::HashMap(..) => return true,
+            _ => return false,
+        };
+        matches!(
+            self.symbols.lookup_member(self.module, owner, "clone"),
+            Err(LookupError::Unknown)
+        )
+    }
+
+    /// `receiver.clone()` on a type that is not `string` (M4 spec 2.10): a
+    /// new value of the receiver's type, lowered as the `clone` row, which
+    /// reads its receiver. On a number or `bool` it is V0100, since those
+    /// are copied on use; on a type that cannot be cloned V0203, naming
+    /// what prevents it.
+    fn clone_call(
+        &mut self,
+        receiver: HirExpr,
+        method: &Ident,
+        args: &[Expr],
+        span: Span,
+    ) -> Option<HirExpr> {
+        let ty = receiver.ty.clone();
+        if ty.is_copy() {
+            let message = format!(
+                "`{}` needs no `.clone()`: numbers and `bool` are copied on use; drop \
+                 `.clone()`",
+                self.ty_name(&ty)
+            );
+            self.diagnostics
+                .push(Diagnostic::new(codes::V0100, method.span, message));
+            return None;
+        }
+        if let Err(blocker) = self.derives.can_clone(&ty) {
+            let headline = format!("`{}` cannot be copied with `.clone()`", self.ty_name(&ty));
+            let rust = "in Rust terms, `.clone()` needs the type to implement `Clone`, which \
+                        Varyk derives for a struct or enum whose every field and payload has \
+                        it, and reads from `#[derive(..)]` on a Rust type";
+            self.blocked(span, headline, blocker, rust);
+            return None;
+        }
+        let args = self.arguments(&method.name, &[], args, span)?;
+        // The row is always in the table.
+        let id = builtins::lookup(Owner::String, "clone", true)?;
+        Some(HirExpr {
+            kind: HirExprKind::MethodCall {
+                receiver: Box::new(receiver),
+                method: MethodRef::Builtin(id),
+                args,
+                rooted: None,
+                looked_into: false,
+            },
+            ty,
+            span,
+        })
+    }
+
+    /// The arguments of row `id`, one of whose parameters is a closure
+    /// (M4 spec 2.2): each closure is typed at the call, handed the type
+    /// its row says, with its body expected to give what the call's
+    /// `expected` type holds in `R`'s place; `R` is then what the body
+    /// gives. Returns the arguments and `subst` with `R` filled in.
+    fn closure_arguments(
+        &mut self,
+        id: BuiltinId,
+        mut subst: Subst,
+        args: &[Expr],
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Option<(Vec<HirExpr>, Subst)> {
+        let entry = id.get();
+        if args.len() != entry.params.len() {
+            // The count is all `arguments` looks at here.
+            let params = vec![Ty::Unit; entry.params.len()];
+            return self
+                .arguments(entry.name, &params, args, span)
+                .map(|args| (args, subst));
+        }
+        let wanted = match (entry.result, expected) {
+            (builtins::Shape::OptionOfR, Some(Ty::Option(r))) => Some(*r),
+            (builtins::Shape::ResultOfTAndR, Some(Ty::Result(_, r))) => Some(*r),
+            _ => None,
+        };
+        let mut checked = Vec::new();
+        for (arg, shape) in args.iter().zip(entry.params) {
+            let builtins::Shape::Closure(closure) = shape else {
+                let ty = shape.ty(&subst);
+                checked.push(
+                    self.expr(arg, Some(ty.clone()))
+                        .and_then(|arg| self.expect(arg, &ty)),
+                );
+                continue;
+            };
+            let param = closure.param.ty(&subst);
+            let result = match closure.result {
+                ClosureResult::Bool => Some(Ty::Bool),
+                ClosureResult::Any => wanted.clone(),
+            };
+            let Some((closure_expr, ty)) = closures::check(self, id, arg, param, result.clone())
+            else {
+                checked.push(None);
+                continue;
+            };
+            if let (Some(Ty::Bool), ClosureResult::Bool) = (&result, closure.result) {
+                if ty != Ty::Bool {
+                    let at = closure_expr_tail_span(&closure_expr);
+                    self.mismatch(at, &Ty::Bool, &ty);
+                    checked.push(None);
+                    continue;
+                }
+            }
+            subst.r = ty;
+            checked.push(Some(closure_expr));
+        }
+        let args: Option<Vec<HirExpr>> = checked.into_iter().collect();
+        Some((args?, subst))
+    }
+
+    /// The type `parse()` (at `span`) reads, taken from `expected` as
+    /// `None`'s is (M4 spec 2.7): the `X` of an expected `Option<X>`, a
+    /// number type or `bool` (V0200 otherwise); V0206 when it is the
+    /// operand of `?` in a function returning `Result`; V0207 with nothing
+    /// expected, showing the two statements such a function writes.
+    fn parsed_type(&mut self, expected: Option<&Ty>, span: Span) -> Option<Ty> {
+        match expected {
+            Some(Ty::Option(inner)) if matches!(**inner, Ty::Int(_) | Ty::Float(_) | Ty::Bool) => {
+                Some((**inner).clone())
+            }
+            Some(Ty::Option(inner)) => {
+                let message = format!(
+                    "`parse` reads a number or `bool` from text, and cannot make a `{}`",
+                    self.ty_name(inner)
+                );
+                self.diagnostics
+                    .push(Diagnostic::new(codes::V0200, span, message));
+                None
+            }
+            // `text.parse()?` in a function returning `Result`: the
+            // expected `Result` came through `?`, and `parse` gives an
+            // `Option`.
+            Some(Ty::Result(..)) if self.result_try_operand == Some(span) => {
+                let message = format!(
+                    "`?` works on a `Result`, and this is `Option<_>`; `{}` returns `{}`",
+                    self.name,
+                    self.ty_name(&self.ret)
+                );
+                self.diagnostics.push(
+                    Diagnostic::new(codes::V0206, span, message)
+                        .with_note(
+                            "`parse` gives an `Option`; in a function returning `Result`, write \
+                             two statements: `let parsed: Option<i32> = text.parse();` then \
+                             `parsed.ok_or(e)?`",
+                        )
+                        .with_note(
+                            "in Rust terms, `?` returns early with the `Err` or the `None`, so \
+                             the function's return type must be a `Result` with the same error \
+                             type, or an `Option`",
+                        ),
+                );
+                None
+            }
+            _ => {
+                let what = "the type `parse()` reads";
+                // Two statements, since the checker never types a receiver
+                // from the call made on it.
+                let shape = "let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?";
+                self.type_hole(span, expected, "Option<_>", what, shape);
+                None
+            }
+        }
     }
 
     /// `base[index]` (spec 2.6): `base` must be a `Vec` and `index` a
@@ -188,29 +455,120 @@ impl FnChecker<'_> {
         })
     }
 
-    /// `operand?` (spec 2.8): the function returns `Result<T, E>` and
-    /// `operand` is a `Result<U, E>` with the same `E`; the value is the
-    /// `U`. Anything else is V0206 naming the function's return type and
-    /// the operand's type: there is no error conversion, and `?` on an
-    /// `Option` is a later milestone.
-    pub(super) fn try_(&mut self, operand: &Expr, span: Span) -> Option<HirExpr> {
-        let operand = self.expr(operand, None)?;
-        let found = self.ty_name(&operand.ty);
+    /// `operand?` (spec 2.8, M4 spec 2.6). In a function returning
+    /// `Result<T, E>` the operand is a `Result<U, E>` with the same `E`; in
+    /// one returning `Option<T>` it is an `Option<U>`; the value is the `U`.
+    /// Anything else is V0206 naming the function's return type and the
+    /// operand's type: there is no conversion of any kind.
+    ///
+    /// `expected` is the type wanted of the whole `operand?`; it becomes
+    /// the operand's `U`. With nothing expected an `Ok(x)` operand takes
+    /// its `U` from `x` and the function's error type, and `Some(x)` from
+    /// `x`; `Err(e)?` and `None?` have nothing to take a `U` from (V0207).
+    pub(super) fn try_(
+        &mut self,
+        operand: &Expr,
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Option<HirExpr> {
+        self.leaves_closure("`?`", span)?;
+        let ret = self.ret.clone();
+        // A constructor of the other family (or in a function that has none)
+        // is a misuse whatever its payload: decided before any expected
+        // type goes down, so it is V0206 and never a hole or a mismatch.
+        let family = constructor_family(operand);
+        let misplaced = match (&ret, &family) {
+            (Ty::Option(_), Some(Shape::Result(_))) => true,
+            (Ty::Result(..), Some(Shape::Option)) => true,
+            (Ty::Option(_) | Ty::Result(..), _) => false,
+            (_, family) => family.is_some(),
+        };
+        let wanted = match (&ret, expected) {
+            (_, _) if misplaced => None,
+            (Ty::Option(_), Some(ty)) => Some(Ty::Option(Box::new(ty))),
+            (Ty::Result(_, err), Some(ty)) => Some(Ty::Result(Box::new(ty), err.clone())),
+            _ => None,
+        };
+        let typed = if misplaced {
+            None
+        } else {
+            Some(match (&wanted, &ret, ok_argument(operand)) {
+                (None, Ty::Result(_, err), Some(arg)) => {
+                    let err = err.clone();
+                    let arg = self.expr(arg, None)?;
+                    let ty = Ty::Result(Box::new(arg.ty.clone()), err);
+                    HirExpr {
+                        kind: HirExprKind::EnumLit {
+                            variant: VariantRef::Ok,
+                            args: vec![arg],
+                            fields: None,
+                            write_full_type: false,
+                        },
+                        ty,
+                        span: operand.span,
+                    }
+                }
+                _ => {
+                    let before = self.diagnostics.len();
+                    let outer = self.result_try_operand.take();
+                    if let Ty::Result(..) = ret {
+                        self.result_try_operand = Some(operand.span);
+                    }
+                    let checked = self.expr(operand, wanted);
+                    self.result_try_operand = outer;
+                    let Some(checked) = checked else {
+                        // `Err(e)?;` has no value type to take from anywhere.
+                        if is_err_call(operand) {
+                            if let Some(hole) = self.diagnostics.get_mut(before) {
+                                if hole.code == codes::V0207 {
+                                    hole.notes.push(
+                                        "to give up with an error, write `return Err(..);`"
+                                            .to_string(),
+                                    );
+                                }
+                            }
+                        }
+                        return None;
+                    };
+                    checked
+                }
+            })
+        };
+        let (found, shape) = match (&typed, &family) {
+            (Some(operand), _) => (
+                self.ty_name(&operand.ty),
+                match &operand.ty {
+                    Ty::Result(_, err) => Shape::Result(Some((**err).clone())),
+                    Ty::Option(_) => Shape::Option,
+                    _ => Shape::Other,
+                },
+            ),
+            (None, Some(Shape::Option)) => ("Option<_>".to_string(), Shape::Option),
+            (None, _) => ("Result<_, _>".to_string(), Shape::Result(None)),
+        };
         let name = self.name;
-        let (message, note) = match (&self.ret, &operand.ty) {
-            (Ty::Result(_, want), Ty::Result(ok, err)) if err == want => {
+        let (message, note) = match (&ret, shape) {
+            (Ty::Result(_, want), Shape::Result(Some(err))) if err == *want.as_ref() => {
+                let operand = typed?;
+                let Ty::Result(ok, _) = &operand.ty else {
+                    return None;
+                };
                 let ty = (**ok).clone();
-                return Some(HirExpr {
-                    kind: HirExprKind::Try(Box::new(operand)),
-                    ty,
-                    span,
-                });
+                return Some(self.question(operand, TryKind::Result, ty, span));
             }
-            (Ty::Result(_, want), Ty::Result(..)) => (
+            (Ty::Option(_), Shape::Option) => {
+                let operand = typed?;
+                let Ty::Option(inner) = &operand.ty else {
+                    return None;
+                };
+                let ty = (**inner).clone();
+                return Some(self.question(operand, TryKind::Option, ty, span));
+            }
+            (Ty::Result(_, want), Shape::Result(_)) => (
                 format!(
                     "`?` hands the error of this `{found}` back to the caller, but `{name}` \
                      returns `{}`, whose error type is `{}`",
-                    self.ty_name(&self.ret),
+                    self.ty_name(&ret),
                     self.ty_name(want)
                 ),
                 "the error types must be the same: an error is never converted into \
@@ -219,25 +577,38 @@ impl FnChecker<'_> {
             (Ty::Result(..), other) => (
                 format!(
                     "`?` works on a `Result`, and this is `{found}`; `{name}` returns `{}`",
-                    self.ty_name(&self.ret)
+                    self.ty_name(&ret)
                 ),
-                if matches!(other, Ty::Option(_)) {
-                    "`?` on an `Option` comes in a later milestone; use `match` to look inside it"
+                if matches!(other, Shape::Option) {
+                    "`?` on an `Option` needs a function that returns an `Option`; use \
+                     `match` to look inside it"
                 } else {
                     "`?` takes the value out of an `Ok`, or returns the error of an `Err`"
                 },
             ),
+            (Ty::Option(_), other) => (
+                format!(
+                    "`?` works on an `Option`, and this is `{found}`; `{name}` returns `{}`",
+                    self.ty_name(&ret)
+                ),
+                if matches!(other, Shape::Result(_)) {
+                    "`?` on a `Result` needs a function that returns a `Result`; use \
+                     `match` to look inside it"
+                } else {
+                    "`?` takes the value out of a `Some`, or returns `None` from the function"
+                },
+            ),
             (Ty::Unit, _) => (
                 format!(
-                    "`?` needs a function that returns a `Result`, but `{name}` returns \
-                     nothing (this value is `{found}`)"
+                    "`?` needs a function that returns a `Result` or an `Option`, but `{name}` \
+                     returns nothing (this value is `{found}`)"
                 ),
                 RESULT_NOTE,
             ),
             (ret, _) => (
                 format!(
-                    "`?` needs a function that returns a `Result`, but `{name}` returns `{}` \
-                     (this value is `{found}`)",
+                    "`?` needs a function that returns a `Result` or an `Option`, but `{name}` \
+                     returns `{}` (this value is `{found}`)",
                     self.ty_name(ret)
                 ),
                 RESULT_NOTE,
@@ -246,19 +617,110 @@ impl FnChecker<'_> {
         self.diagnostics.push(
             Diagnostic::new(codes::V0206, span, message)
                 .with_note(note)
-                .with_note("in Rust terms, `?` returns early with the `Err`, so the function's return type must be a `Result` with the same error type"),
+                .with_note("in Rust terms, `?` returns early with the `Err` or the `None`, so the function's return type must be a `Result` with the same error type, or an `Option`"),
         );
         None
     }
+
+    /// `operand?` of type `ty`. A built-in constructor written directly
+    /// under `?` has type arguments rustc cannot infer, so the backend
+    /// writes them out.
+    fn question(&self, mut operand: HirExpr, kind: TryKind, ty: Ty, span: Span) -> HirExpr {
+        if let HirExprKind::EnumLit {
+            variant: VariantRef::Ok | VariantRef::Err | VariantRef::None,
+            write_full_type,
+            ..
+        } = &mut operand.kind
+        {
+            *write_full_type = true;
+        }
+        HirExpr {
+            kind: HirExprKind::Try {
+                operand: Box::new(operand),
+                kind,
+            },
+            ty,
+            span,
+        }
+    }
 }
 
-/// Why `?` needs a function returning a `Result` (spec 2.8).
+/// Where a closure's value is given: its body's tail, or the whole
+/// closure for a body without one.
+fn closure_expr_tail_span(closure: &HirExpr) -> Span {
+    match &closure.kind {
+        HirExprKind::Closure { body, .. } => body.tail.as_ref().map_or(body.span, |tail| tail.span),
+        _ => closure.span,
+    }
+}
+
+/// The kind of value a `?` operand is, as far as it is known.
+#[derive(Clone)]
+enum Shape {
+    Result(Option<Ty>),
+    Option,
+    Other,
+}
+
+/// The family of the built-in constructor `expr` is (`Ok(..)`, `Err(..)`,
+/// `Some(..)`, `None`), if it is one.
+fn constructor_family(expr: &Expr) -> Option<Shape> {
+    let name = match &expr.kind {
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Path { path: None, name } => name,
+            _ => return None,
+        },
+        ExprKind::Path { path: None, name } => name,
+        _ => return None,
+    };
+    match name.name.as_str() {
+        "Some" | "None" => Some(Shape::Option),
+        "Ok" | "Err" => Some(Shape::Result(None)),
+        _ => None,
+    }
+}
+
+/// Whether `expr` is a call of `Err`.
+fn is_err_call(expr: &Expr) -> bool {
+    let ExprKind::Call { callee, .. } = &expr.kind else {
+        return false;
+    };
+    matches!(&callee.kind, ExprKind::Path { path: None, name } if name.name == "Err")
+}
+
+/// The argument of `expr` when it is `Ok(argument)`: the one built-in
+/// constructor whose value type `?` can take from its argument alone.
+fn ok_argument(expr: &Expr) -> Option<&Expr> {
+    let ExprKind::Call { callee, args } = &expr.kind else {
+        return None;
+    };
+    let ExprKind::Path { path: None, name } = &callee.kind else {
+        return None;
+    };
+    match args.as_slice() {
+        [arg] if name.name == "Ok" => Some(arg),
+        _ => None,
+    }
+}
+
+/// Why `?` needs a function returning a `Result` or an `Option` (spec 2.8).
 const RESULT_NOTE: &str = "on an error, `?` returns it from the function at once, so the \
-                           function must return a `Result`; `main` never does, so use `?` in a \
-                           helper function and `match` on that function's result";
+                           function must return a `Result` (or, for an `Option`, an `Option`); \
+                           `main` never does, so use `?` in a helper function and `match` on \
+                           that function's result";
+
+/// The built-in type `owner` with its article, as a message says it:
+/// "a `Vec`", "an `Option`", "a chain".
+pub(super) fn owner_words(owner: Owner) -> String {
+    match owner {
+        Owner::Chain => "a chain".to_string(),
+        Owner::Option => format!("an `{}`", owner.name()),
+        _ => format!("a `{}`", owner.name()),
+    }
+}
 
 /// `names` as a list in words: "`a`, `b`, and `c`", or "`a` and `b`".
-fn listing(names: &[&str]) -> String {
+pub(super) fn listing(names: &[&str]) -> String {
     let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
     match quoted.as_slice() {
         [] => String::new(),

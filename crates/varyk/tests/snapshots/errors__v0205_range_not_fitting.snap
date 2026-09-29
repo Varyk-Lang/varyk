@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0205]: `300` does not fit in `u8` (0 to 255)
+ --> crates/varyk/tests/fixtures/errors/v0205_range_not_fitting/main.vr:3:9
+  |
+3 |         0..=300 => 1,
+  |         ^^^^^^^ `300` does not fit in `u8` (0 to 255)
+  |
+  = note: in Rust terms, the literal is out of range for the pattern's type

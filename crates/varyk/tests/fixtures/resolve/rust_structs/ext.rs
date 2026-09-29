@@ -21,7 +21,7 @@ impl Matcher {
     pub fn into_inner(self) -> String {
         self.label
     }
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &String {
         &self.label
     }
     pub fn pick<T>(&self, value: T) -> T {

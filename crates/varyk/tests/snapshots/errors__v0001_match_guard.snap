@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: match guards (`pattern if condition`) are not supported in Varyk; write the condition as an `if` inside the arm
+ --> crates/varyk/tests/fixtures/errors/v0001_match_guard/main.vr:4:17
+  |
+4 |         Some(n) if n > 0 => println!("positive {}", n),
+  |                 ^^ match guards (`pattern if condition`) are not supported in Varyk; write the condition as an `if` inside the arm

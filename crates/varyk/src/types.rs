@@ -3,8 +3,8 @@
 use crate::resolve::{EnumId, StructId};
 
 /// A resolved type: the primitives, `string`, a user-declared struct or
-/// enum, one of the three standard generic types (spec 2.6), or the unit
-/// type of a function with no return value.
+/// enum, one of the four standard generic types (spec 2.6, M4 spec 2.7),
+/// or the unit type of a function with no return value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Ty {
     Bool,
@@ -17,8 +17,22 @@ pub enum Ty {
     Option(Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
     Vec(Box<Ty>),
+    /// `HashMap<K, V>`, `K` an integer type, `bool`, or `string`.
+    HashMap(Box<Ty>, Box<Ty>),
+    /// An unfinished chain of items of this type (M4 spec 2.3): internal,
+    /// with no Varyk spelling, so it may only be the receiver of the next
+    /// call of the chain (V0208 anywhere else).
+    Chain(Box<Ty>),
     Unit,
 }
+
+/// Every type name Varyk knows without a declaration: the primitives,
+/// `string`, and the four standard generic types. The reference test
+/// checks `docs/language.md` mentions each.
+pub const BUILTIN_TYPE_NAMES: &[&str] = &[
+    "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "string",
+    "Option", "Result", "Vec", "HashMap",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntKind {
@@ -68,19 +82,53 @@ impl FloatKind {
 
 impl Ty {
     /// `bool`, the integers, and the floats are `Copy` (spec 4.2); `string`,
-    /// structs, enums, `Option`, `Result`, and `Vec` are not.
+    /// structs, enums, `Option`, `Result`, `Vec`, and `HashMap` are not.
     pub fn is_copy(&self) -> bool {
         matches!(self, Ty::Bool | Ty::Int(_) | Ty::Float(_))
     }
 
-    /// A struct, an enum, `Option`, `Result`, or `Vec`: a value that is
-    /// neither Copy nor text, and that the ownership rules treat like a
-    /// struct.
+    /// Whether the generated Rust type is `Copy`: a number or `bool`, or an
+    /// `Option` or `Result` of such types at every depth, a `Result`'s
+    /// error type included (M4 spec 3.4). A stored value of such a type can
+    /// be taken by a method that uses up its receiver, since Rust copies
+    /// it out.
+    pub fn copy_in_rust(&self) -> bool {
+        match self {
+            Ty::Option(inner) => inner.copy_in_rust(),
+            Ty::Result(ok, err) => ok.copy_in_rust() && err.copy_in_rust(),
+            ty => ty.is_copy(),
+        }
+    }
+
+    /// A struct, an enum, `Option`, `Result`, `Vec`, or `HashMap`: a value
+    /// that is neither Copy nor text, and that the ownership rules treat
+    /// like a struct.
     pub fn is_compound(&self) -> bool {
         matches!(
             self,
-            Ty::Struct(_) | Ty::Enum(_) | Ty::Option(_) | Ty::Result(..) | Ty::Vec(_)
+            Ty::Struct(_)
+                | Ty::Enum(_)
+                | Ty::Option(_)
+                | Ty::Result(..)
+                | Ty::Vec(_)
+                | Ty::HashMap(..)
         )
+    }
+
+    /// Whether `self` is or holds an unfinished chain.
+    pub fn has_chain(&self) -> bool {
+        match self {
+            Ty::Chain(_) => true,
+            Ty::Option(inner) | Ty::Vec(inner) => inner.has_chain(),
+            Ty::Result(a, b) | Ty::HashMap(a, b) => a.has_chain() || b.has_chain(),
+            _ => false,
+        }
+    }
+
+    /// Whether `self` may be a `HashMap` key: an integer type, `bool`, or
+    /// `string` (M4 spec 2.7).
+    pub fn is_map_key(&self) -> bool {
+        matches!(self, Ty::Int(_) | Ty::Bool | Ty::String)
     }
 
     /// Maps a primitive type name (`bool`, `i32`, `f64`, `string`, ...) to
@@ -115,5 +163,7 @@ pub enum ParamMode {
 }
 
 mod check;
+mod derives;
 
 pub use check::typecheck;
+pub use derives::Derives;

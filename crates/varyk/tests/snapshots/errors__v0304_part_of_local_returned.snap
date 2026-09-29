@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: this is part of `user`, which ends when this function returns, so it cannot be returned
+ --> crates/varyk/tests/fixtures/errors/v0304_part_of_local_returned/main.vr:7:5
+  |
+7 |     user.name
+  |     ^^^^^^^^^ this is part of `user`, which ends when this function returns, so it cannot be returned
+  |
+  = note: return a copy instead, with `.clone()`
+  = note: in Rust terms, a reference cannot outlive the value it borrows
+help: insert `.clone()` after `name`

@@ -1,0 +1,5 @@
+struct HashMap {
+    size: i32,
+}
+
+fn main() {}

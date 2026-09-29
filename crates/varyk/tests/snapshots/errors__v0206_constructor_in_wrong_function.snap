@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0206]: `?` works on a `Result`, and this is `Option<_>`; `load` returns `Result<i32, string>`
+ --> crates/varyk/tests/fixtures/errors/v0206_constructor_in_wrong_function/main.vr:2:18
+  |
+2 |     let n: i32 = Some(id)?;
+  |                  ^^^^^^^^^ `?` works on a `Result`, and this is `Option<_>`; `load` returns `Result<i32, string>`
+  |
+  = note: `?` on an `Option` needs a function that returns an `Option`; use `match` to look inside it
+  = note: in Rust terms, `?` returns early with the `Err` or the `None`, so the function's return type must be a `Result` with the same error type, or an `Option`

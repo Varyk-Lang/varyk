@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0011]: a return type has no `&` in Varyk; write `-> string`, and Varyk works out the borrow
+ --> crates/varyk/tests/fixtures/errors/v0011_reference_return_type/main.vr:5:24
+  |
+5 | fn name_of(user: User) -> &str {
+  |                        ^^^^^^^ a return type has no `&` in Varyk; write `-> string`, and Varyk works out the borrow
+  |
+help: replace `-> &str` with `-> string`

@@ -15,8 +15,10 @@ with the reason for each. The full design, including how the compiler works,
 is in [specs/2026-09-23-varyk-design.md](specs/2026-09-23-varyk-design.md),
 milestone 2's additions are in
 [specs/2026-09-25-milestone-2-design.md](specs/2026-09-25-milestone-2-design.md),
-and milestone 3's in
-[specs/2026-09-26-milestone-3-design.md](specs/2026-09-26-milestone-3-design.md).
+milestone 3's in
+[specs/2026-09-26-milestone-3-design.md](specs/2026-09-26-milestone-3-design.md),
+and milestone 4's in
+[specs/2026-09-29-milestone-4-design.md](specs/2026-09-29-milestone-4-design.md).
 
 ## Principles
 
@@ -111,9 +113,9 @@ generated Rust have no stability guarantee before 1.0.
 | Milestone 2 scope | language core only; packages, closures, and tooling later | four independent areas do not fit one MVP; a real program needs enums and collections before it needs dependencies |
 | MVP cuts | borrowed returns, struct variants, nested and literal patterns, `Option`/`Result` methods, most `Vec` and `string` methods, `..=`, `?` on `Option`, and field `pub` (added in milestone 3) deferred | no example needs them; `match` is the one way to look inside an `Option` or `Result`; one-level patterns make exhaustiveness exact |
 | String copy | `s.clone()`, strings only | Rust's own spelling; the cost is visible at the call; no implicit clone anywhere |
-| Closures | deferred to milestone 4 | without generics no Varyk function can take one; they pay off only with iterator adapters |
+| Closures | milestone 4: only as arguments of built-in calls; never a value; shared captures only; one untyped parameter | no generics means no Varyk function can take one; shared captures keep chains free of new borrow-flow rules; the item type is always known |
 | String joining | `format!` only; `+` rejected with a fix-it | one spelling, allocation visible at the call; Rust's `+` consumes its left side |
-| Borrowed returns | deferred to milestone 4; `.clone()` is the milestone 2 answer | a performance feature, not a capability; removes lifetime emission and return classification from the MVP |
+| Borrowed returns | inferred in milestone 4: every return part of one read-only parameter; one lifetime written when elision would not name it; the call result is an alias of the argument | closes M1 §4.4 without new syntax; getters stop copying; two roots, a `mut` root, and mixing stay errors, over-strict and sound |
 | Matching a place | never moves; non-Copy bindings are aliases, Copy ones are copied at arm entry; a temporary is owned | borrow by default, applied to `match` and `for` |
 | Exhaustiveness | checked by Varyk: every variant or a catch-all | plain-word diagnostics before cargo runs; exact, since patterns are one level deep |
 | Standard types | `Option`, `Result`, `Vec` with a hand-written table of six methods and indexing | no generics in the surface; the table is small, explicit, and sound by construction |
@@ -129,3 +131,16 @@ generated Rust have no stability guarantee before 1.0.
 | Rust import | structs with named fields, same-file inherent methods, unit-and-tuple enums; derives ignored | what a facade needs and nothing more; opaque otherwise, as M1 |
 | Nested `.rs` modules | cut | a facade is one file; removes the `syn` tree walk |
 | `check` and cargo | `check` never runs cargo, package mode included | M1 rule kept; TOML is parsed directly |
+| Milestone 4 scope | language only; `varyk fmt` and the interop leftovers to milestones 5 and 6 | two independent areas, as in milestone 2; the formatter needs comment-preserving syntax work of its own |
+| Chains | one expression from source to terminal; unfinished chains have no type; a source needs a stored receiver or a string literal | the iterator types have no Varyk spelling; nothing is lost, since a chain cannot be observed before it ends |
+| Items | borrowed, copies, or owned, decided at the source and by `map`; `collect` needs owned or copies | mirrors `for` and `match` on places and temporaries; a `Vec` of borrowed values has no Varyk type |
+| Look-inside results | `get` and `find` on borrowed items open only in a `match`/`if let`/`while let` head; on a number or `bool` payload they are a plain `Option` of a copy | an `Option<&T>` has no Varyk spelling; the bindings are aliases exactly as in a `match` on what the payload is part of, so nothing new is needed; numbers copy everywhere else |
+| Number items | a chain over stored numbers or `bool` copies them at the source | the same copy `for` and `match` already make; downstream closures take plain values |
+| `parse` | returns `Option<T>`, `T` from the expected type | Rust's error type has no Varyk name and no more information; `ok_or` gives the `Result` |
+| `unwrap`, `expect` | never added, a principle rather than a cut | a call that stops the program on an absent value defeats the purpose of a language for services; `match`, `if let`, `?`, `unwrap_or` cover every use |
+| Derives | `Clone` and `PartialEq` automatic where every field allows, `Debug` not | zero run-time cost, `.clone()` stays the one visible copy, `==` on enums is everyday code; `{:?}` does not exist |
+| `HashMap` | in the table; `get` and `insert`, no indexing, no direct `for` | Rust's map cannot be assigned through an index; pairs need tuples |
+| `as` | number types only | the `usize` friction of M2 §2.7 was real; anything else has a method |
+| Reachability | a useless arm is an error | the check is free once exhaustiveness is exact; rustc's warning is silenced in generated code and an unreachable arm is a bug |
+| Chars | no `char` type, no `chars()` | services split and trim strings; a character type is its own design |
+| Standard calls | a table of declared signatures, never pass-through of unknown Rust methods and never signatures read from `std` | Varyk must know each call's type, receiver mode, borrow, and allocation to write the Rust and keep plain-word errors; `std` signatures need generics and traits to read; a facade is the pass-through |

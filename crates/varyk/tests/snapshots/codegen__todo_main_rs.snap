@@ -6,13 +6,10 @@ mod task;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn count_done(tasks: &Vec<crate::task::Task>) -> usize {
-    let mut done = 0usize;
-    for t in tasks {
-        if crate::task::Task::is_done(t) {
-            done = done + 1usize;
-        }
-    }
-    done
+    tasks.iter().filter(|t| {
+        let t = *t;
+        crate::task::Task::is_done(t)
+    }).count()
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: a closure can only be the argument of a call that takes one: `map` on an `Option`, `map_err` on a `Result`, and `map`, `filter`, `any`, `all`, and `find` on a chain
+ --> crates/varyk/tests/fixtures/errors/v0001_closure_in_let/main.vr:2:18
+  |
+2 |     let double = |n| n * 2;
+  |                  ^^^^^^^^^ a closure can only be the argument of a call that takes one: `map` on an `Option`, `map_err` on a `Result`, and `map`, `filter`, `any`, `all`, and `find` on a chain
+  |
+  = note: in Varyk a closure is never a value of its own: it cannot be stored, passed to a function, or returned

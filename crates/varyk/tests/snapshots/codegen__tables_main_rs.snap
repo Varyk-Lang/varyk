@@ -1,0 +1,57 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn doubled(text: &str) -> Option<i32> {
+    let n = text.parse::<i32>().ok()?;
+    Some(n * 2)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn flag(text: &str) -> Option<bool> {
+    text.parse::<bool>().ok()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn show(n: &Option<u8>) {
+    if let Some(k) = n {
+        let k = *k;
+        ::std::println!("{}", k);
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let mut counts: ::std::collections::HashMap<String, i32> = ::std::collections::HashMap::new();
+    for word in ::std::vec!["apple".to_string(), "pear".to_string(), "apple".to_string()] {
+        let before: Option<i32> = counts.insert(word.clone(), 1);
+        if let Some(n) = &before {
+            let n = *n;
+            counts.insert(word, n + 1);
+        }
+    }
+    ::std::println!("{} {}", counts.len(), counts.contains_key("apple"));
+    let a: Option<f64> = "1.5".parse::<f64>().ok();
+    ::std::println!("{}", a.is_some());
+    show(&"7".parse::<u8>().ok());
+    ::std::println!("{}", doubled("21").is_some());
+    ::std::println!("{}", flag("maybe").is_some());
+    let names: Vec<String> = ::std::vec!["ann".to_string(), "bob".to_string()];
+    let e = "eve";
+    ::std::println!("{}", (match (&names, e) { (haystack, needle) => haystack.iter().any(|e| e == needle) }));
+    let mut numbers: Vec<i32> = ::std::vec![3, 1, 2];
+    numbers.sort();
+    numbers.insert(0usize, 9);
+    let first = numbers.remove(0usize);
+    ::std::println!("{} {} {}", first, numbers.contains(&2), numbers.is_empty());
+    let mut text = "hello".to_string();
+    text.push_str(", world");
+    let loud = text.to_uppercase();
+    ::std::println!("{} {}", loud.replace("WORLD", "YOU"), text.starts_with("he"));
+    let mut words: Vec<String> = ::std::vec!["b".to_string(), "a".to_string()];
+    words.sort();
+    ::std::println!("{}", words.join("+"));
+    let r: Result<i32, String> = Err("no".to_string());
+    ::std::println!("{} {}", r.is_ok(), r.is_err());
+}

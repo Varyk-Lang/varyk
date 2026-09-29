@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: this value is kept inside `others`, so it cannot be stored in `best`: `best` was made from `names[0]`, so it is that element under another name, and assigning to it would overwrite that element
+ --> crates/varyk/tests/fixtures/errors/v0304_assign_to_element_alias/main.vr:5:12
+  |
+5 |     best = others[0];
+  |            ^^^^^^^^^ this value is kept inside `others`, so it cannot be stored in `best`: `best` was made from `names[0]`, so it is that element under another name, and assigning to it would overwrite that element
+  |
+  = note: to keep a separate value in `best`, keep an index instead, or copy the element when making `best` and every value assigned to it later: `let mut best = names[0].clone();`
+  = note: in Rust terms, a borrowed value cannot move into a place that owns it

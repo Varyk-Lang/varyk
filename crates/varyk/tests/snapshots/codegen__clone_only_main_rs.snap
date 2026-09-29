@@ -1,0 +1,26 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone)]
+struct Session {
+    name: String,
+    handle: crate::ext::Handle,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+struct Server {
+    socket: crate::ext::Socket,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let session = Session { name: "main".to_string(), handle: crate::ext::open() };
+    let copy = session.clone();
+    ::std::println!("{}", copy.name);
+    let server = Server { socket: crate::ext::listen() };
+    ::std::println!("{}", server.socket.port);
+}

@@ -1,0 +1,15 @@
+struct User {
+    name: string,
+}
+
+fn name_of(user: User, depth: i32) -> string {
+    if depth > 0 {
+        println!("{}", name_of(user, depth - 1));
+    }
+    user.name
+}
+
+fn main() {
+    let user = User { name: "Ann" };
+    println!("{}", name_of(user, 2));
+}

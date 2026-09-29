@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0102]: `Event::Click` has no field `z`
+ --> crates/varyk/tests/fixtures/errors/v0102_unknown_variant_field_pattern/main.vr:8:30
+  |
+8 |         Event::Click { x, y, z } => x,
+  |                              ^ `Event::Click` has no field `z`

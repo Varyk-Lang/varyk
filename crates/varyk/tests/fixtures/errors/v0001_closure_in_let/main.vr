@@ -1,0 +1,4 @@
+fn main() {
+    let double = |n| n * 2;
+    println!("{}", 4);
+}

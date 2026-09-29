@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0208]: this chain is not finished, and an unfinished chain cannot be kept or passed on; finish the chain here with `collect()`, `count()`, `sum()`, `any`, `all`, or `find`
+ --> crates/varyk/tests/fixtures/errors/v0208_chain_as_match_head/main.vr:3:11
+  |
+3 |     match names.iter() {
+  |           ^^^^^^^^^^^^ this chain is not finished, and an unfinished chain cannot be kept or passed on; finish the chain here with `collect()`, `count()`, `sum()`, `any`, `all`, or `find`
+  |
+  = note: in Rust terms, an unfinished chain is an iterator, whose type Varyk has no way to write

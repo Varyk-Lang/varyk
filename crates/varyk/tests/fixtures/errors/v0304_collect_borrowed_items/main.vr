@@ -1,0 +1,4 @@
+fn main() {
+    let words = vec!["apple", "fig"];
+    let short: Vec<string> = words.iter().filter(|w| w.len() < 4).collect();
+}

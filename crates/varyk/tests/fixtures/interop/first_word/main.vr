@@ -1,0 +1,8 @@
+mod ext;
+
+fn main() {
+    let line = "hello world";
+    let word = ext::first_word(line);
+    let note = ext::Note::new("  padded  ");
+    println!("{} [{}]", word, note.text().trim());
+}

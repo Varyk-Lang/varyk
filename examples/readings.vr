@@ -1,0 +1,55 @@
+// expected output:
+// 25 -> 77
+// not a number: abc
+// 1
+// 10
+// 7
+// true
+// true
+// 0
+
+enum Unit {
+    Celsius,
+    Fahrenheit,
+}
+
+struct Reading {
+    value: f64,
+    unit: Unit,
+}
+
+fn parse_reading(text: string) -> Result<Reading, string> {
+    let parsed: Option<f64> = text.trim().parse();
+    let value = parsed.ok_or(format!("not a number: {}", text.trim()))?;
+    Ok(Reading { value: value, unit: Unit::Celsius })
+}
+
+fn to_fahrenheit(reading: Reading) -> Reading {
+    if reading.unit == Unit::Fahrenheit {
+        reading.clone()
+    } else {
+        Reading { value: reading.value * 9.0 / 5.0 + 32.0, unit: Unit::Fahrenheit }
+    }
+}
+
+fn main() {
+    let inputs = vec![" 25 ", "abc"];
+    for input in inputs {
+        match parse_reading(input) {
+            Ok(reading) => {
+                let converted = to_fahrenheit(reading);
+                println!("{} -> {}", reading.value, converted.value);
+            }
+            Err(message) => println!("{}", message),
+        }
+    }
+    let lengths = vec![3, 10];
+    println!("{}", lengths.len() as i32 - 1);
+    println!("{}", lengths.get(1).unwrap_or(0));
+    let missing: Option<i32> = None;
+    println!("{}", missing.unwrap_or(7));
+    println!("{}", Some(4).map(|n| n * 2).is_some());
+    let failed: Result<i32, string> = Err("bad");
+    println!("{}", failed.is_err());
+    println!("{}", failed.unwrap_or(0));
+}

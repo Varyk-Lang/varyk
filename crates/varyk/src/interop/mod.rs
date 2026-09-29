@@ -30,6 +30,8 @@ use std::ops::Range;
 use proc_macro2::{TokenStream, TokenTree};
 use syn::{Item, UseTree};
 
+use crate::types::Derives;
+
 mod drops;
 mod items;
 mod macros;
@@ -79,6 +81,10 @@ pub struct ImportedFn {
     /// The function signature's token text, for diagnostics (spec 4.5:
     /// "unsupported Rust signature" shows the signature).
     pub signature: String,
+    /// The parameter position (0 for the receiver) `ret` borrows from,
+    /// when `ret` is `&str` or `&S` and lifetime elision roots it there
+    /// (M4 spec 2.12); `None` for an owned or opaque return.
+    pub ret_root: Option<usize>,
 }
 
 /// Whether an [`ImportedField`] is `pub` (plain `pub`) or not visible
@@ -130,6 +136,9 @@ pub struct ImportedStruct {
     /// Why a struct of an importable shape still cannot be used as a
     /// Varyk struct: `#[repr(packed)]`, or no fixed size.
     pub unfit: Option<&'static str>,
+    /// Which of `Clone` and `PartialEq` its `#[derive(..)]` lists name
+    /// (M4 spec 2.12); a hand-written `impl` is not seen.
+    pub derives: Derives,
     pub kind: StructKind,
     /// Byte range of the struct's name in the file.
     pub span: Range<usize>,
@@ -163,6 +172,9 @@ pub struct ImportedEnum {
     /// `resolve::imports::register`, which can still set this after the
     /// fact.
     pub opaque: Option<String>,
+    /// Which of `Clone` and `PartialEq` its `#[derive(..)]` lists name
+    /// (M4 spec 2.12); a hand-written `impl` is not seen.
+    pub derives: Derives,
     /// Byte range of the enum's name in the file.
     pub span: Range<usize>,
     /// The name of every `fn` of the file's inherent `impl` blocks for

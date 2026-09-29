@@ -1,0 +1,21 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let text = "the cat saw the dog and the cat ran";
+    let mut counts: ::std::collections::HashMap<String, i32> = ::std::collections::HashMap::new();
+    for word in text.split(" ") {
+        let n = counts.get(word).copied().unwrap_or(0) + 1;
+        counts.insert(word.to_string(), n);
+    }
+    let mut words: Vec<String> = counts.keys().map(|w| w.clone()).collect::<Vec<_>>();
+    words.sort();
+    for word in &words {
+        if let Some(n) = counts.get(word.as_str()).copied() {
+            ::std::println!("{} {}", word, n);
+        }
+    }
+    ::std::println!("{} distinct words", counts.len());
+}

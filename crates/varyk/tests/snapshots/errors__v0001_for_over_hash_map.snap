@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `for` cannot go over a whole `HashMap<string, i32>`, since each round would need a key and a value together; use `keys()` or `values()`
+ --> crates/varyk/tests/fixtures/errors/v0001_for_over_hash_map/main.vr:4:17
+  |
+4 |     for name in ages {
+  |                 ^^^^ `for` cannot go over a whole `HashMap<string, i32>`, since each round would need a key and a value together; use `keys()` or `values()`

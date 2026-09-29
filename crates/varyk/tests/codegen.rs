@@ -1,4 +1,4 @@
-//! Rust backend snapshot tests: the generated crate for the twelve
+//! Rust backend snapshot tests: the generated crate for fourteen of the
 //! examples, and one focused program per row of the spec 4.3 string table
 //! plus the other emission rules of spec 6.3 and 6.4.
 
@@ -102,7 +102,9 @@ fn structs_main_rs() {
 fn borrowing_main_rs_matches_spec_section_5() {
     let krate = generate_path("examples/borrowing.vr");
     let main = file(&krate, "src/main.rs");
+    // M4 spec 2.10 adds the one `#[derive(..)]` line to the spec's body.
     let spec_body = "\
+#[derive(Clone, PartialEq)]
 struct User {
     name: String,
 }
@@ -210,7 +212,9 @@ fn errors_main_rs() {
 fn strings_main_rs_matches_milestone_2_spec_section_4() {
     let krate = generate_path("examples/strings.vr");
     let main = file(&krate, "src/main.rs");
+    // M4 spec 2.10 adds the one `#[derive(..)]` line to the spec's body.
     let spec_body = "\
+#[derive(Clone, PartialEq)]
 struct User {
     name: String,
 }
@@ -385,6 +389,12 @@ fn bare_local_statement_does_not_move() {
 #[test]
 fn imported_modes_on_copy_and_string_parameters() {
     let krate = generate_path("crates/varyk/tests/fixtures/interop/callable/main.vr");
+    insta::assert_snapshot!(file(&krate, "src/main.rs"));
+}
+
+#[test]
+fn imported_borrowed_returns_call_as_written() {
+    let krate = generate_path("crates/varyk/tests/fixtures/interop/first_word/main.vr");
     insta::assert_snapshot!(file(&krate, "src/main.rs"));
 }
 
@@ -662,4 +672,408 @@ fn question_emits_as_written() {
     // An owned local is moved into `?`.
     assert!(main.contains("let user = found?;"), "{main}");
     insta::assert_snapshot!("question_main_rs", main);
+}
+
+#[test]
+fn nested_literal_and_string_patterns_if_let_and_while_let() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/patterns/main.vr");
+    let main = file(&krate, "src/main.rs");
+    // A named-field variant, declared, made, and matched at depth on a
+    // place, its Copy bindings copied at any depth.
+    assert!(main.contains("Click { x: i32, y: i32 },"), "{main}");
+    assert!(main.contains("Event::Click { y: 2, x: 0 }"), "{main}");
+    assert!(main.contains("match &events[0usize] {"), "{main}");
+    assert!(
+        main.contains("Some(Event::Click { x: 0, y: y }) => {"),
+        "{main}"
+    );
+    assert!(main.contains("let y = *y;"), "{main}");
+    // Literal and range patterns as their values.
+    assert!(main.contains("90..=100 =>"), "{main}");
+    assert!(main.contains("-5..=-1 =>"), "{main}");
+    // A string head is exactly a `&str` (review focus 3).
+    assert!(main.contains("match owned.as_str() {"), "{main}");
+    assert!(main.contains("other => other.to_string(),"), "{main}");
+    // `if let`, `else if let`, and `while let`.
+    assert!(
+        main.contains("if let Some(Shape::Circle(r)) = shape {"),
+        "{main}"
+    );
+    assert!(main.contains("} else if let None = shape {"), "{main}");
+    assert!(
+        main.contains("while let Some(top) = stack.pop() {"),
+        "{main}"
+    );
+    insta::assert_snapshot!("patterns_main_rs", main);
+}
+
+#[test]
+fn casts_inclusive_ranges_and_question_on_constructors() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/expressions/main.vr");
+    let main = file(&krate, "src/main.rs");
+    // A cast is parenthesized, so a following `<` is not read as generics.
+    assert!(main.contains("(a as i64) < big"), "{main}");
+    assert!(main.contains("((a + 1i32) as i64)"), "{main}");
+    assert!(main.contains("(a as i32) * 2"), "{main}");
+    // A literal operand always carries its type suffix.
+    assert!(main.contains("(-1i32 as u8)"), "{main}");
+    // Under a cast every literal is suffixed, through blocks and `-`.
+    assert!(main.contains("300i32"), "{main}");
+    assert!(main.contains("(--1i32 as u8)"), "{main}");
+    assert!(main.contains("\n        1i32\n"), "{main}");
+    assert!(main.contains("for i in 1..=3 {"), "{main}");
+    assert!(main.contains("Ok::<i32, String>(x)?"), "{main}");
+    assert!(main.contains("let n = found?;"), "{main}");
+    insta::assert_snapshot!("expressions_main_rs", main);
+}
+
+#[test]
+fn table_rows_hash_maps_and_parse() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/tables/main.vr");
+    let main = file(&krate, "src/main.rs");
+    // `HashMap` is written in full, in a type and in `HashMap::new()`, and
+    // a `let` of one writes its type out.
+    assert!(
+        main.contains(
+            "let mut counts: ::std::collections::HashMap<String, i32> = ::std::collections::HashMap::new();"
+        ),
+        "{main}"
+    );
+    assert!(main.contains("counts.contains_key(\"apple\")"), "{main}");
+    // `parse` in each expected-type position.
+    assert!(main.contains("text.parse::<i32>().ok()?"), "{main}");
+    assert!(main.contains("text.parse::<bool>().ok()"), "{main}");
+    assert!(main.contains("\"1.5\".parse::<f64>().ok()"), "{main}");
+    assert!(main.contains("\"7\".parse::<u8>().ok()"), "{main}");
+    // `contains` on a `Vec<string>` evaluates both sides before its own
+    // names are in scope, so the user's `e` is not shadowed.
+    assert!(
+        main.contains(
+            "(match (&names, e) { (haystack, needle) => haystack.iter().any(|e| e == needle) })"
+        ),
+        "{main}"
+    );
+    // A read `T` argument is lent; a `usize` index is passed by value.
+    assert!(main.contains("numbers.contains(&2)"), "{main}");
+    assert!(main.contains("numbers.insert(0usize, 9);"), "{main}");
+    insta::assert_snapshot!("tables_main_rs", main);
+}
+
+#[test]
+fn looked_into_and_taking_rows() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/lookups/main.vr");
+    let main = file(&krate, "src/main.rs");
+    // A Copy payload is copied out of the map.
+    assert!(
+        main.contains("counts.get(word.as_str()).copied().unwrap_or(0)"),
+        "{main}"
+    );
+    // A looked-into head is written as it is, already a reference.
+    assert!(
+        main.contains("if let Some(line) = lines.get(1usize) {"),
+        "{main}"
+    );
+    // A Copy binding at depth is copied out of the reference.
+    assert!(main.contains("match shapes.get(0usize) {"), "{main}");
+    assert!(main.contains("let r = *r;"), "{main}");
+    // A stored `Option<i32>` is copied out by `unwrap_or`.
+    assert!(main.contains("o.unwrap_or(0)"), "{main}");
+    insta::assert_snapshot!("lookups_main_rs", main);
+}
+
+/// The generated Rust of `examples/getters.vr` is the listing of M4 spec
+/// 4, read from the spec itself, but for the lint attributes and the
+/// `::std::` paths the listing leaves out.
+#[test]
+fn getters_main_rs_matches_the_spec_listing() {
+    let spec = std::fs::read_to_string(
+        workspace_root().join("docs/specs/2026-09-29-milestone-4-design.md"),
+    )
+    .expect("read the milestone-4 spec");
+    let marker = "```rust\n#[derive(Clone, PartialEq)]\nstruct User {";
+    let start = spec.find(marker).expect("the spec has the getters listing") + "```rust\n".len();
+    let end = start + spec[start..].find("```").expect("a closing fence");
+    let krate = generate_path("examples/getters.vr");
+    assert_eq!(
+        without_allow_lines(file(&krate, "src/main.rs")),
+        &spec[start..end]
+    );
+}
+
+/// The `readings.vr` listing of M4 spec 4: `Unit` and `Reading` derive
+/// both traits, an enum is compared in place, and a borrowed struct is
+/// cloned.
+#[test]
+fn readings_main_rs() {
+    let krate = generate_path("examples/readings.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(
+        main.contains(&format!(
+            "{ALLOW_ITEM}\n#[derive(Clone, PartialEq)]\nenum Unit {{"
+        )),
+        "{main}"
+    );
+    assert!(
+        main.contains(&format!(
+            "{ALLOW_ITEM}\n#[derive(Clone, PartialEq)]\nstruct Reading {{"
+        )),
+        "{main}"
+    );
+    assert!(
+        main.contains("if reading.unit == Unit::Fahrenheit {"),
+        "{main}"
+    );
+    assert!(main.contains("reading.clone()"), "{main}");
+    insta::assert_snapshot!("readings_main_rs", main);
+}
+
+/// A struct holding a Rust type that derives `Clone` only derives
+/// `Clone`; one holding a Rust type that derives neither has no
+/// `#[derive]` line.
+#[test]
+fn derives_follow_the_rust_fields() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/clone_only/main.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(
+        main.contains(&format!(
+            "{ALLOW_ITEM}\n#[derive(Clone)]\nstruct Session {{"
+        )),
+        "{main}"
+    );
+    assert!(
+        main.contains(&format!("{ALLOW_ITEM}\nstruct Server {{")),
+        "{main}"
+    );
+    assert!(main.contains("let copy = session.clone();"), "{main}");
+    insta::assert_snapshot!("clone_only_main_rs", main);
+}
+
+/// `==` on structs and containers: both operands at one reference depth
+/// when either is a reference, else compared as they are (M4 spec 5).
+#[test]
+fn equality_brings_both_operands_to_one_reference_depth() {
+    let main = main_rs(
+        "struct User {\n    name: string,\n}\n\nfn same(u: User, param: User, v: Vec<User>) -> bool {\n    let own = User { name: \"a\" };\n    let list: Vec<User> = Vec::new();\n    own == param && param == own && list == v && own == User { name: \"b\" } && u == param\n}\n\nfn main() {\n    let a = User { name: \"a\" };\n    println!(\"{}\", same(a, a, Vec::new()));\n}\n",
+    );
+    assert!(
+        main.contains("&own == param && param == &own && &list == v"),
+        "{main}"
+    );
+    assert!(
+        main.contains("own == User { name: \"b\".to_string() }"),
+        "{main}"
+    );
+    assert!(main.contains("&& u == param"), "{main}");
+}
+
+#[test]
+fn borrowed_returns_with_elision_and_one_written_lifetime() {
+    // The `getters.vr` listing of M4 spec 4.
+    let krate = generate_path("examples/getters.vr");
+    let main = file(&krate, "src/main.rs");
+    // Rooted at `self`, a string parameter, and a `Vec` parameter: elided.
+    assert!(main.contains("fn display_name(&self) -> &str {"), "{main}");
+    assert!(main.contains("fn trimmed(text: &str) -> &str {"), "{main}");
+    assert!(
+        main.contains("fn first(users: &Vec<User>) -> &User {"),
+        "{main}"
+    );
+    // Rooted at one of two reference parameters: one lifetime.
+    assert!(
+        main.contains("fn name_unless<'a>(user: &'a User, hidden: &str) -> &'a str {"),
+        "{main}"
+    );
+    // Each return is a reference to its part; a borrowed result is passed on
+    // as it is.
+    assert!(main.contains("&self.name"), "{main}");
+    assert!(main.contains("text.trim()"), "{main}");
+    assert!(main.contains("&users[0usize]"), "{main}");
+    assert!(main.contains("let leader = first(&users);"), "{main}");
+    assert!(main.contains("name_unless(leader, \"Alice\")"), "{main}");
+    insta::assert_snapshot!("getters_main_rs", main);
+}
+
+#[test]
+fn trim_returned_through_a_let() {
+    let main = main_rs(
+        "fn clean(text: string) -> string {\n    let t = text.trim();\n    t\n}\n\nfn main() {\n    let s = clean(\"  a  \");\n    println!(\"[{}]\", s);\n}\n",
+    );
+    assert!(main.contains("fn clean(text: &str) -> &str {"), "{main}");
+    assert!(main.contains("let t = text.trim();"), "{main}");
+    assert!(main.contains("let s = clean(\"  a  \");"), "{main}");
+    insta::assert_snapshot!("trim_through_let_main_rs", main);
+}
+
+#[test]
+fn option_map_writes_its_closure_as_written() {
+    let main = main_rs(
+        "fn main() {\n    let doubled = Some(4).map(|n| n * 2).is_some();\n    println!(\"{}\", doubled);\n}\n",
+    );
+    assert!(
+        main.contains("let doubled = (Some(4)).map(|n| n * 2).is_some();"),
+        "{main}"
+    );
+    insta::assert_snapshot!("option_map_closure_main_rs", main);
+}
+
+#[test]
+fn a_map_err_closure_borrows_the_parameter_it_captures() {
+    let main = main_rs(
+        "fn parse_age(text: string) -> Result<i32, string> {\n    if text == \"17\" {\n        Ok(17)\n    } else {\n        Err(\"not a number\")\n    }\n}\n\nfn age_of(text: string, field: string) -> Result<i32, string> {\n    parse_age(text).map_err(|e| format!(\"{}: {}\", field, e))\n}\n\nfn width(text: string) -> usize {\n    text.len()\n}\n\nfn main() {\n    let label = \"age\".to_uppercase();\n    let checked = parse_age(\"x\").map_err(|e| {\n        let shown = label;\n        format!(\"{} {} {}\", shown, e, width(label))\n    });\n    println!(\"{}\", age_of(\"17\", label).is_ok());\n}\n",
+    );
+    assert!(
+        main.contains("parse_age(text).map_err(|e| ::std::format!(\"{}: {}\", field, e))"),
+        "{main}"
+    );
+    assert!(main.contains("let shown = &label;"), "{main}");
+    assert!(main.contains("width(&label)"), "{main}");
+    assert!(main.contains("age_of(\"17\", &label)"), "{main}");
+    insta::assert_snapshot!("map_err_closure_main_rs", main);
+}
+
+// --- Chains (M4 spec 2.3, 3.3) ----------------------------------------------
+
+/// The `iterators.vr` listing of M4 spec 4.
+const ITERATORS: &str = "fn main() {
+    let numbers = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    println!(\"{}\", numbers.iter().sum());
+    println!(\"{}\", numbers.iter().filter(|n| n % 3 == 0).count());
+    println!(\"{}\", numbers.iter().any(|n| n > 9));
+    let doubled: Vec<string> = numbers.iter().filter(|n| n < 4).map(|n| format!(\"{}\", n * 2)).collect();
+    println!(\"{}\", doubled.join(\" \"));
+    let names = vec![\"cherry\", \"apple\", \"banana\"];
+    let mut sorted: Vec<string> = names.iter().map(|n| n.clone()).collect();
+    sorted.sort();
+    println!(\"{}\", sorted.join(\", \"));
+    let text = \"one two three\";
+    println!(\"{}\", text.split(\" \").count());
+}
+";
+
+#[test]
+fn chains_of_the_iterators_listing() {
+    let main = main_rs(ITERATORS);
+    assert!(
+        main.contains("numbers.iter().copied().sum::<i32>()"),
+        "{main}"
+    );
+    assert!(
+        main.contains(".filter(|n| {\n        let n = *n;\n        n % 3 == 0\n    })"),
+        "{main}"
+    );
+    assert!(main.contains(".any(|n| n > 9)"), "{main}");
+    assert!(main.contains(".collect::<Vec<_>>()"), "{main}");
+    assert!(main.contains("names.iter().map(|n| n.clone())"), "{main}");
+    assert!(main.contains("text.split(\" \").count()"), "{main}");
+    insta::assert_snapshot!("iterators_main_rs", main);
+}
+
+#[test]
+fn a_find_on_borrowed_items_is_looked_into_where_it_is_made() {
+    let main = main_rs(
+        "struct User {\n    name: string,\n    age: i32,\n}\n\nfn greet(name: string) {\n    println!(\"hi {}\", name);\n}\n\nfn main() {\n    let users = vec![User { name: \"ann\", age: 30 }, User { name: \"bo\", age: 4 }];\n    if let Some(u) = users.iter().find(|u| u.age > 18) {\n        greet(u.name);\n    }\n    match users.iter().map(|u| u.name).find(|n| n.len() < 3) {\n        Some(n) => greet(n),\n        None => {}\n    }\n    let ages = vec![3, 40];\n    let adult = ages.iter().find(|a| a > 18).unwrap_or(0);\n    println!(\"{}\", adult);\n}\n",
+    );
+    assert!(
+        main.contains("if let Some(u) = users.iter().find(|u| {"),
+        "{main}"
+    );
+    assert!(main.contains(".map(|u| u.name.as_str())"), "{main}");
+    assert!(main.contains("ages.iter().copied().find(|a| {"), "{main}");
+    assert!(!main.contains("}).copied()"), "{main}");
+    insta::assert_snapshot!("find_looked_into_main_rs", main);
+}
+
+#[test]
+fn a_map_to_trimmed_lines_hands_all_a_str() {
+    let main = main_rs(
+        "fn main() {\n    let lines = vec![\"  a  \", \" b\"];\n    let tidy = lines.iter().map(|line| line.trim()).all(|line| line.len() == 1);\n    println!(\"{}\", tidy);\n}\n",
+    );
+    assert!(
+        main.contains("lines.iter().map(|line| line.trim()).all(|line| line.len() == 1usize)"),
+        "{main}"
+    );
+    insta::assert_snapshot!("map_trim_all_main_rs", main);
+}
+
+// --- `for` over a chain (M4 spec 2.3, 3.3) ----------------------------------
+
+/// The `words.vr` listing of M4 spec 4.
+const WORDS: &str = "fn main() {
+    let text = \"the cat saw the dog and the cat ran\";
+    let mut counts: HashMap<string, i32> = HashMap::new();
+    for word in text.split(\" \") {
+        let n = counts.get(word).unwrap_or(0) + 1;
+        counts.insert(word.clone(), n);
+    }
+    let mut words: Vec<string> = counts.keys().map(|w| w.clone()).collect();
+    words.sort();
+    for word in words {
+        if let Some(n) = counts.get(word) {
+            println!(\"{} {}\", word, n);
+        }
+    }
+    println!(\"{} distinct words\", counts.len());
+}
+";
+
+#[test]
+fn a_for_over_split_in_the_words_listing() {
+    let main = main_rs(WORDS);
+    assert!(main.contains("for word in text.split(\" \") {"), "{main}");
+    insta::assert_snapshot!("words_main_rs", main);
+}
+
+#[test]
+fn a_for_over_a_chain_is_written_as_it_is() {
+    let main = main_rs(
+        "fn greet(name: string) {\n    println!(\"hi {}\", name);\n}\n\nfn main() {\n    let text = \"ann bo\";\n    let sep = \" \";\n    for w in text.split(sep) {\n        greet(w);\n    }\n    let numbers = vec![1, 5, 9];\n    let limit = 4;\n    for n in numbers.iter().filter(|n| n > limit) {\n        println!(\"{}\", n);\n    }\n    let names = vec![\"ann\", \"bo\"];\n    let mut best = \"\";\n    for w in names.iter().filter(|w| w.len() > 2) {\n        best = w;\n    }\n    greet(best);\n}\n",
+    );
+    assert!(main.contains("for w in text.split(sep) {"), "{main}");
+    assert!(
+        main.contains("for n in numbers.iter().copied().filter(|n| {"),
+        "{main}"
+    );
+    assert!(
+        main.contains("for w in names.iter().filter(|w| {"),
+        "{main}"
+    );
+    insta::assert_snapshot!("for_over_chain_main_rs", main);
+}
+
+// --- The source map (M3 §5) over the milestone-4 nodes ----------------------
+
+/// Whether a generated line carries no code of its own: blank, only
+/// braces and punctuation, a lint or `#[derive]` attribute, a `mod` line,
+/// or an `impl X {` header.
+fn is_structural(line: &str) -> bool {
+    let line = line.trim();
+    line.chars().all(|c| "{}()[];,".contains(c))
+        || line == ALLOW_ITEM
+        || line.starts_with("#[derive(")
+        || line.starts_with("mod ")
+        || (line.starts_with("impl ") && line.ends_with('{'))
+}
+
+/// Every generated line of `text.vr` and `patterns.vr` that is not
+/// structural maps back to a Varyk span, so rustc's message for any of
+/// them lands on Varyk source (M4 spec 7).
+#[test]
+fn every_line_of_the_new_examples_maps_to_a_span() {
+    for example in ["examples/text.vr", "examples/patterns.vr"] {
+        let krate = generate_path(example);
+        let main = krate
+            .files
+            .iter()
+            .find(|file| file.path == "src/main.rs")
+            .unwrap_or_else(|| panic!("no src/main.rs for {example}"));
+        let unmapped: Vec<(usize, &str)> = main
+            .text
+            .lines()
+            .enumerate()
+            .filter(|(i, line)| {
+                !is_structural(line) && main.lines.get(*i).copied().flatten().is_none()
+            })
+            .collect();
+        assert_eq!(unmapped, Vec::new(), "{example}");
+    }
 }

@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn clean(text: &str) -> &str {
+    let t = text.trim();
+    t
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let s = clean("  a  ");
+    ::std::println!("[{}]", s);
+}

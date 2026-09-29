@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0208]: this `Option` holds part of `lines`, so no method can be called on it, `is_some` included; look inside it here instead, with `if let Some(x) = ... { .. }` or `match`
+ --> crates/varyk/tests/fixtures/errors/v0208_is_some_on_get/main.vr:3:8
+  |
+3 |     if lines.get(1).is_some() {
+  |        ^^^^^^^^^^^^ this `Option` holds part of `lines`, so no method can be called on it, `is_some` included; look inside it here instead, with `if let Some(x) = ... { .. }` or `match`
+  |
+  = note: in Rust terms, this is an `Option<&T>`, a reference inside an `Option`, which Varyk has no type for

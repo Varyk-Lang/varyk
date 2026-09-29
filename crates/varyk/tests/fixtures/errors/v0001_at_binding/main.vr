@@ -1,0 +1,7 @@
+fn main() {
+    let found = Some(4);
+    match found {
+        n @ Some(_) => println!("found"),
+        None => println!("nothing"),
+    }
+}

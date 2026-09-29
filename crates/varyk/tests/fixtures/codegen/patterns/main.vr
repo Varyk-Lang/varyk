@@ -1,0 +1,72 @@
+enum Event {
+    Click { x: i32, y: i32 },
+    Key(string),
+    Quit,
+}
+
+enum Shape {
+    Circle(f64),
+    Point,
+}
+
+fn describe(events: Vec<Option<Event>>) -> i32 {
+    match events[0] {
+        Some(Event::Click { x: 0, y }) => y,
+        Some(Event::Click { x, y: _ }) => x,
+        Some(Event::Key(k)) => 1,
+        Some(Event::Quit) => 2,
+        None => -1,
+    }
+}
+
+fn grade(score: i32) -> string {
+    match score {
+        90..=100 => "A",
+        -5..=-1 => "negative",
+        0 => "zero",
+        _ => "lower",
+    }
+}
+
+fn make_role() -> string {
+    "admin".clone()
+}
+
+fn title() -> string {
+    let owned = make_role();
+    let shown: string = match owned {
+        "admin" => "Administrator",
+        other => other.clone(),
+    };
+    shown
+}
+
+fn size(shape: Option<Shape>) -> f64 {
+    if let Some(Shape::Circle(r)) = shape {
+        r * r
+    } else if let None = shape {
+        0.0
+    } else {
+        1.0
+    }
+}
+
+fn main() {
+    let events = vec![Some(Event::Click { y: 2, x: 0 }), Some(Event::Key("k")), Some(Event::Quit)];
+    println!("{}", describe(events));
+    println!("{}", grade(95));
+    println!("{}", title());
+    println!("{}", size(Some(Shape::Circle(2.0))));
+    let flag = true;
+    match flag {
+        true => println!("yes"),
+        false => println!("no"),
+    }
+    let mut stack: Vec<i32> = vec![1, 2, 3];
+    while let Some(top) = stack.pop() {
+        if top == 2 {
+            continue;
+        }
+        println!("{}", top);
+    }
+}

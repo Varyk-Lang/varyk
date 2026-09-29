@@ -1,0 +1,10 @@
+fn level(n: u8) -> i32 {
+    match n {
+        0..=300 => 1,
+        _ => 2,
+    }
+}
+
+fn main() {
+    println!("{}", level(7));
+}

@@ -2,10 +2,12 @@
 //! token slice. This module holds the token-cursor primitives shared by
 //! every parsing function; `expr.rs` holds expression parsing, `item.rs`
 //! item parsing (`fn`, `struct`, `mod`) and the top-level [`Parser::parse_program`],
-//! `stmt.rs` statement parsing, and `ty.rs` type parsing.
+//! `stmt.rs` statement parsing, `pattern.rs` pattern parsing, and `ty.rs`
+//! type parsing.
 
 mod expr;
 mod item;
+mod pattern;
 mod stmt;
 mod ty;
 
@@ -199,15 +201,22 @@ impl<'a> Parser<'a> {
     /// `item.rs`'s `parse_self_receiver` reads before this function ever
     /// sees it.
     fn expect_identifier(&mut self, what: &str) -> Result<crate::ast::Ident, ()> {
+        // `as` is a Varyk keyword but not a Varyk name, so it reads as the
+        // Rust keyword it also is.
+        let keyword = match self.peek() {
+            Some(TokenKind::ReservedKeyword(word)) => Some(word.as_str()),
+            Some(TokenKind::As) => Some("as"),
+            _ => None,
+        };
+        if let Some(word) = keyword {
+            let message =
+                format!("`{word}` is a Rust keyword and cannot be used as a name in Varyk");
+            let span = self.current_span();
+            self.bump();
+            self.push_error(V0001, span, message);
+            return Err(());
+        }
         match self.peek() {
-            Some(TokenKind::ReservedKeyword(word)) => {
-                let message =
-                    format!("`{word}` is a Rust keyword and cannot be used as a name in Varyk");
-                let span = self.current_span();
-                self.bump();
-                self.push_error(V0001, span, message);
-                Err(())
-            }
             Some(TokenKind::SelfKw) => {
                 let span = self.current_span();
                 self.bump();

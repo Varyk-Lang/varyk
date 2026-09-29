@@ -5,12 +5,14 @@ expression: main
 mod tally;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Task {
     label: String,
     done: bool,
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 enum Size {
     Small,
     Large,

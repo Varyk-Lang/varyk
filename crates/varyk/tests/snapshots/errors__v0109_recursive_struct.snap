@@ -9,3 +9,4 @@ error[V0109]: a struct cannot contain itself
   |     ^^^^^^^^^^ a struct cannot contain itself
   |
   = note: the cycle is Node -> Node
+  = note: a `Vec` or `HashMap` holds its elements elsewhere, so holding the value in one breaks the cycle

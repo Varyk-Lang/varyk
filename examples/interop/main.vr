@@ -1,8 +1,11 @@
-// expected output: Hello from Rust, Varyk!
+// expected output:
+// Hello from Rust, Varyk!
+// Hello
 
 mod greet;
 
 fn main() {
     let name = "Varyk";
     println!("{}", greet::hello(name));
+    println!("{}", greet::first_word("Hello from Rust"));
 }

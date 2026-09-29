@@ -1,0 +1,92 @@
+// expected output:
+// ERROR_disk_full, WARN_low_memory
+// 2 of 3 lines kept
+// true
+// true
+// false
+// second: DEBUG tick
+// ERROR DISK FULL
+// found WARN low memory
+// true
+// 600
+// true
+// 42
+// bad code: x!
+// 8080
+// hello world
+
+fn keep(line: string, levels: Vec<string>) -> bool {
+    levels.iter().any(|level| line.starts_with(level))
+}
+
+fn first_error(lines: Vec<string>) -> Option<usize> {
+    for i in 0..lines.len() {
+        if lines[i].starts_with("ERROR") {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn report(lines: Vec<string>) -> Option<string> {
+    let i = first_error(lines)?;
+    Some(lines[i].to_uppercase())
+}
+
+fn parse_code(text: string) -> Result<i32, string> {
+    let parsed: Option<i32> = text.parse();
+    parsed.ok_or(format!("bad code: {}", text))
+}
+
+fn next_port(text: string) -> Option<i32> {
+    let port: i32 = text.trim().parse()?;
+    Some(port + 1)
+}
+
+fn main() {
+    let mut lines: Vec<string> = Vec::new();
+    lines.push("ERROR disk full");
+    lines.push("INFO started");
+    lines.push("WARN low memory");
+    lines.insert(1, "DEBUG tick");
+    lines.remove(2);
+    let levels = vec!["ERROR", "WARN"];
+    let kept: Vec<string> = lines.iter().filter(|line| keep(line, levels)).map(|line| line.replace(" ", "_")).collect();
+    println!("{}", kept.join(", "));
+    println!("{} of {} lines kept", kept.len(), lines.len());
+    println!("{}", lines.iter().map(|line| line.trim()).all(|line| line.contains(" ")));
+    println!("{}", lines.contains("DEBUG tick"));
+    println!("{}", lines.is_empty());
+    if let Some(line) = lines.get(1) {
+        println!("second: {}", line);
+    }
+    match report(lines) {
+        Some(text) => println!("{}", text),
+        None => println!("no errors"),
+    }
+    match lines.iter().find(|line| line.starts_with("WARN")) {
+        Some(line) => println!("found {}", line),
+        None => println!("no warnings"),
+    }
+    let mut codes: HashMap<string, i32> = HashMap::new();
+    for i in 1..=3 {
+        codes.insert(format!("e{}", i), i * 100);
+    }
+    println!("{}", codes.contains_key("e2"));
+    println!("{}", codes.values().sum());
+    println!("{}", parse_code("404").is_ok());
+    let maybe = parse_code("42").ok();
+    if let Some(code) = maybe {
+        println!("{}", code);
+    } else {
+        println!("no code");
+    }
+    match parse_code("x").map_err(|e| format!("{}!", e)) {
+        Ok(code) => println!("{}", code),
+        Err(message) => println!("{}", message),
+    }
+    println!("{}", next_port(" 8079 ").unwrap_or(0));
+    let mut greeting = "hello";
+    greeting.push_str(" world");
+    println!("{}", greeting);
+}

@@ -48,6 +48,15 @@ use super::{Assigned, Context, Refers, push_unique};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirExpr, HirExprKind, HirFunction, LocalId, LocalInfo, leaves};
 
+/// What the `for` loops of a function hold, per local (see
+/// `PlacesOutput`): whether it is the variable of a `for` that holds what
+/// it goes over, and what else the head of a `for` over a chain reads.
+#[derive(Clone, Copy)]
+pub(super) struct Loops<'a> {
+    pub(super) held: &'a [bool],
+    pub(super) head_reads: &'a [Vec<LocalId>],
+}
+
 /// Reports every alias used after its root was changed, given away, or
 /// (for a mutable alias) used, in `function`.
 pub(super) fn check(
@@ -55,19 +64,46 @@ pub(super) fn check(
     function: &HirFunction,
     refers: &Refers,
     assigned: &Assigned,
-    held: &[bool],
+    loops: Loops,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let roots = alias_roots(function, refers, assigned, held);
+    let Loops { held, head_reads } = loops;
+    let roots = alias_roots(
+        &function.locals,
+        function.params.len(),
+        refers,
+        assigned,
+        held,
+        &[],
+    );
     let mut aliases_of = vec![Vec::new(); function.locals.len()];
     for (alias, roots) in roots.iter().enumerate() {
         for root in roots {
             aliases_of[root.0 as usize].push(LocalId(alias as u32));
         }
     }
+    // A `for` over a chain holds what its head reads, and, through a name
+    // it reads that is an alias, that alias's roots (M4 spec 3.3). They
+    // are not the variable's roots: a copy of it taken out of the loop
+    // does not hold them.
+    let mut reads = vec![Vec::new(); function.locals.len()];
+    for (var, direct) in head_reads.iter().enumerate() {
+        let var = LocalId(var as u32);
+        for &read in direct {
+            for root in std::iter::once(read).chain(roots[read.0 as usize].iter().copied()) {
+                if root != var && !roots[var.0 as usize].contains(&root) {
+                    push_unique(&mut reads[var.0 as usize], root);
+                }
+            }
+        }
+        for &root in &reads[var.0 as usize] {
+            aliases_of[root.0 as usize].push(var);
+        }
+    }
     let mut rule = Aliases {
         locals: &function.locals,
         roots,
+        head_reads: reads,
         aliases_of,
         whole: vec![Vec::new(); function.locals.len()],
         held,
@@ -78,22 +114,32 @@ pub(super) fn check(
 }
 
 /// Per local: its roots when it is an alias or the variable of a `for`
-/// over a place (`held`), else nothing.
-fn alias_roots(
-    function: &HirFunction,
+/// over a place (`held`), else nothing. Classifying returns passes no
+/// `held`: a Copy variable of a `for` is a copy, which roots nothing (M4
+/// spec 3.1), though its loop holds the `Vec`. A local of `final_roots` (a
+/// closure's parameter and captures, when a closure's returns are
+/// classified) is a root that is not followed further: it has no roots of
+/// its own.
+pub(super) fn alias_roots(
+    locals: &[LocalInfo],
+    param_count: usize,
     refers: &Refers,
     assigned: &Assigned,
     held: &[bool],
+    final_roots: &[LocalId],
 ) -> Vec<Vec<LocalId>> {
-    let count = function.locals.len();
+    let count = locals.len();
     // The locals each alias names directly: a borrowed `let`'s initializer
     // roots (or a `for` variable's `Vec`'s), plus the roots of borrowed
     // places assigned to it.
     let mut roots: Vec<Vec<LocalId>> = (0..count)
         .map(|index| {
+            if final_roots.contains(&LocalId(index as u32)) {
+                return Vec::new();
+            }
             let mut direct = assigned.roots[index].clone();
-            let borrowed = function.locals[index].place.borrowed;
-            if index >= function.params.len() && (borrowed || held[index]) {
+            let borrowed = locals[index].place.borrowed;
+            if index >= param_count && (borrowed || held.get(index) == Some(&true)) {
                 for &root in &refers[index].1 {
                     push_unique(&mut direct, root);
                 }
@@ -110,6 +156,9 @@ fn alias_roots(
     while changed {
         changed = false;
         for index in 0..count {
+            if final_roots.contains(&LocalId(index as u32)) {
+                continue;
+            }
             let mut add: Vec<LocalId> = Vec::new();
             for root in &roots[index] {
                 add.extend(&roots[root.0 as usize]);
@@ -150,6 +199,10 @@ struct Aliases<'a> {
     locals: &'a [LocalInfo],
     /// Per local: its roots when it is an alias.
     roots: Vec<Vec<LocalId>>,
+    /// Per variable of a `for` over a chain: what else its loop's head
+    /// reads, each name resolved to its roots; a change to one is reported
+    /// for the loop, at the end of a round, not at a use of the variable.
+    head_reads: Vec<Vec<LocalId>>,
     /// Per local: the aliases it is a root of.
     aliases_of: Vec<Vec<LocalId>>,
     /// Per alias: the locals its `let` names whole (`p` in `let q = p`),
@@ -183,11 +236,17 @@ impl Aliases<'_> {
 
     /// The mutable alias of `root` that `alias` was made through, if any
     /// (`a` in `let mut a = ps[0]; let s = a.name;`): `alias` reborrows it,
-    /// so `root` cannot be used while `alias` is.
+    /// so `root` cannot be used while `alias` is. The head of a `for` over
+    /// a chain that reads a mutable alias holds it the same way.
     fn through_mutable(&self, alias: LocalId, root: LocalId) -> Option<LocalId> {
-        self.roots[alias.0 as usize].iter().copied().find(|&m| {
-            m != root && self.is_mutable_alias(m) && self.roots[m.0 as usize].contains(&root)
-        })
+        let index = alias.0 as usize;
+        self.roots[index]
+            .iter()
+            .chain(&self.head_reads[index])
+            .copied()
+            .find(|&m| {
+                m != root && self.is_mutable_alias(m) && self.roots[m.0 as usize].contains(&root)
+            })
     }
 
     /// Marks the aliases of `root` (only the mutable ones, and those made
@@ -220,6 +279,10 @@ impl Aliases<'_> {
         let Some(&Broken { root, at, how }) = marks.get(&alias) else {
             return;
         };
+        if self.head_reads[alias.0 as usize].contains(&root) {
+            // Its loop reports it (see `held`).
+            return;
+        }
         if !self.reported.insert((alias, at.start, at.end)) {
             return;
         }
@@ -382,7 +445,32 @@ impl Rule for Aliases<'_> {
             How::GivenAway => ("given away", "moved"),
             How::Changed | How::Used => ("changed", "changed"),
         };
+        // What a chain goes over, its source's receiver, is worded as a
+        // `Vec` looped over is.
+        let head_reads =
+            head.local != Some(root) && self.head_reads[local.0 as usize].contains(&root);
         let (message, note) = match (how, self.through_mutable(local, root)) {
+            (How::Used, Some(m)) if head_reads => (
+                format!(
+                    "this loop's head reads `{m}`, which can change `{name}`, so `{name}` cannot \
+                     be used inside it",
+                    m = self.name(m)
+                ),
+                format!(
+                    "in Rust terms, the `for` loop keeps its iterator, and the borrow of `{m}`, \
+                     a mutable reference into `{name}`, until it ends, and a value cannot be \
+                     used while it is mutably borrowed",
+                    m = self.name(m)
+                ),
+            ),
+            _ if head_reads => (
+                format!("this loop's head reads `{name}`, so `{name}` cannot be {verb} inside it"),
+                format!(
+                    "in Rust terms, the `for` loop keeps its iterator, and every borrow its \
+                     closures and arguments hold, until it ends, and a value cannot be {rust} \
+                     while it is borrowed"
+                ),
+            ),
             (How::Used, Some(m)) => (
                 format!(
                     "this loop goes over `{m}`, which can change `{name}`, so `{name}` cannot be \

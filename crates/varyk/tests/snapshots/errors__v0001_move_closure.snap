@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `move` is not supported in Varyk; write the closure without it
+ --> crates/varyk/tests/fixtures/errors/v0001_move_closure/main.vr:3:39
+  |
+3 |     let evens = numbers.iter().filter(move |n| n % 2 == 0).count();
+  |                                       ^^^^ `move` is not supported in Varyk; write the closure without it

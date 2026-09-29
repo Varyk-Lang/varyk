@@ -982,7 +982,13 @@ fn indirectly_recursive_structs_are_one_v0109_at_the_closing_field() {
     let d = only(&diagnostics);
     assert_eq!(d.code, codes::V0109);
     assert_eq!(d.span, span_of(&sources, 0, "a: A"));
-    assert_eq!(d.notes, vec!["the cycle is A -> B -> A".to_string()]);
+    assert_eq!(
+        d.notes,
+        vec![
+            "the cycle is A -> B -> A".to_string(),
+            ELSEWHERE_NOTE.to_string()
+        ]
+    );
 }
 
 #[test]
@@ -1076,9 +1082,18 @@ fn enum_and_impl_register() {
     assert_eq!(
         def.variants,
         vec![
-            ("Circle".to_string(), vec![F64]),
-            ("Rect".to_string(), vec![F64, Ty::String]),
-            ("Point".to_string(), vec![]),
+            VariantDef {
+                name: "Circle".to_string(),
+                fields: VariantFieldsDef::Tuple(vec![F64]),
+            },
+            VariantDef {
+                name: "Rect".to_string(),
+                fields: VariantFieldsDef::Tuple(vec![F64, Ty::String]),
+            },
+            VariantDef {
+                name: "Point".to_string(),
+                fields: VariantFieldsDef::Tuple(vec![]),
+            },
         ]
     );
     assert_eq!(def.variant("Point"), Some(2));
@@ -1180,9 +1195,123 @@ fn an_enum_containing_itself_through_option_is_v0109_and_through_vec_is_not() {
     assert_eq!(d.code, codes::V0109);
     assert_eq!(d.span, span_of(&sources, 0, "Option<L>"));
     assert_eq!(d.message, "an enum cannot contain itself");
-    assert_eq!(d.notes, vec!["the cycle is L -> L".to_string()]);
+    assert_eq!(
+        d.notes,
+        vec![
+            "the cycle is L -> L".to_string(),
+            ELSEWHERE_NOTE.to_string()
+        ]
+    );
 
     resolved("enum T {\n    C(Vec<T>),\n    Leaf,\n}\nfn main() {}\n");
+}
+
+/// The note every V0109 carries after the cycle (M4 spec 2.7).
+const ELSEWHERE_NOTE: &str = "a `Vec` or `HashMap` holds its elements elsewhere, so holding \
+                              the value in one breaks the cycle";
+
+#[test]
+fn a_named_field_variant_containing_itself_is_v0109() {
+    let text = "enum L {\n    C { next: Option<L> },\n    End,\n}\nfn main() {}\n";
+    let (result, sources) = resolve_str(text);
+    let diagnostics = result.expect_err("should fail");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0109);
+    assert_eq!(d.span, span_of(&sources, 0, "Option<L>"));
+    assert_eq!(
+        d.notes,
+        vec![
+            "the cycle is L -> L".to_string(),
+            ELSEWHERE_NOTE.to_string()
+        ]
+    );
+}
+
+#[test]
+fn a_hash_map_payload_breaks_a_cycle_as_a_vec_does() {
+    resolved("struct Node {\n    children: HashMap<string, Node>,\n}\nfn main() {}\n");
+    resolved("enum T {\n    C(HashMap<i32, T>),\n    Leaf,\n}\nfn main() {}\n");
+}
+
+#[test]
+fn hash_map_resolves_with_an_integer_bool_or_string_key() {
+    let resolved = resolved(
+        "fn f(a: HashMap<string, i32>, b: HashMap<u8, Vec<string>>, c: HashMap<bool, HashMap<i64, f64>>) {}\nfn main() {}\n",
+    );
+    let (_, sig) = resolved
+        .symbols
+        .fns
+        .iter()
+        .enumerate()
+        .find(|(_, sig)| sig.name == "f")
+        .expect("f");
+    let boxed = |ty: Ty| Box::new(ty);
+    assert_eq!(
+        sig.params[0].1,
+        Ty::HashMap(boxed(Ty::String), boxed(Ty::Int(IntKind::I32)))
+    );
+    assert_eq!(
+        sig.params[1].1,
+        Ty::HashMap(
+            boxed(Ty::Int(IntKind::U8)),
+            boxed(Ty::Vec(boxed(Ty::String)))
+        )
+    );
+    assert_eq!(
+        sig.params[2].1,
+        Ty::HashMap(
+            boxed(Ty::Bool),
+            boxed(Ty::HashMap(
+                boxed(Ty::Int(IntKind::I64)),
+                boxed(Ty::Float(FloatKind::F64))
+            ))
+        )
+    );
+}
+
+#[test]
+fn hash_map_with_a_wrong_arity_or_key_is_v0101() {
+    for (ty, words) in [
+        (
+            "HashMap<string>",
+            "`HashMap` takes two types, written `HashMap<K, V>`",
+        ),
+        ("HashMap<string, i32, i32>", "`HashMap` takes two types"),
+        ("HashMap", "`HashMap` takes two types"),
+        ("HashMap<f64, i32>", "an integer type, `bool`, or `string`"),
+        (
+            "HashMap<Vec<i32>, i32>",
+            "an integer type, `bool`, or `string`",
+        ),
+        ("HashMap<P, i32>", "an integer type, `bool`, or `string`"),
+    ] {
+        let text = format!("struct P {{\n    n: i32,\n}}\nfn f(m: {ty}) {{}}\nfn main() {{}}\n");
+        let (result, sources) = resolve_str(&text);
+        let diagnostics = result.expect_err("should fail");
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0101, "{ty}");
+        assert!(d.message.contains(words), "{ty}: {d:#?}");
+        if ty == "HashMap<f64, i32>" {
+            assert_eq!(d.span, span_of(&sources, 0, "f64"));
+        }
+    }
+}
+
+#[test]
+fn hash_map_declared_as_a_name_is_v0103() {
+    for text in [
+        "struct HashMap {}\nfn main() {}\n",
+        "enum HashMap {\n    A,\n}\nfn main() {}\n",
+        "fn HashMap() {}\nfn main() {}\n",
+    ] {
+        let d = errors_str(text);
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0103, "{text}");
+        assert_eq!(
+            d.message, "the name `HashMap` is already taken by a built-in type",
+            "{text}"
+        );
+    }
 }
 
 #[test]
@@ -1197,7 +1326,13 @@ fn a_struct_and_an_enum_containing_each_other_through_result_are_one_v0109() {
         d.span,
         Span::new(payload.file, payload.start, payload.start + 1)
     );
-    assert_eq!(d.notes, vec!["the cycle is S -> E -> S".to_string()]);
+    assert_eq!(
+        d.notes,
+        vec![
+            "the cycle is S -> E -> S".to_string(),
+            ELSEWHERE_NOTE.to_string()
+        ]
+    );
 }
 
 #[test]
@@ -1756,11 +1891,16 @@ fn imported_enum<'a>(resolved: &'a Resolved, module: &str, name: &str) -> (EnumI
     (id, &resolved.symbols.enums[id.0 as usize])
 }
 
-fn enum_variant<'a>(def: &'a EnumDef, name: &str) -> &'a (String, Vec<Ty>) {
+/// The types the variant `name` of `def` holds.
+fn enum_variant(def: &EnumDef, name: &str) -> Vec<Ty> {
     def.variants
         .iter()
-        .find(|(variant, _)| variant == name)
+        .find(|variant| variant.name == name)
         .unwrap_or_else(|| panic!("no variant {name}"))
+        .types()
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -1769,8 +1909,8 @@ fn imported_enum_is_in_the_enum_table_with_its_variants() {
     let (_, def) = imported_enum(&resolved, "ext", "Kind");
     assert!(def.imported && def.is_pub);
     assert_eq!(def.opaque, None);
-    assert_eq!(enum_variant(def, "Word").1, Vec::<Ty>::new());
-    assert_eq!(enum_variant(def, "Number").1, vec![Ty::Int(IntKind::I32)]);
+    assert_eq!(enum_variant(def, "Word"), Vec::<Ty>::new());
+    assert_eq!(enum_variant(def, "Number"), vec![Ty::Int(IntKind::I32)]);
     let (_, local) = imported_enum(&resolved, "crate", "Local");
     assert!(!local.imported);
 }
@@ -1812,7 +1952,7 @@ fn imported_enum_types_in_fields_and_signatures() {
             other => panic!("Thing should be an imported struct: {other:?}"),
         };
     assert_eq!(
-        enum_variant(&resolved.symbols.enums[thing.0 as usize], "Full").1,
+        enum_variant(&resolved.symbols.enums[thing.0 as usize], "Full"),
         vec![Ty::Struct(thing_struct)]
     );
     let (_, container) = imported_struct(&resolved, "ext", "Container");
@@ -1885,7 +2025,7 @@ fn a_varyk_struct_field_and_enum_payload_naming_an_imported_enum_resolve() {
     };
     let wraps_kind = &resolved.symbols.enums[wraps_kind.0 as usize];
     assert!(!wraps_kind.imported);
-    assert_eq!(enum_variant(wraps_kind, "Held").1, vec![Ty::Enum(kind)]);
+    assert_eq!(enum_variant(wraps_kind, "Held"), vec![Ty::Enum(kind)]);
 }
 
 /// Resolves `text` as a package's entry of `kind` depending on `crates`.

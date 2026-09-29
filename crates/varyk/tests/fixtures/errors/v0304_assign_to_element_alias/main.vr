@@ -1,0 +1,7 @@
+fn main() {
+    let mut names: Vec<string> = vec!["ada", "bob"];
+    let others: Vec<string> = vec!["cy"];
+    let mut best = names[0];
+    best = others[0];
+    println!("{}", best);
+}

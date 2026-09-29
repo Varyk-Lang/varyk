@@ -1,0 +1,8 @@
+fn numbers() -> Vec<i32> {
+    vec![1, 2, 3]
+}
+
+fn main() {
+    let total = numbers().iter().sum();
+    println!("{}", total);
+}

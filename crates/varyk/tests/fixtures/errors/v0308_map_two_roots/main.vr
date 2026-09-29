@@ -1,0 +1,10 @@
+struct User {
+    name: string,
+    nickname: string,
+}
+
+fn main() {
+    let users = vec![User { name: "Ann", nickname: "" }];
+    let fallback = User { name: "Guest", nickname: "guest" };
+    let shown = users.iter().map(|u| if u.nickname.is_empty() { fallback.name } else { u.nickname }).count();
+}

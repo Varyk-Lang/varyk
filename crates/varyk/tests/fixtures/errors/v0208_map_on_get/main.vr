@@ -1,0 +1,10 @@
+struct Item {
+    name: string,
+    qty: i32,
+}
+
+fn main() {
+    let items = vec![Item { name: "bolt", qty: 2 }];
+    let qty = items.get(0).map(|i| i.qty);
+    println!("{}", qty.is_some());
+}

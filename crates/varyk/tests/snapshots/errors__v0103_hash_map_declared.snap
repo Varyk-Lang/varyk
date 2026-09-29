@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0103]: the name `HashMap` is already taken by a built-in type
+ --> crates/varyk/tests/fixtures/errors/v0103_hash_map_declared/main.vr:1:8
+  |
+1 | struct HashMap {
+  |        ^^^^^^^ the name `HashMap` is already taken by a built-in type

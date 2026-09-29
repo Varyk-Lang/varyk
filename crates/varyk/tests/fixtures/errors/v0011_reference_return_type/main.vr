@@ -1,0 +1,12 @@
+struct User {
+    name: string,
+}
+
+fn name_of(user: User) -> &str {
+    user.name
+}
+
+fn main() {
+    let user = User { name: "Alice" };
+    println!("{}", name_of(user));
+}

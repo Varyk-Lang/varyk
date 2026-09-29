@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: unsupported Rust signature: `ext::longer` cannot be called from Varyk
+ --> crates/varyk/tests/fixtures/errors/v0108_two_reference_parameters/main.vr:6:20
+  |
+6 |     println!("{}", ext::longer(a, b));
+  |                    ^^^^^^^^^^^^^^^^^ unsupported Rust signature: `ext::longer` cannot be called from Varyk
+  |
+  = note: the Rust signature is `fn longer(a: &str, b: &str) -> &str`
+  = note: Varyk imports a returned `&str` or `&S` only from a `&self` method, or from a `pub fn` with exactly one `&T` parameter, when the signature writes no lifetime; otherwise return an owned value, such as `String` instead of `&str`

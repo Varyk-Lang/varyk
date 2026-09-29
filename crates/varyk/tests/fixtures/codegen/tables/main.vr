@@ -1,0 +1,51 @@
+fn doubled(text: string) -> Option<i32> {
+    let n: i32 = text.parse()?;
+    Some(n * 2)
+}
+
+fn flag(text: string) -> Option<bool> {
+    text.parse()
+}
+
+fn show(n: Option<u8>) {
+    if let Some(k) = n {
+        println!("{}", k);
+    }
+}
+
+fn main() {
+    let mut counts: HashMap<string, i32> = HashMap::new();
+    for word in vec!["apple", "pear", "apple"] {
+        let before = counts.insert(word.clone(), 1);
+        if let Some(n) = before {
+            counts.insert(word, n + 1);
+        }
+    }
+    println!("{} {}", counts.len(), counts.contains_key("apple"));
+
+    let a: Option<f64> = "1.5".parse();
+    println!("{}", a.is_some());
+    show("7".parse());
+    println!("{}", doubled("21").is_some());
+    println!("{}", flag("maybe").is_some());
+
+    let names = vec!["ann", "bob"];
+    let e = "eve";
+    println!("{}", names.contains(e));
+
+    let mut numbers = vec![3, 1, 2];
+    numbers.sort();
+    numbers.insert(0, 9);
+    let first = numbers.remove(0);
+    println!("{} {} {}", first, numbers.contains(2), numbers.is_empty());
+
+    let mut text = "hello";
+    text.push_str(", world");
+    let loud = text.to_uppercase();
+    println!("{} {}", loud.replace("WORLD", "YOU"), text.starts_with("he"));
+    let mut words = vec!["b", "a"];
+    words.sort();
+    println!("{}", words.join("+"));
+    let r: Result<i32, string> = Err("no");
+    println!("{} {}", r.is_ok(), r.is_err());
+}

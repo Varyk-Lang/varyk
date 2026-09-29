@@ -1,0 +1,10 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let lines: Vec<String> = ::std::vec!["  a  ".to_string(), " b".to_string()];
+    let tidy = lines.iter().map(|line| line.trim()).all(|line| line.len() == 1usize);
+    ::std::println!("{}", tidy);
+}

@@ -116,6 +116,7 @@ installed:
 <!-- emit-rust: examples/borrowing.vr -->
 ```rust
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct User {
     name: String,
 }
@@ -199,14 +200,38 @@ in the example above.
 
 Varyk is experimental and pre-1.0: anything may change, including any
 syntax, error code, or command-line flag, and a breaking change bumps the
-minor version. This is milestone 3: packages and interop. Structs, enums,
-and `match`, `for` loops, methods, `Option`, `Result`, `Vec`, `?`, and
-`format!` work, and so do packages with dependencies, modules at any depth,
-`use`, private fields, and Rust structs and enums imported from `.rs` files;
-the compiler builds and runs every program in `examples/`, and it reports
-every error it knows about with a code, a plain-word message, and, where it
-can, a suggested fix. Closures, iterators, and much more are not there yet;
-see [docs/language.md](docs/language.md) for exactly what works.
+minor version. This is milestone 4: closures, iterators, and patterns.
+Structs, enums, and `match`, `for` loops, methods, `Option`, `Result`,
+`Vec`, `?`, and `format!` work, and so do packages with dependencies,
+modules at any depth, `use`, private fields, and Rust structs and enums
+imported from `.rs` files; the compiler builds and runs every program in
+`examples/`, and it reports every error it knows about with a code, a
+plain-word message, and, where it can, a suggested fix. Async, the
+batteries for services, and much more are not there yet; see
+[docs/language.md](docs/language.md) for exactly what works.
+
+Milestone 4 adds closures, as the argument of a call like `filter` or
+`map`; chains such as `names.iter().filter(|n| n.len() > 3).count()`;
+`HashMap`; and getters that return part of what they are given without
+copying it. Nothing is written for that: Varyk sees that every return of
+`display_name` is part of `self`, and the generated Rust returns a
+reference into it, where milestone 3 needed a `.clone()`:
+
+```varyk
+fn display_name(self) -> string {
+    if self.nickname.is_empty() { self.name } else { self.nickname }
+}
+```
+
+```rust
+fn display_name(&self) -> &str {
+    if self.nickname.is_empty() {
+        &self.name
+    } else {
+        &self.nickname
+    }
+}
+```
 
 ## Documents
 
@@ -218,6 +243,7 @@ see [docs/language.md](docs/language.md) for exactly what works.
 - [docs/specs/2026-09-23-varyk-design.md](docs/specs/2026-09-23-varyk-design.md): the full design.
 - [docs/specs/2026-09-25-milestone-2-design.md](docs/specs/2026-09-25-milestone-2-design.md): milestone 2's additions.
 - [docs/specs/2026-09-26-milestone-3-design.md](docs/specs/2026-09-26-milestone-3-design.md): milestone 3's additions.
+- [docs/specs/2026-09-29-milestone-4-design.md](docs/specs/2026-09-29-milestone-4-design.md): milestone 4's additions.
 
 ## License
 

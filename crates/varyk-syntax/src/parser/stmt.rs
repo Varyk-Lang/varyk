@@ -1,11 +1,11 @@
-//! Statement parsing: `let`, assignment, `return`, `while`, `break`,
-//! `continue`, and expression statements (spec 4.1), plus
+//! Statement parsing: `let`, assignment, `return`, `while`, `while let`,
+//! `for`, `break`, `continue`, and expression statements (spec 4.1), plus
 //! [`Parser::parse_block_body`], which `parser::expr`'s `parse_block` uses
 //! for everything between a block's braces.
 
 use super::Parser;
 use crate::ast::{Expr, ExprKind, ForHead, Stmt};
-use crate::error::{V0001, V0002};
+use crate::error::V0002;
 use crate::token::TokenKind;
 
 impl<'a> Parser<'a> {
@@ -51,7 +51,10 @@ impl<'a> Parser<'a> {
                     // `}` already ends it visually.
                     if matches!(
                         expr.kind,
-                        ExprKind::If { .. } | ExprKind::Block(_) | ExprKind::Match { .. }
+                        ExprKind::If { .. }
+                            | ExprKind::IfLet { .. }
+                            | ExprKind::Block(_)
+                            | ExprKind::Match { .. }
                     ) {
                         let span = expr.span;
                         stmts.push(Stmt::Expr {
@@ -109,22 +112,21 @@ impl<'a> Parser<'a> {
         Ok(Stmt::Return { value, span })
     }
 
-    /// `while cond { body }`. The condition is parsed in condition
+    /// `while cond { body }` or `while let pattern = value { body }` (M4
+    /// spec 2.4). The condition, or the value, is parsed in condition
     /// position, the same way `if`'s is (`parser::expr::parse_if`), so
     /// `while i < n { }` parses `i < n` as a comparison rather than
     /// treating `n { }` as a struct literal.
     fn parse_while_stmt(&mut self) -> Result<Stmt, ()> {
         let while_token = self.bump().expect("peek confirmed `while`");
-        if self.peek() == Some(&TokenKind::Let) {
-            let let_token = self.bump().expect("peek confirmed `let`");
-            let span = self.span_from(while_token.span, let_token.span);
-            self.push_error(
-                V0001,
-                span,
-                "`while let` is not supported in Varyk; milestone 2 has no `while let`",
-            );
-            return Err(());
-        }
+        let pattern = if self.bump_if(&TokenKind::Let) {
+            let pattern = self.parse_pattern()?;
+            self.reject_alternatives()?;
+            self.expect(TokenKind::Eq, "`=` after the pattern of `while let`")?;
+            Some(pattern)
+        } else {
+            None
+        };
         let was_in_condition = self.in_condition;
         self.in_condition = true;
         let cond = self.parse_expr();
@@ -132,7 +134,15 @@ impl<'a> Parser<'a> {
         let cond = cond?;
         let body = self.parse_block()?;
         let span = self.span_from(while_token.span, body.span);
-        Ok(Stmt::While { cond, body, span })
+        Ok(match pattern {
+            Some(pattern) => Stmt::WhileLet {
+                pattern,
+                value: cond,
+                body,
+                span,
+            },
+            None => Stmt::While { cond, body, span },
+        })
     }
 
     /// `for var in head { body }` (spec 2.4). `head` is parsed in
@@ -158,35 +168,26 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `a..b`, or a plain expression, right after `for var in`. Calls
-    /// `parse_binary` directly (`parser::expr::Parser::parse_binary`)
-    /// rather than `parse_expr`, so its stray-range check does not fire on
-    /// the very range this function is meant to parse. `..=` is `V0001`
-    /// naming milestone 4.
+    /// `a..b`, `a..=b` (M4 spec 2.11), or a plain expression, right after
+    /// `for var in`. Calls `parse_binary` directly
+    /// (`parser::expr::Parser::parse_binary`) rather than `parse_expr`, so
+    /// its stray-range check does not fire on the very range this function
+    /// is meant to parse.
     fn parse_for_head(&mut self) -> Result<ForHead, ()> {
         self.for_head_leading_paren = self.peek() == Some(&TokenKind::LParen);
         let start = self.parse_binary(0)?;
         self.for_head_leading_paren = false;
-        if self.peek() != Some(&TokenKind::DotDot) {
-            return Ok(ForHead::Expr(Box::new(start)));
-        }
-        let dotdot_span = self.current_span();
+        let inclusive = match self.peek() {
+            Some(TokenKind::DotDot) => false,
+            Some(TokenKind::DotDotEq) => true,
+            _ => return Ok(ForHead::Expr(Box::new(start))),
+        };
         self.bump();
-        if self.peek() == Some(&TokenKind::Eq) {
-            let eq_span = self.current_span();
-            self.bump();
-            let span = self.span_from(dotdot_span, eq_span);
-            self.push_error(
-                V0001,
-                span,
-                "`..=` is not supported in Varyk yet; milestone 4 adds inclusive ranges",
-            );
-            return Err(());
-        }
         let end = self.parse_binary(0)?;
         Ok(ForHead::Range {
             start: Box::new(start),
             end: Box::new(end),
+            inclusive,
         })
     }
 
@@ -236,8 +237,9 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinaryOp, Block};
+    use crate::ast::{BinaryOp, Block, Pattern};
     use crate::error::SyntaxError;
+    use crate::error::V0001;
     use crate::lex;
     use crate::source::SourceFile;
     use crate::span::FileId;
@@ -467,7 +469,12 @@ mod tests {
                 assert_eq!(span.start, 2);
                 assert_eq!(span.end, 2 + for_src.len() as u32);
                 match head {
-                    ForHead::Range { start, end } => {
+                    ForHead::Range {
+                        start,
+                        end,
+                        inclusive,
+                    } => {
+                        assert!(!inclusive);
                         assert!(matches!(start.kind, ExprKind::Integer(_)));
                         assert!(matches!(end.kind, ExprKind::Path { .. }));
                     }
@@ -507,15 +514,24 @@ mod tests {
     }
 
     #[test]
-    fn for_head_inclusive_range_is_v0001() {
-        let (block, errors) = parse_block("{ for i in 0..=n { } }");
-        assert!(block.is_err());
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("..=")),
-            "errors: {errors:?}"
-        );
+    fn for_over_an_inclusive_range() {
+        let block = parse_block_ok("{ for i in 1..=n { } }");
+        match &block.stmts[0] {
+            Stmt::For {
+                head:
+                    ForHead::Range {
+                        start,
+                        end,
+                        inclusive,
+                    },
+                ..
+            } => {
+                assert!(inclusive);
+                assert!(matches!(start.kind, ExprKind::Integer(_)));
+                assert!(matches!(end.kind, ExprKind::Path { .. }));
+            }
+            other => panic!("expected a for over a range, got {other:?}"),
+        }
     }
 
     #[test]
@@ -531,14 +547,60 @@ mod tests {
     }
 
     #[test]
-    fn while_let_is_v0001() {
-        let (block, errors) = parse_block("{ while let Some(x) = y { } }");
+    fn while_let_over_a_method_call() {
+        let src = "while let Some(x) = v.pop() { }";
+        let block = parse_block_ok(&format!("{{ {src} }}"));
+        match &block.stmts[0] {
+            Stmt::WhileLet {
+                pattern,
+                value,
+                body,
+                span,
+            } => {
+                assert!(matches!(pattern, Pattern::Variant { name, .. } if name.name == "Some"));
+                assert!(matches!(value.kind, ExprKind::MethodCall { .. }));
+                assert!(body.stmts.is_empty() && body.tail.is_none());
+                assert_eq!((span.start, span.end), (2, 2 + src.len() as u32));
+            }
+            other => panic!("expected a while let, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn while_let_alternatives_are_v0001() {
+        let (block, errors) = parse_block("{ while let Some(1) | Some(2) = x { } }");
         assert!(block.is_err());
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("while let")),
-            "errors: {errors:?}"
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, V0001);
+        assert!(errors[0].message.starts_with("alternatives"), "{errors:?}");
+    }
+
+    #[test]
+    fn if_let_statement_needs_no_semicolon() {
+        let block = parse_block_ok("{ if let Some(x) = y { } 1 }");
+        assert_eq!(block.stmts.len(), 1);
+        assert!(matches!(
+            &block.stmts[0],
+            Stmt::Expr {
+                expr: Expr {
+                    kind: ExprKind::IfLet { .. },
+                    ..
+                },
+                has_semi: false,
+                ..
+            }
+        ));
+        assert!(block.tail.is_some());
+    }
+
+    #[test]
+    fn as_as_let_name_is_v0001() {
+        let (_, errors) = parse_block("{ let as = 1; }");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, V0001);
+        assert_eq!(
+            errors[0].message,
+            "`as` is a Rust keyword and cannot be used as a name in Varyk"
         );
     }
 

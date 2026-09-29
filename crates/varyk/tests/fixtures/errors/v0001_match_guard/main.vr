@@ -1,0 +1,7 @@
+fn main() {
+    let found = Some(4);
+    match found {
+        Some(n) if n > 0 => println!("positive {}", n),
+        _ => println!("something else"),
+    }
+}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0208]: this `Option` holds part of `items`, so no method can be called on it, `map` included; look inside it here instead, with `if let Some(x) = ... { .. }` or `match`
+ --> crates/varyk/tests/fixtures/errors/v0208_map_on_get/main.vr:8:15
+  |
+8 |     let qty = items.get(0).map(|i| i.qty);
+  |               ^^^^^^^^^^^^ this `Option` holds part of `items`, so no method can be called on it, `map` included; look inside it here instead, with `if let Some(x) = ... { .. }` or `match`
+  |
+  = note: in Rust terms, this is an `Option<&T>`, a reference inside an `Option`, which Varyk has no type for

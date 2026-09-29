@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `..` is not supported in a pattern with named fields; name every field, and write `name: _` for one you do not need
+ --> crates/varyk/tests/fixtures/errors/v0001_rest_in_named_field_pattern/main.vr:8:27
+  |
+8 |         Event::Click { x, .. } => println!("click at {}", x),
+  |                           ^^ `..` is not supported in a pattern with named fields; name every field, and write `name: _` for one you do not need

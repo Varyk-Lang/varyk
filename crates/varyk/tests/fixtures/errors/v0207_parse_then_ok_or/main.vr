@@ -1,0 +1,8 @@
+fn number(text: string) -> Result<i32, string> {
+    let n = text.parse().ok_or("not a number")?;
+    Ok(n)
+}
+
+fn main() {
+    println!("{}", number("12").is_ok());
+}

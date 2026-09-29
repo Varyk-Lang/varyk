@@ -1,0 +1,40 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct User {
+    name: String,
+    age: i32,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn greet(name: &str) {
+    ::std::println!("hi {}", name);
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let users: Vec<User> = ::std::vec![User { name: "ann".to_string(), age: 30 }, User { name: "bo".to_string(), age: 4 }];
+    if let Some(u) = users.iter().find(|u| {
+        let u = *u;
+        u.age > 18
+    }) {
+        greet(&u.name);
+    }
+    match users.iter().map(|u| u.name.as_str()).find(|n| {
+        let n = *n;
+        n.len() < 3usize
+    }) {
+        Some(n) => greet(n),
+        None => {
+        }
+    }
+    let ages: Vec<i32> = ::std::vec![3, 40];
+    let adult = ages.iter().copied().find(|a| {
+        let a = *a;
+        a > 18
+    }).unwrap_or(0);
+    ::std::println!("{}", adult);
+}

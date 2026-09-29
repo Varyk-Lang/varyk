@@ -1,0 +1,10 @@
+fn name(n: u8) -> string {
+    match n {
+        0 => "zero",
+        1..=255 => "some",
+    }
+}
+
+fn main() {
+    println!("{}", name(3));
+}

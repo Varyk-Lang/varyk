@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: a closure's parameter has no type in Varyk; write `|n|`, and it takes the type the call gives it
+ --> crates/varyk/tests/fixtures/errors/v0001_typed_closure_parameter/main.vr:3:40
+  |
+3 |     let evens = numbers.iter().filter(|n: i32| n % 2 == 0).count();
+  |                                        ^^^^^^ a closure's parameter has no type in Varyk; write `|n|`, and it takes the type the call gives it
+  |
+help: replace `n: i32` with `n`

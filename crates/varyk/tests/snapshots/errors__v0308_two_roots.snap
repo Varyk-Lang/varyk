@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0308]: this function returns part of `a` in one place and part of `b` in another
+ --> crates/varyk/tests/fixtures/errors/v0308_two_roots/main.vr:6:32
+  |
+6 |     if first { a.name } else { b.name }
+  |                ------          ^^^^^^ this function returns part of `a` in one place and part of `b` in another
+  |                |
+  |                part of `a` is returned here
+  |
+  = note: a function may return part of only one of its parameters; return a copy in one of the places, with `.clone()`, or make two functions
+  = note: in Rust terms, the returned reference must borrow from one parameter, named by its lifetime

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: this value is made right here, but this call needs a value stored in a name, because its result is part of it; store it with `let` first, then use that
+ --> crates/varyk/tests/fixtures/errors/v0001_iter_on_temporary/main.vr:6:17
+  |
+6 |     let total = numbers().iter().sum();
+  |                 ^^^^^^^^^ this value is made right here, but this call needs a value stored in a name, because its result is part of it; store it with `let` first, then use that
+  |
+  = note: in Rust terms, the result is a reference into the value the call is made on, and Varyk only lets it point into a value stored in a `let`, not into a temporary one

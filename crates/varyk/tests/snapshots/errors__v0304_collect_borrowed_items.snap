@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: these items are parts of `words`, and a `Vec` must own what it holds; copy them first with `.map(|w| w.clone())`
+ --> crates/varyk/tests/fixtures/errors/v0304_collect_borrowed_items/main.vr:3:66
+  |
+3 |     let short: Vec<string> = words.iter().filter(|w| w.len() < 4).collect();
+  |                                                                  ^^^^^^^^^^ these items are parts of `words`, and a `Vec` must own what it holds; copy them first with `.map(|w| w.clone())`
+  |
+  = note: `collect` makes a `Vec` of the items as they are
+  = note: in Rust terms, a borrowed value cannot move into a place that owns it
+help: insert `.map(|w| w.clone())`

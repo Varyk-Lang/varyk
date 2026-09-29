@@ -5,6 +5,7 @@ expression: main
 mod geo;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 enum Status {
     Open,
     Done,
@@ -13,6 +14,7 @@ enum Status {
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Task {
     title: String,
     status: Status,

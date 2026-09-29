@@ -5,6 +5,7 @@ expression: "file(&krate, \"src/main.rs\")"
 mod ext;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Label {
     text: String,
 }

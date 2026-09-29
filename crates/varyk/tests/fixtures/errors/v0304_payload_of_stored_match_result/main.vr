@@ -1,0 +1,18 @@
+enum Job {
+    Idle,
+    Run(string),
+}
+
+fn main() {
+    let busy = true;
+    let mut done: Vec<string> = Vec::new();
+    let next = match busy {
+        true => Some(Job::Run("build")),
+        false => None,
+    };
+    match next {
+        Some(Job::Run(name)) => done.push(name),
+        _ => {}
+    }
+    println!("{}", done.len());
+}

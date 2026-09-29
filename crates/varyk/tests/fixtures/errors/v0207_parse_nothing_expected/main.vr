@@ -1,0 +1,4 @@
+fn main() {
+    let text = "42";
+    let n = text.parse();
+}

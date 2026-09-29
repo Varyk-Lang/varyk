@@ -3,6 +3,7 @@ source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn clear(mut s: string) {\\n    s = \\\"\\\";\\n}\\n\\nfn clear_user(mut user: User) {\\n    clear(user.name);\\n}\\n\\nfn main() {\\n    let mut user = User { name: \\\"Ann\\\" };\\n    clear(user.name);\\n    clear_user(user);\\n}\\n\")"
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct User {
     name: String,
 }

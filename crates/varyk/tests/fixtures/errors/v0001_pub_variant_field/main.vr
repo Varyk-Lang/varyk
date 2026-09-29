@@ -1,0 +1,8 @@
+pub enum Event {
+    Click { pub x: i32, y: i32 },
+    Quit,
+}
+
+fn main() {
+    let e = Event::Quit;
+}

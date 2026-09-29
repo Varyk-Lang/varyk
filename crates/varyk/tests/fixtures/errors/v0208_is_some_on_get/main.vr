@@ -1,0 +1,6 @@
+fn main() {
+    let lines = vec!["first", "second"];
+    if lines.get(1).is_some() {
+        println!("two lines");
+    }
+}

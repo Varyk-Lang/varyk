@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `r` belongs to the caller of this function, so it cannot be used up by `unwrap_or`
+ --> crates/varyk/tests/fixtures/errors/v0304_unwrap_or_on_stored_result/main.vr:2:5
+  |
+2 |     r.unwrap_or(0)
+  |     ^ `r` belongs to the caller of this function, so it cannot be used up by `unwrap_or`
+  |
+  = note: `unwrap_or` uses up the value it is called on, and what is inside this one cannot be copied out; match on it instead
+  = note: in Rust terms, a borrowed value cannot move into a place that owns it

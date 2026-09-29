@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let line = "hello world";
+    let word = crate::ext::first_word(line);
+    let note = crate::ext::Note::new("  padded  ");
+    ::std::println!("{} [{}]", word, crate::ext::Note::text(&note).trim());
+}

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0201]: `map` hands its closure one value, so the closure takes exactly one parameter, as in `|x| ..`; this one has 2
+ --> crates/varyk/tests/fixtures/errors/v0201_closure_with_two_parameters/main.vr:3:27
+  |
+3 |     let total = price.map(|p, tax| p + tax);
+  |                           ^^^^^^^^^^^^^^^^ `map` hands its closure one value, so the closure takes exactly one parameter, as in `|x| ..`; this one has 2

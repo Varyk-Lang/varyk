@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0208]: this `Option` holds part of `words` and must be used where it is made; look inside it here with `match` or `if let`
+ --> crates/varyk/tests/fixtures/errors/v0208_stored_find/main.vr:3:17
+  |
+3 |     let short = words.iter().find(|w| w.len() < 4);
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this `Option` holds part of `words` and must be used where it is made; look inside it here with `match` or `if let`
+  |
+  = note: in Rust terms, this is an `Option<&T>`, a reference inside an `Option`, which Varyk has no type for

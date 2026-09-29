@@ -77,22 +77,29 @@ Done when every item above but the site is checked; the site is a separate
 sub-project in its own repository. The full definition of done is section
 10 of the spec.
 
-## Milestone 4: closures, iterators, and tooling
+## Milestone 4: closures, iterators, and patterns
 
-- [ ] Closures and function types
-- [ ] Iterator adapters on `Vec` and `string` (`iter`, `map`, `filter`, `chars`, `split`, `parse`)
-- [ ] Borrowed return values inferred from the body, explicit lifetimes in the generated Rust
-- [ ] `if let` and `while let`
-- [ ] Enum variants with named fields, nested and literal patterns, `match` on numbers and strings, `..=`, `?` on `Option`
-- [ ] The `Option` and `Result` methods and the rest of the `Vec` and `string` methods
-- [ ] `HashMap`, `Box`, `as`, `clone` on structs and enums
-- [ ] `varyk fmt`, a deterministic formatter on `varyk-syntax`
-- [ ] Test asserting `docs/language.md` covers every construct the parser accepts
-- [ ] Nested modules in `.rs` files
-- [ ] Import of Rust tuple and unit structs
-- [ ] Derives on imported Rust structs (`Clone`, `PartialEq`, `Debug`) usable from Varyk
-- [ ] `.rs` signatures naming Varyk-declared types
-- [ ] Direct import of a published Varyk library from Varyk
+Spec: `docs/specs/2026-09-29-milestone-4-design.md`. The language only;
+the former milestone-4 tooling and interop items moved to milestones 5
+and 6.
+
+- [x] Closures as arguments of built-in calls: untyped parameters, shared captures, never a value
+- [x] Iterator chains on stored values: `iter`, `split`, `keys`, `values` sources; `map`, `filter`; `collect`, `count`, `sum`, `any`, `all`, `find`; a chain as a `for` head; items borrowed, copied, or owned
+- [x] Borrowed return values inferred from the body, one root parameter, explicit lifetime in the generated Rust only where elision would not name it; the call result an alias of the argument
+- [x] `if let` and `while let`
+- [x] Enum variants with named fields, nested, literal, and `..=` range patterns, `match` on numbers, `bool`, and strings, exhaustiveness and reachability by Varyk
+- [x] `?` on `Option`; expected types flowing through `?`
+- [x] The `Option` and `Result` methods (`is_some`, `is_ok`, `is_err`, `unwrap_or`, `map`, `ok_or`, `ok`, `map_err`) and the new `Vec` and `string` rows of the table, `parse` included
+- [x] `HashMap` with `get` looked into where it is made
+- [x] `as` between number types; `..=` in `for`
+- [x] `Clone` and `PartialEq` derived where every field allows, so `.clone()` and `==` work on structs and enums; derive lists read from imported Rust types
+- [x] Import of Rust signatures returning `&str` or `&S` where lifetime elision names the root
+- [x] Test asserting `docs/language.md` mentions every keyword, built-in type, table call, and diagnostic code
+- [x] Six new examples and the `todo`, `interop`, and `matcher` updates building and running with expected output; soundness templates for every new construct
+- [x] `docs/language.md`, `docs/design.md`, `docs/open-questions.md`, and `docs/roadmap.md` updated
+
+Done when every item above is checked. The full definition of done is
+section 7 of the spec.
 
 ## Milestone 5: batteries for services
 
@@ -115,16 +122,27 @@ executable. Promotion waits for it.
 - [ ] `async`/`await` on a built-in tokio runtime, `spawn` as a built-in, `Send`/`Sync`/`Pin` kept out of the surface syntax and their failures mapped to Varyk diagnostics
 - [ ] `varyk add`, a pass-through to `cargo add`, so the golden path never leaves the `varyk` command
 - [ ] An agent evaluation: the examples written by a model from `docs/language.md` alone, pass rates published, before any page claims that agents write Varyk well
+- [ ] `.rs` signatures naming Varyk-declared types, so the `varyk-std` facades can take and return Varyk structs (moved from milestone 4)
 
 ## Milestone 6: tooling and beyond
 
+- [ ] `varyk fmt`, a deterministic formatter on `varyk-syntax` (moved from milestone 4; needs comment-preserving syntax)
 - [ ] Language server on `varyk-syntax`
+- [ ] Nested modules in `.rs` files
+- [ ] Import of Rust tuple and unit structs
+- [ ] `Debug` on imported Rust structs, with a `{:?}` placeholder
+- [ ] Direct import of a published Varyk library from Varyk
 - [ ] Decision on a native backend behind the `Backend` trait
 
 ## Unscheduled
 
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
+
+`Box`, until a program needs a recursive type that `Vec` or `HashMap`
+cannot hold, and
+the rest of the milestone-4 cut list (spec section 2.13): a character type,
+closures as values, tuples, `HashSet`, and the remaining iterator adapters.
 
 Using a crate directly from Varyk code, with no facade `.rs` module in
 between. Milestone 3 reaches every crate through a facade, because most

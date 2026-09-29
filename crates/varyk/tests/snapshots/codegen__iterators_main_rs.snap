@@ -1,0 +1,25 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let numbers: Vec<i32> = ::std::vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    ::std::println!("{}", numbers.iter().copied().sum::<i32>());
+    ::std::println!("{}", numbers.iter().copied().filter(|n| {
+        let n = *n;
+        n % 3 == 0
+    }).count());
+    ::std::println!("{}", numbers.iter().copied().any(|n| n > 9));
+    let doubled: Vec<String> = numbers.iter().copied().filter(|n| {
+        let n = *n;
+        n < 4
+    }).map(|n| ::std::format!("{}", n * 2)).collect::<Vec<_>>();
+    ::std::println!("{}", doubled.join(" "));
+    let names: Vec<String> = ::std::vec!["cherry".to_string(), "apple".to_string(), "banana".to_string()];
+    let mut sorted: Vec<String> = names.iter().map(|n| n.clone()).collect::<Vec<_>>();
+    sorted.sort();
+    ::std::println!("{}", sorted.join(", "));
+    let text = "one two three";
+    ::std::println!("{}", text.split(" ").count());
+}

@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0206]: `?` works on a `Result`, and this is `Option<_>`; `read_age` returns `Result<i32, string>`
+ --> crates/varyk/tests/fixtures/errors/v0206_parse_question_in_result_function/main.vr:2:20
+  |
+2 |     let age: i32 = text.parse()?;
+  |                    ^^^^^^^^^^^^ `?` works on a `Result`, and this is `Option<_>`; `read_age` returns `Result<i32, string>`
+  |
+  = note: `parse` gives an `Option`; in a function returning `Result`, write two statements: `let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?`
+  = note: in Rust terms, `?` returns early with the `Err` or the `None`, so the function's return type must be a `Result` with the same error type, or an `Option`

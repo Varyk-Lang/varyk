@@ -24,6 +24,8 @@
 //! reject each with its expected code. Each one that type-checks is also
 //! generated to Rust past borrow analysis and built as one `[[bin]]` of a
 //! single crate, and rustc must reject every one of them. The
+//! [`MUST_REJECT_ITEMS`] do the same with functions of their own beside
+//! the case. The
 //! [`MUST_BUILD_TREES`] and [`MUST_REJECT_TREES`] do the same for
 //! programs of several modules.
 
@@ -123,6 +125,19 @@ fn mk_e() -> E {
     E::C
 }
 
+fn mk_oe() -> Option<E> {
+    Some(E::A(mk_s()))
+}
+
+enum F {
+    N { s: string, n: i32 },
+    M,
+}
+
+fn mk_f() -> F {
+    F::N { n: 1, s: mk_s() }
+}
+
 fn read_e(e: E) {}
 
 fn read_v(v: Vec<P>) {}
@@ -155,6 +170,44 @@ fn mk_rs() -> Result<string, string> {
     Err(\"failed\")
 }
 
+fn mk_m() -> HashMap<string, i32> {
+    let mut m: HashMap<string, i32> = HashMap::new();
+    m.insert(\"k\", 1);
+    m
+}
+
+struct Hm {
+    m: HashMap<string, i32>,
+    n: i32,
+}
+
+fn mk_hm() -> Hm {
+    Hm { m: mk_m(), n: 1 }
+}
+
+fn read_m(m: HashMap<string, i32>) {}
+
+struct Held {
+    o: Option<i32>,
+    r: Result<i32, bool>,
+    rs: Result<i32, string>,
+}
+
+fn mk_held() -> Held {
+    Held { o: Some(1), r: Ok(2), rs: Err(\"e\") }
+}
+
+enum Shape {
+    Circle(f64),
+    Dot,
+}
+
+fn area(r: f64) -> f64 {
+    r * r
+}
+
+fn take_os(o: Option<string>) {}
+
 impl Q {
     fn at(mut self) -> usize {
         0
@@ -174,9 +227,95 @@ impl P {
         self.s.clone()
     }
 
+    fn tagged(self, o: Option<i32>) -> Option<string> {
+        o.map(|n| format!(\"{}{}\", self.s, n))
+    }
+
+    fn bumped(mut self, o: Option<i32>) -> Option<i32> {
+        o.map(|n| {
+            let s = self.s;
+            read_s(s);
+            n + self.n
+        })
+    }
+
     fn fresh() -> P {
         mk_p()
     }
+}
+
+struct G {
+    name: string,
+    tags: Vec<string>,
+    shape: Shape,
+    items: Vec<P>,
+}
+
+fn mk_g() -> G {
+    G { name: \"  g  \", tags: vec![\"t\"], shape: Shape::Circle(1.5), items: vec![mk_p()] }
+}
+
+impl G {
+    fn name_ref(self) -> string {
+        self.name
+    }
+
+    fn tags(self) -> Vec<string> {
+        self.tags
+    }
+
+    fn shape(self) -> Shape {
+        self.shape
+    }
+
+    fn first_item(self) -> P {
+        self.items[0]
+    }
+
+    fn change(mut self) {
+        self.name = \"changed\";
+    }
+}
+
+fn trimmed(text: string) -> string {
+    text.trim()
+}
+
+fn first_of(v: Vec<P>) -> P {
+    v[0]
+}
+
+fn s_of(p: P) -> string {
+    p.s
+}
+
+fn s_unless(p: P, hidden: string) -> string {
+    if p.s == hidden { p.s } else { p.s }
+}
+
+fn g_name(g: G) -> string {
+    g.name_ref()
+}
+
+fn sep_of(s: string) -> string {
+    s
+}
+
+fn held_o(h: Held) -> Option<i32> {
+    h.o
+}
+
+fn held_r(h: Held) -> Result<i32, bool> {
+    h.r
+}
+
+struct Team {
+    names: Vec<string>,
+    users: Vec<G>,
+}
+
+fn mk_team() -> Team {
+    Team { names: vec![\"ann\", \"bo\"], users: vec![mk_g()] }
 }
 ";
 
@@ -201,6 +340,7 @@ pub fn maybe_tally() -> Option<Tally> { Some(Tally::new()) }
 pub fn tallies() -> Vec<Tally> { vec![Tally::new()] }
 pub enum Kind { Word(String), Number(i32), Tallied(Tally) }
 pub fn make_kind(s: &str) -> Kind { Kind::Word(s.to_string()) }
+pub fn refnum(x: &i32) -> &str { if *x > 0 { \"pos\" } else { \"neg\" } }
 ";
 
 /// Every case function's parameters: one of each kind of place.
@@ -221,6 +361,8 @@ const SETUP: &str = "    let mut li = mk_i();
     let mut ln = vec![1, 2];
     let mut lr = mk_r();
     let mut lrv = vec![mk_r()];
+    let mut loe = mk_oe();
+    let mut lf = mk_f();
 ";
 
 /// Uses of the `mut` parameters after the case: a case that moved a
@@ -266,6 +408,12 @@ const CONTEXTS: &[Context] = &[
             "if c { mk_vs()[0] } else { \"z\" }",
             "{ let a = mk_vs(); a[0] }",
             "match mk_o2() { Some(v) => v[0], None => \"z\" }",
+            // A borrowed-return result is a place of its argument (M4
+            // spec 3.1).
+            "if c { trimmed(ps) } else { ls.trim() }",
+            "if c { s_of(pp) } else { \"z\" }",
+            "if c { mk_s() } else { trimmed(ps) }",
+            "{ let g = mk_g(); g.name_ref() }",
         ],
     },
     Context {
@@ -292,6 +440,8 @@ const CONTEXTS: &[Context] = &[
             "if c { mk_q().v[0] } else { mk_p() }",
             "{ let a = mk_q(); a.v[0] }",
             "match mk_ov() { Some(v) => v[0], None => mk_p() }",
+            "if c { first_of(pv) } else { pp }",
+            "{ let v = vec![mk_p()]; first_of(v) }",
         ],
     },
     Context {
@@ -338,6 +488,8 @@ const CONTEXTS: &[Context] = &[
             "if c { mk_vs()[0] } else { \"z\" }",
             "{ let a = mk_vs(); a[0] }",
             "match mk_o2() { Some(v) => v[0], None => \"z\" }",
+            "if c { s_of(lp) } else { \"z\" }",
+            "(if c { first_of(lv) } else { pp }).s",
         ],
     },
     Context {
@@ -370,6 +522,8 @@ const CONTEXTS: &[Context] = &[
             "{ let a = mk_q(); a.p }",
             "if c { mk_q().v[0] } else { mk_p() }",
             "match mk_ov() { Some(v) => v[0], None => mk_p() }",
+            "first_of(lv)",
+            "if c { first_of(pv) } else { lq.p }",
         ],
     },
     // Kept: `let`, assignment, and owned slots.
@@ -384,6 +538,8 @@ const CONTEXTS: &[Context] = &[
             "{ let tmp = mk_p().s; tmp }",
             "match pe { E::A(s) => s, _ => \"d\" }",
             "match mk_e() { E::A(s) => s, _ => mk_s() }",
+            "if c { trimmed(ps) } else { lp.s }",
+            "if c { \"v\" } else { s_of(lp) }",
         ],
     },
     Context {
@@ -397,6 +553,7 @@ const CONTEXTS: &[Context] = &[
             "match lo { Some(p) => p, None => pp }",
             "match mk_o() { Some(p) => p, None => mk_p() }",
             "match lo { Some(p) => p, None => mk_p() }",
+            "if c { first_of(lv) } else { pp }",
         ],
     },
     Context {
@@ -417,6 +574,8 @@ const CONTEXTS: &[Context] = &[
             "mk_p().s",
             "{ let tmp = ps; tmp }",
             "(if c { lp } else { mp }).s",
+            "trimmed(ls)",
+            "s_of(lp)",
         ],
     },
     Context {
@@ -538,6 +697,42 @@ const CONTEXTS: &[Context] = &[
         body: "let mut x = {v};\n    x.bump();\n    change_p(x);",
         values: &["lv[0]", "mp", "pp"],
     },
+    // Borrowed returns (M4 spec 3.1): the case function returns part of
+    // one of its many reference parameters, so a lifetime is written.
+    Context {
+        name: "borrowed string return",
+        ret: " -> string",
+        body: "{v}",
+        values: &[
+            "ps",
+            "pp.s",
+            "pv[0].s",
+            "trimmed(ps)",
+            "ps.trim()",
+            "s_of(pp)",
+            "if c { pp.s } else { pv[0].s }",
+            "{ let n = pp.s; n }",
+            "if c { pp.s } else { ps }",
+            "if c { \"x\" } else { ps }",
+            "mp.s",
+            "lp.s",
+            "\"x\".trim()",
+        ],
+    },
+    Context {
+        name: "borrowed struct return",
+        ret: " -> P",
+        body: "{v}",
+        values: &[
+            "pp",
+            "pv[0]",
+            "first_of(pv)",
+            "if c { pv[0] } else { first_of(pv) }",
+            "if c { pp } else { pv[0] }",
+            "mv[0]",
+            "lv[0]",
+        ],
+    },
     Context {
         name: "returned clone",
         ret: " -> string",
@@ -653,6 +848,8 @@ const CONTEXTS: &[Context] = &[
             "mk_rs()?",
             "{ let r = mk_rs(); r? }",
             "if c { mk_rs()? } else { \"lit\" }",
+            "Ok(mk_s())?",
+            "{ let a = Ok(mk_s())?; a }",
         ],
     },
     Context {
@@ -663,6 +860,199 @@ const CONTEXTS: &[Context] = &[
             "mk_r()?",
             "{ let a = mk_r()?; a }",
             "if c { mk_r()? } else { mk_p() }",
+            "Ok(mk_p())?",
+        ],
+    },
+    // `?` on an `Option` in a function returning one (M4 spec 2.6), and
+    // the constructors that need their type written under `?`.
+    Context {
+        name: "question option value",
+        ret: " -> Option<i32>",
+        body: "read_p({v});\n    read_s({v}.s);\n    let x = {v};\n    lv.push({v});\n    let n = {v}.n;\n    Some(n + {v}.get_n())",
+        values: &[
+            "mk_o()?",
+            "{ let a = mk_o()?; a }",
+            "if c { mk_o()? } else { mk_p() }",
+            "Some(mk_p())?",
+            "{ let o = mk_o(); o? }",
+        ],
+    },
+    Context {
+        name: "question option with an expected type",
+        ret: " -> Option<i32>",
+        body: "let a: i32 = {v};\n    let b: i32 = Some({v})?;\n    Some(a + b)",
+        values: &[
+            "Some(li)?",
+            "Some(pi)?",
+            "Some(mi)?",
+            "ls.parse()?",
+            "lw[0].parse()?",
+        ],
+    },
+    Context {
+        name: "question result with an expected type",
+        ret: RESULT_RET,
+        body: "let a: i32 = {v};\n    let b: i64 = Ok(3)?;\n    let c = Ok(a)?;\n    Ok(a + c)",
+        values: &["Ok(li)?", "Ok(pi)?", "Ok(mi)?", "Ok(mk_i())?"],
+    },
+    // A cast (M4 spec 2.9) in each operand position: a cast is written in
+    // parentheses, a literal operand with its type suffix.
+    Context {
+        name: "cast",
+        ret: "",
+        body: "let a = {v};\n    let b = {v} + {v};\n    let d = {v} < {v};\n    let m = {v} * 2;\n    println!(\"{}\", {v});\n    ls = format!(\"{}\", {v});\n    if {v} == {v} {}",
+        values: &[
+            "li as i64",
+            "mi as i64",
+            "pi as u8",
+            "(li + pi) as i64",
+            "(mi + 1) as i64",
+            "-1 as u8",
+            "300 as u8",
+            "-129 as i8",
+            "{ 300 } as u8",
+            "- -1 as u8",
+            "-{ 1 } as u8",
+            "lp.n as i64",
+            "lv.len() as i32",
+            "mk_i() as f64",
+            "1.5 as i32",
+            "{ li } as u16",
+            "(if c { li } else { pi }) as u8",
+        ],
+    },
+    Context {
+        name: "cast operand",
+        ret: "",
+        body: "let a = li as i64 * 2;\n    let b = 1 + pi as i64;\n    let d = (li as i64) as u8 as f32;\n    read_i({v} as i32);\n    lw.push(format!(\"{}\", {v} as i32));",
+        values: &[
+            "li",
+            "mi",
+            "pi",
+            "lp.n",
+            "mk_i()",
+            "lv.len() as i32",
+            "-1",
+            "(li + pi)",
+        ],
+    },
+    // `..=` in a `for` head (M4 spec 2.11).
+    Context {
+        name: "inclusive range",
+        ret: "",
+        body: "for i in 1..={v} {\n        read_i(i);\n    }\n    for j in li..={v} {\n        change_i(j);\n    }\n    for k in 0..={v} + 1 {\n        println!(\"{}\", k);\n    }",
+        values: &[
+            "li",
+            "mi",
+            "pi",
+            "mk_i()",
+            "lv.len() as i32",
+            "(li + pi)",
+            "{ li }",
+        ],
+    },
+    // The table rows whose result is a value (M4 spec 2.7), on each kind
+    // of receiver: read `string` arguments are `&str`, a read `T` a `&T`.
+    // The rows on `Option`, `Result`, and a `Vec` of Copy or struct
+    // elements are in [`MUST_PASS`].
+    Context {
+        name: "string reading rows",
+        ret: "",
+        body: "let a = {v}.is_empty();\n    let b = {v}.contains(ps) && {v}.contains(ls) && {v}.contains(lp.s) && {v}.contains(\"x\");\n    let d = {v}.starts_with(ll) || {v}.starts_with(ms);\n    let e = {v}.to_uppercase();\n    let f = {v}.replace(ps, lp.s);\n    let g: Option<i32> = {v}.parse();\n    let h: Option<bool> = {v}.parse();\n    read_s({v}.replace(\"a\", ls));\n    lw.push({v}.to_uppercase());\n    read_s(e);\n    lw.push(f);",
+        values: &[
+            "ls",
+            "ll",
+            "ps",
+            "ms",
+            "lp.s",
+            "mp.s",
+            "lw[0]",
+            "mk_s()",
+            "\"lit\"",
+            "(if c { ls } else { ps })",
+        ],
+    },
+    Context {
+        name: "string changing rows",
+        ret: "",
+        body: "{v}.push_str(ps);\n    {v}.push_str(\"x\");\n    {v}.push_str(lp.s);\n    {v}.push_str(lw[0]);\n    read_s({v});",
+        values: &[
+            "ls",
+            "ll",
+            "ms",
+            "mp.s",
+            "lw[0]",
+            "mk_s()",
+            "\"lit\"",
+            "(if c { ls } else { ms })",
+            "(if c { mk_s() } else { \"q\" })",
+        ],
+    },
+    Context {
+        name: "Vec of strings rows",
+        ret: "",
+        body: "let e = ls;\n    let a = {v}.is_empty();\n    let b = {v}.contains(ps) && {v}.contains(e) && {v}.contains(\"a\") && {v}.contains(lp.s) && {v}.contains(ms);\n    let d = {v}.join(ps);\n    let f = {v}.join(\", \");\n    read_s({v}.join(lp.s));\n    lw.push(d);",
+        values: &[
+            "lw",
+            "mk_vs()",
+            "mk_words().w",
+            "(if c { lw } else { mk_vs() })",
+        ],
+    },
+    Context {
+        name: "HashMap reading rows",
+        ret: "",
+        body: "let mut lm = mk_m();\n    let mut lh = mk_hm();\n    let e = ls;\n    let a = {v}.len();\n    let b = {v}.contains_key(ps) && {v}.contains_key(e) && {v}.contains_key(\"k\") && {v}.contains_key(lp.s) && {v}.contains_key(ms) && {v}.contains_key(lw[0]);",
+        values: &["lm", "lh.m", "mk_m()", "(if c { lm } else { mk_m() })"],
+    },
+    // Read inside a closure (M4 spec 3.2): a name from outside keeps its
+    // kind and representation, and is only borrowed.
+    Context {
+        name: "read inside a closure",
+        ret: "",
+        body: "let a = lk.map(|x| {\n        read_s({v});\n        let y = {v};\n        read_s(y);\n        let b = {v} == ps && ls == {v};\n        x\n    });\n    read_s(ls);",
+        values: &[
+            "ls",
+            "ll",
+            "ps",
+            "ms",
+            "lp.s",
+            "mp.s",
+            "pp.s",
+            "lw[0]",
+            "mk_s()",
+            "\"lit\"",
+            "(if c { ls } else { ps })",
+            "{ let t = mk_p(); t.s }",
+            "ls.trim()",
+            "s_of(lp)",
+        ],
+    },
+    // Returned from an `Option::map` closure, which must return something
+    // new (M4 spec 3.2).
+    Context {
+        name: "returned from a closure",
+        ret: "",
+        body: "let a = lk.map(|x| {v});\n    read_s(a.unwrap_or(\"none\"));\n    read_s(ls);",
+        values: &[
+            "mk_s()",
+            "\"lit\"",
+            "ls.clone()",
+            "ls",
+            "ll",
+            "ps",
+            "ms",
+            "lp.s",
+            "lw[0]",
+            "if c { \"a\" } else { mk_s() }",
+            "if c { ls } else { mk_s() }",
+            "if c { ls } else { ps }",
+            "{ let t = mk_p(); t.s }",
+            "{ let t = \"t\"; t }",
+            "{ let mut t = \"t\"; t = ls; t }",
+            "ls.trim()",
+            "s_of(lp)",
+            "format!(\"{}{}\", ls, x)",
         ],
     },
 ];
@@ -710,11 +1100,10 @@ const MUST_PASS: &[&str] = &[
     "let n = lw.len();\n    lw.push(mk_s());",
     // A text element of a temporary `Vec` is borrowed as a `String`.
     "let t = mk_vs()[0];\n    read_s(t);",
-    // `match` (spec 2.3, 3.2): a variant arm repeated after an identical
-    // one (rustc's unreachable-pattern warning), a unit arm changing the
-    // root, a binding shadowing an outer local, and a temporary's binding
-    // given away.
-    "match le {\n        E::C => {}\n        E::C => {}\n        _ => {}\n    }",
+    // `match` (spec 2.3, 3.2): a unit arm changing the root, a binding
+    // shadowing an outer local, and a temporary's binding given away. (A
+    // variant arm repeated after an identical one, rustc's
+    // unreachable-pattern warning, is V0205 since M4 spec 2.5.)
     "match le {\n        E::C => {\n            le = mk_e();\n        }\n        _ => {}\n    }\n    read_e(le);",
     "match le {\n        E::A(ls) => read_s(ls),\n        _ => {}\n    }\n    read_s(ls);",
     "match mk_o() {\n        Some(p) => lv.push(p),\n        None => {}\n    }",
@@ -754,6 +1143,137 @@ const MUST_PASS: &[&str] = &[
     "let mut ws = mk_words();\n    ext::add_word(ws.w);\n    read_i(ws.n);",
     "let v = ext::tallies();\n    let first = v[0];\n    read_i(first.count());\n    match ext::maybe_tally() {\n        Some(t) => read_i(t.count()),\n        None => {}\n    }",
     "let w = mk_w();\n    let v = vec![w];\n    read_i(v[0].t.count());",
+    // Patterns (M4 spec 2.5): nested, named-field, `bool`, number, and
+    // string patterns on places and temporaries; a temporary's bindings
+    // at depth given away.
+    "match loe {\n        Some(E::A(s)) => read_s(s),\n        Some(E::B(p)) => read_p(p),\n        Some(E::C) => {}\n        None => {}\n    }",
+    "match mk_oe() {\n        Some(E::A(s)) => lw.push(s),\n        Some(E::B(p)) => lv.push(p),\n        _ => {}\n    }",
+    "match lve[0] {\n        E::B(p) => read_i(p.n),\n        _ => {}\n    }",
+    "match lf {\n        F::N { s, n: 0 } => read_s(s),\n        F::N { s: _, n } => read_i(n),\n        F::M => {}\n    }",
+    "match mk_f() {\n        F::N { s, n: _ } => lw.push(s),\n        F::M => {}\n    }",
+    "match c {\n        true => read_i(1),\n        false => {}\n    }",
+    "match li {\n        -5..=-1 => {}\n        -7 => {}\n        0 => read_i(li),\n        _ => {}\n    }",
+    "match mi {\n        1 => {}\n        k => read_i(k),\n    }\n    mi = 2;",
+    "match mk_i() {\n        1..=3 => {}\n        k => read_i(k),\n    }",
+    "match lrv[0] {\n        Ok(p) => read_p(p),\n        Err(e) => read_s(e),\n    }",
+    // String heads, written as exactly a `&str`: a `String` local, a
+    // `&str` local, a `&str` and a `&mut String` parameter, a field, a
+    // `&String` `for` variable, and a temporary.
+    "match ls {\n        \"a\" => {}\n        other => read_s(other),\n    }\n    ls = mk_s();",
+    "match ll {\n        \"lit\" => {}\n        _ => {}\n    }",
+    "match ps {\n        \"a\" => {}\n        other => read_s(other),\n    }",
+    "match ms {\n        \"a\" => {}\n        _ => {}\n    }\n    ms = \"b\";",
+    "match lp.s {\n        \"mp\" => lp.bump(),\n        _ => {}\n    }",
+    "for s in lw {\n        match s {\n            \"a\" => {}\n            other => read_s(other),\n        }\n    }",
+    "match mk_s() {\n        \"a\" => {}\n        other => read_s(other),\n    }",
+    // Review focus 3: a string-literal `match` on an owned local whose
+    // catch-all is copied into a `string`; and a string head with no
+    // literal arm whose binding is copied into a `Vec<string>`.
+    "let owned = mk_s();\n    let shown: string = match owned {\n        \"admin\" => \"Administrator\",\n        other => other.clone(),\n    };\n    read_s(shown);",
+    "match mk_s() {\n        other => lw.push(other.clone()),\n    }",
+    // `if let` and `while let` (M4 spec 2.4) on each kind of head, with
+    // `else if let`.
+    "if let Some(p) = lo {\n        read_p(p);\n    } else if let Ok(q) = lr {\n        read_p(q);\n    } else {\n        read_i(1);\n    }",
+    "if let Ok(p) = pr {\n        read_p(p);\n    }",
+    "if let Some(p) = mk_o() {\n        lv.push(p);\n    }",
+    "if let E::B(p) = lq.e {\n        read_p(p);\n    }",
+    "if let E::A(s) = lve[0] {\n        read_s(s);\n    }",
+    "if let \"a\" = ls {\n        read_s(ls);\n    }",
+    "let n = if let Some(k) = lk {\n        k\n    } else {\n        0\n    };\n    read_i(n);",
+    "while let Some(n) = ln.pop() {\n        read_i(n);\n    }",
+    "while let Some(k) = lk {\n        lk = None;\n        read_i(k);\n    }",
+    "while let Some(p) = mv.pop() {\n        if p.n == 1 {\n            break;\n        }\n        continue;\n    }",
+    "while let Some(E::A(s)) = mk_oe() {\n        lw.push(s);\n        break;\n    }",
+    // Each text source of the table rows (M4 spec 3.5) is an owned `let`.
+    "let a = ls.to_uppercase();\n    let b = ps.replace(\"a\", ls);\n    let d = lw.join(ps);\n    let e = lw.remove(0);\n    lw.push(a);\n    lw.push(b);\n    lw.push(d);\n    lw.push(e);",
+    // `parse` into each number type and `bool`; `contains` and `sort` on
+    // `bool`s, and `contains` on floats; a `HashMap` of each key kind.
+    "let a: Option<u8> = ls.parse();\n    let b: Option<i64> = ps.parse();\n    let d: Option<f32> = lp.s.parse();\n    let e: Option<bool> = mk_s().parse();\n    let f: Option<usize> = \"3\".parse();",
+    "let mut bs = vec![true, c];\n    bs.sort();\n    let b = bs.contains(c);\n    let fs = vec![1.5];\n    let f = fs.contains(1.5);",
+    "let mut im: HashMap<i32, bool> = HashMap::new();\n    im.insert(li, c);\n    let b = im.contains_key(li) && im.contains_key(pi) && im.contains_key(3);\n    let mut bm: HashMap<bool, HashMap<u8, string>> = HashMap::new();\n    let old = bm.insert(c, HashMap::new());\n    read_i(bm.len() as i32);",
+    // The changing rows of a `Vec` of strings, of structs, and of
+    // integers, on locals, `mut` parameters, and fields.
+    "lw.insert(0, mk_s());\n    let x = lw.remove(0);\n    lw.sort();\n    read_s(x);\n    let mut ws = mk_words();\n    ws.w.insert(0, ls);\n    ws.w.sort();\n    lw.push(ws.w.remove(0));",
+    "lv.insert(0, mk_p());\n    read_p(lv.remove(0));\n    mv.insert(0, mk_p());\n    let x = mv.remove(0);\n    mq.v.insert(0, x);\n    let b = lv.is_empty() || mv.is_empty() || pv.is_empty() || lq.v.is_empty();",
+    "ln.sort();\n    let b = ln.contains(li) && ln.contains(pi) && ln.contains(mi) && ln.contains(3) && ln.contains(lp.n);\n    ln.insert(0, mi);\n    read_i(ln.remove(0));\n    let e = ln.is_empty();\n    let d = vec![1, 2].contains(li);",
+    // `contains` on a `Vec<string>` in each position, a statement's start
+    // included.
+    "lw.contains(ps) == false;\n    lw.contains(ps);\n    lw.contains(ls) || c;\n    if lw.contains(ps) {\n        read_s(ps);\n    }\n    while !lw.contains(\"zz\") {\n        break;\n    }\n    read_i(if mk_vs().contains(ll) { 1 } else { 2 });",
+    // `Option` and `Result` rows on places and temporaries.
+    "let a = lo.is_some() && lk.is_some() && loe.is_some() && mk_o().is_some() && lr.is_ok() && pr.is_err() && mk_r().is_ok() && lrv[0].is_err() && mk_rs().is_ok();",
+    // The changing rows of a `HashMap`, on a local and a field.
+    "let mut lm = mk_m();\n    let a = lm.insert(\"k\", li);\n    let b = lm.insert(mk_s(), 2);\n    lm.insert(ls, 3);\n    let mut lh = mk_hm();\n    lh.m.insert(lp.s.clone(), pi);\n    read_i(lm.len() as i32 + lh.m.len() as i32);",
+    // Taking rows (M4 spec 3.4) on temporaries, owned locals, and stored
+    // values that are Copy in Rust, an `if` receiver included.
+    "let a = mk_o().unwrap_or(mk_p());\n    let b = mk_r().ok();\n    let d = mk_rs().unwrap_or(\"x\");\n    let e = mk_o().ok_or(\"none\");\n    let f = mk_rs().ok();",
+    "let a = lo.unwrap_or(mk_p());\n    let b = lr.ok();\n    let d = loe.ok_or(1);\n    let e = lk.unwrap_or(0);\n    read_p(a);",
+    "let h = mk_held();\n    let a = h.o.unwrap_or(0) + h.r.unwrap_or(1);\n    let b = h.o.ok_or(false);\n    let d = h.r.ok();\n    let e = h.o.unwrap_or(2);\n    let vo = vec![Some(1), None];\n    for o in vo {\n        read_i(o.unwrap_or(0));\n        read_i((if c { o } else { Some(5) }).unwrap_or(0));\n        read_i((if c { o } else { h.o }).ok_or(1).unwrap_or(3));\n    }",
+    // Looked-into `get` heads (M4 spec 2.8): a `Vec<string>` in each head
+    // position, on a local, a parameter, and a field; a Copy binding at
+    // depth; a `HashMap` with a struct value; and `get` on Copy payloads.
+    "match lw.get(0) {\n        Some(s) => read_s(s),\n        None => {}\n    }\n    if let Some(s) = lw.get(1) {\n        read_s(s);\n    }\n    let mut i: usize = 0;\n    while let Some(p) = pv.get(i) {\n        read_p(p);\n        i = i + 1;\n    }\n    if let Some(p) = mv.get(0) {\n        read_s(p.s);\n    }\n    if let Some(p) = lq.v.get(0) {\n        read_p(p);\n    }\n    lw.push(mk_s());",
+    "let shapes = vec![Shape::Circle(1.5), Shape::Dot];\n    match shapes.get(0) {\n        Some(Shape::Circle(r)) => {\n            let a = area(r);\n        }\n        _ => {}\n    }\n    let vo = vec![Some(1), None];\n    if let Some(Some(n)) = vo.get(0) {\n        read_i(n);\n    }",
+    "let mut hp: HashMap<string, P> = HashMap::new();\n    hp.insert(\"k\", mk_p());\n    if let Some(p) = hp.get(ps) {\n        read_p(p);\n        read_i(p.n);\n    }\n    match hp.get(ls) {\n        Some(p) => read_s(p.s),\n        None => {}\n    }",
+    "let m = mk_m();\n    let a = m.get(ps).unwrap_or(0) + m.get(\"k\").unwrap_or(1) + mk_m().get(ls).unwrap_or(2);\n    let b = ln.get(0).unwrap_or(0) + vec![1].get(0).unwrap_or(3);\n    let o = ln.get(1);\n    ln.push(4);\n    read_i(o.unwrap_or(0));",
+    // Borrowed returns (M4 spec 3.1) rooted at `self`, a string
+    // parameter, a `Vec` parameter, one of two reference parameters, and
+    // through another call; on a `for` variable and an element; as `match`,
+    // `for`, and `if let` heads (a Copy binding copied out) and as a
+    // `trim` receiver; a looked-into `get` on one; `trim` on each receiver.
+    "let g = mk_g();\n    read_s(g.name_ref());\n    let n = g.name_ref();\n    read_s(n);\n    read_s(g_name(g));\n    let q = g.first_item();\n    read_p(q);\n    read_i(g.first_item().n);",
+    "read_s(trimmed(ps));\n    read_s(trimmed(ms));\n    let t = trimmed(ls);\n    read_s(t);\n    read_s(trimmed(\"  x \"));\n    read_s(trimmed(lp.s));",
+    "let f = first_of(pv);\n    read_p(f);\n    read_s(first_of(lv).s);\n    read_s(s_of(first_of(mv)));\n    read_s(s_unless(pp, ps));\n    let n = s_unless(lp, \"x\");\n    read_s(n);\n    read_s(s_unless(mp, ls));",
+    "for p in lv {\n        read_s(s_of(p));\n    }\n    read_s(s_of(lv[0]));\n    read_s(s_of(lq.p));\n    let s = s_of(lp);\n    lp.n = 3;\n    ll = s_of(pp);\n    read_s(ll);",
+    "let g = mk_g();\n    match g.shape() {\n        Shape::Circle(r) => {\n            let a = area(r);\n        }\n        Shape::Dot => {}\n    }\n    if let Shape::Circle(r) = g.shape() {\n        let a = area(r);\n    }\n    for t in g.tags() {\n        read_s(t);\n    }\n    match g.name_ref() {\n        \"g\" => {}\n        other => read_s(other),\n    }\n    read_s(g.name_ref().trim());\n    match g.tags().get(0) {\n        Some(t) => read_s(t),\n        None => {}\n    }",
+    // A borrowed return of a type that is Copy in Rust (`Option<i32>`) as
+    // a head, its Copy binding copied out, and taken by `unwrap_or`.
+    "let h = mk_held();\n    match held_o(h) {\n        Some(n) => read_i(n),\n        None => {}\n    }\n    if let Some(n) = held_o(h) {\n        read_i(n);\n    }\n    while let Ok(n) = held_r(h) {\n        read_i(n);\n        break;\n    }\n    read_i(held_o(h).unwrap_or(0));\n    let o = held_o(h);\n    read_i(o.unwrap_or(1));",
+    "read_s(ps.trim());\n    read_s(ms.trim());\n    read_s(ls.trim());\n    read_s(ll.trim());\n    read_s(\"  x \".trim());\n    read_s(lp.s.trim());\n    read_s(lw[0].trim());\n    let t = ls.trim();\n    read_s(t);\n    let mut u = \"u\";\n    u = ps.trim();\n    read_s(u);",
+    // Closures (M4 spec 2.2, 3.2): a block body capturing each kind of
+    // name, reading, comparing, and passing each on; `let y = name;`
+    // inside one, which leaves `name` usable after it; `self` and `mut
+    // self` captured by a method; `map_err` capturing a parameter; a
+    // parameter owning its payload; a string literal made owned; nested
+    // closures; `match`, `for`, and a loop of the closure's own inside
+    // one.
+    "let n = lp.s;\n    let a = lk.map(|x| {\n        let y = ls;\n        read_s(y);\n        read_s(ls);\n        read_s(ps);\n        read_s(ms);\n        read_s(n);\n        read_s(ll);\n        read_i(li);\n        read_p(lp);\n        read_p(pp);\n        read_p(mp);\n        read_s(mp.s);\n        let b = ls == ps && ms == n && ll == ls && lp.s == ps && y == ms && n == ll;\n        x + li + lp.n + mp.n + pi + mi\n    });\n    read_s(ls);\n    read_s(n);\n    ls = mk_s();\n    change_s(ms);",
+    "let t = lp.tagged(lk);\n    read_i(lp.bumped(lk).unwrap_or(0));\n    read_s(pp.tagged(Some(1)).unwrap_or(\"x\"));",
+    "let r = mk_rs().map_err(|e| format!(\"{}: {}\", ps, e));\n    let o = Some(mk_s()).map(|s| {\n        let t = s;\n        t.len()\n    });\n    let p = mk_o().map(|p| p.s.clone());\n    let q = mk_o().map(|p| {\n        read_p(p);\n        p\n    });",
+    "let b = lk.map(|x| if x > 1 { \"big\" } else { \"small\" });\n    read_s(b.unwrap_or(\"none\"));\n    let d = Some(4).map(|n| n * 2).is_some();",
+    "let a = Some(1).map(|x| Some(2).map(|y| x + y + li));\n    let b = Some(3).map(|x| match lo {\n        Some(p) => p.n + x,\n        None => x,\n    });\n    let d = lk.map(|x| {\n        let mut t = x;\n        for p in lv {\n            t = t + p.n;\n        }\n        while t > 100 {\n            t = t - 1;\n            if t == 50 {\n                break;\n            }\n        }\n        t\n    });\n    lv.push(mk_p());",
+    // Chains (M4 spec 2.3, 3.3): borrowed items, copies, and owned items
+    // through every terminal; a `find` on copies and on owned items is a
+    // plain `Option`, and `keys()` over integer keys copies.
+    "let t = mk_team();\n    let a = t.names.iter().count();\n    let b = t.names.iter().any(|w| w.len() > 1) && t.names.iter().all(|w| w == ps);\n    let d = t.names.iter().filter(|w| w.len() > 1).count();\n    if let Some(w) = t.names.iter().find(|w| w.len() > 1) {\n        read_s(w);\n    }\n    let e = ln.iter().sum();\n    let f: Vec<i32> = ln.iter().collect();\n    let g = ln.iter().filter(|n| n > 1).count() + ln.iter().map(|n| n as usize).sum();\n    let h = ln.iter().any(|n| n > li) || ln.iter().all(|n| n < 3);\n    read_i(ln.iter().find(|n| n > 1).unwrap_or(0));\n    let i: Vec<string> = t.names.iter().map(|w| w.clone()).collect();\n    let j = t.names.iter().map(|w| w.clone()).find(|w| w.len() > 0);\n    read_s(j.unwrap_or(\"none\"));\n    let k = t.names.iter().map(|w| w.clone()).filter(|w| w.len() > 0).count();\n    let m = t.names.iter().map(|w| w.clone()).all(|w| w.len() > 0);\n    let mut hm: HashMap<i32, string> = HashMap::new();\n    hm.insert(1, \"a\");\n    let n = hm.keys().sum();\n    let o = hm.keys().filter(|k| k > 0).count();\n    let q: Vec<string> = hm.values().map(|v| v.clone()).collect();\n    let mm = mk_m();\n    let r: Vec<string> = mm.keys().map(|k| k.clone()).collect();\n    let s = mm.values().sum() + mm.values().filter(|v| v > 1).count() as i32;\n    if let Some(key) = mm.keys().find(|k| k.len() > 0) {\n        read_s(key);\n    }",
+    // What a `map` closure returns decides the items: part of the item,
+    // part of a capture, a borrowed return, a copy, something new, a
+    // literal made owned; the parts read on, never collected.
+    "let t = mk_team();\n    let a = t.users.iter().map(|u| u.name).any(|n| n.len() > 0);\n    let b = t.users.iter().map(|u| u.name).filter(|n| n.len() > 0).count();\n    let d = t.users.iter().map(|u| u.name.len()).sum();\n    let e: Vec<string> = t.users.iter().map(|u| u.name.clone()).collect();\n    let f = ln.iter().map(|x| lp.s).count() + ln.iter().map(|x| ps).count();\n    let g = t.users.iter().map(|u| u.shape).count();\n    let h: Vec<string> = ln.iter().map(|n| if n > 1 { \"big\" } else { \"small\" }).collect();\n    let i = t.users.iter().map(|u| u.name_ref()).all(|n| n == ps);\n    let j = lw.iter().map(|w| w.trim()).all(|w| w.len() > 0);\n    let k = t.users.iter().map(|u| u.items).map(|v| v.len()).sum();\n    let m = t.users.iter().map(|u| if c { u.name } else { u.name }).count();\n    let n = lv.iter().map(|p| p).filter(|p| p.n > 0).map(|p| p.s).any(|s| s == ls);\n    let o = lw.iter().map(|w| {\n        let x = w;\n        x\n    }).count();",
+    // A `find` on borrowed items looked into by `match`, `if let`, and
+    // `while let`; after `split` and after a borrowed return, its binding
+    // passed to a `string` parameter.
+    "let t = mk_team();\n    match t.names.iter().find(|w| w.len() > 1) {\n        Some(w) => read_s(w),\n        None => {}\n    }\n    if let Some(w) = t.names.iter().find(|w| w.len() > 1) {\n        read_s(w);\n    }\n    while let Some(w) = t.names.iter().find(|w| w.len() > 1) {\n        read_s(w);\n        break;\n    }\n    if let Some(piece) = ls.split(\" \").find(|p| p.len() > 0) {\n        read_s(piece);\n    }\n    if let Some(piece) = \"a b\".split(\" \").find(|p| p.len() > 0) {\n        read_s(piece);\n    }\n    if let Some(n) = t.users.iter().map(|u| u.name_ref()).find(|n| n.len() > 0) {\n        read_s(n);\n    }\n    if let Some(u) = t.users.iter().find(|u| u.name.len() > 0) {\n        read_s(u.name);\n        read_s(g_name(u));\n    }\n    if let Some(p) = lv.iter().find(|p| p.n > 0) {\n        read_p(p);\n        read_i(p.n);\n    }\n    match lve.iter().find(|e| true) {\n        Some(E::A(s)) => read_s(s),\n        Some(E::B(p)) => read_i(p.n),\n        _ => {}\n    }",
+    // `filter` on pieces of text (`&&str`), `any` over owned items passed
+    // to a Varyk function, a chain inside a closure body, and the source's
+    // root changed once the chain is done.
+    "let a = ls.split(\" \").filter(|w| w.len() > 0).count() + ps.split(\",\").filter(|w| w == ps).count() + ms.split(\",\").filter(|w| w.len() > 0).count();\n    let b = ls.split(sep_of(ps)).map(|w| w).any(|w| w == ll);\n    let d = lw.iter().map(|w| w.clone()).any(|w| {\n        read_s(w);\n        w.len() > 0\n    });\n    let e = lk.map(|x| lw.iter().filter(|w| w.len() > 0).count());\n    let f = Some(ln).map(|v| v.iter().sum());\n    lw.push(mk_s());\n    ls = mk_s();",
+    // A `for` over a chain (M4 spec 3.3): borrowed items, copies, and
+    // owned items, from every source, one of them given away.
+    "let t = mk_team();\n    let mm = mk_m();\n    for w in t.names.iter().filter(|w| w.len() > 1) {\n        read_s(w);\n    }\n    for n in ln.iter() {\n        read_i(n);\n    }\n    for n in ln.iter().filter(|n| n > li) {\n        read_i(n);\n    }\n    for s in t.names.iter().map(|w| w.clone()) {\n        read_s(s);\n        let kept = s;\n    }\n    for n in t.users.iter().map(|u| u.name) {\n        read_s(n);\n    }\n    for k in mm.keys() {\n        read_s(k);\n    }\n    for v in mm.values().filter(|v| v > 0) {\n        read_i(v);\n    }\n    for piece in \"a b\".split(\" \") {\n        read_s(piece);\n    }",
+    // What the head reads is free once the loop ends, and a copy of the
+    // loop variable taken out of it does not hold it; a piece of text
+    // passed to a `string` parameter.
+    "let mut limit: usize = 1;\n    let mut best = \"\";\n    for w in lw.iter().filter(|w| w.len() > limit) {\n        best = w;\n    }\n    limit = 0;\n    read_s(best);\n    let mut sep = mk_s();\n    let mut last = \"\";\n    for w in ls.split(sep) {\n        last = w;\n    }\n    sep.push_str(\"x\");\n    read_s(last);\n    for w in ls.split(\" \") {\n        read_s(w);\n    }",
+    // A `HashMap` moved into a struct and passed read-only.
+    "let m = mk_m();\n    read_m(m);\n    let h = Hm { m: mk_m(), n: 2 };\n    read_m(h.m);\n    let mut v: Vec<HashMap<string, i32>> = Vec::new();\n    v.push(mk_m());\n    let n = v[0].len();",
+    // `.clone()` and `==` (M4 spec 2.10) on a struct, an enum, and each
+    // container of a comparable type, owned, borrowed, changeable, and
+    // new, in every mix: the operands are brought to one reference depth.
+    "let a = lv.clone();\n    let b = a == lv && lv == pv && pv == a && pv != mv && mv == lv && mk_ov() == Some(pv.clone());\n    let o = lo.clone();\n    let d = o == lo && lo == mk_o() && mk_o() != lo;\n    let r = lr.clone();\n    let e = r == lr && pr == lr && mk_r() == pr && lr != mk_r();\n    let m = mk_m();\n    let m2 = m.clone();\n    let f = m == m2 && m2 != mk_m() && mk_hm().m == m;\n    let w = lw.clone();\n    let g = w == lw && mk_vs() == w;\n    let q = lq.clone();\n    let h = q == lq && lq == mq && mk_q() == mq && mq.e == pe;\n    let x = le.clone();\n    let i = x == le && pe == le && pe == E::C && me != pe && lf == mk_f() && lf.clone() == lf;\n    let k = lk.clone() == lk && lrv == lrv.clone() && loe == mk_oe();",
+    // An owned local, a parameter, a `mut` parameter, a borrowed return,
+    // an element, a field, and block-like operands compared, and copies
+    // made from each and given away.
+    "let b = lp == pp && pp == lp && mp == pp && lp == first_of(pv) && first_of(lv) == mp && lv[0] == pp && lq.p == pp && pp == lq.p && (if c { lp } else { pp }) == mp && pp == { mk_p() } && (if c { mk_p() } else { mk_p() }) == lp;\n    let p2 = pp.clone();\n    read_p(p2);\n    let v2 = pv.clone();\n    read_v(v2);\n    let p3 = first_of(pv).clone();\n    let mut q = Q { p: p3, n: 1, e: pe.clone(), v: mv.clone() };\n    change_q(q);\n    let copies: Vec<P> = lv.iter().map(|p| p.clone()).collect();\n    let same = copies == lv && lv.iter().any(|p| p == pp) && lv.iter().filter(|p| p != mp).count() > 0;\n    lv.push(pp.clone());\n    let last = lv[0].clone();\n    read_p(last);",
 ];
 
 /// Programs `check` must reject, as (body, the code `check` must reject
@@ -761,6 +1281,80 @@ const MUST_PASS: &[&str] = &[
 /// with): accepting one is unsound. The rustc code is empty for a case
 /// in [`STRICTER_THAN_RUST`] or [`UNEMITTED`].
 const MUST_REJECT: &[(&str, &str, &str)] = &[
+    // A `Vec` of borrowed items has no Varyk type (M4 spec 3.3), and a
+    // looked-into `find` on them none of its own (M4 spec 2.8).
+    (
+        "let v: Vec<string> = lw.iter().collect();",
+        "V0304",
+        "E0308",
+    ),
+    (
+        "let o: Option<string> = lw.iter().find(|w| w.len() > 0);",
+        "V0208",
+        "E0308",
+    ),
+    (
+        "take_os(lw.iter().find(|w| w.len() > 0));",
+        "V0208",
+        "E0308",
+    ),
+    // The body of a `for` over a chain may not change what the head
+    // reads (M4 spec 3.3): its source, a capture of its closures, numbers
+    // included, a capture that is an alias, or the source's argument.
+    (
+        "for w in lw.iter() {\n        lw.push(mk_s());\n    }",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let mut seen: Vec<string> = vec![];\n    for w in lw.iter().filter(|w| seen.contains(w)) {\n        seen.push(w.clone());\n    }",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "for n in ln.iter().filter(|n| n < li) {\n        li = li + 1;\n    }",
+        "V0307",
+        "E0506",
+    ),
+    (
+        "let first = lw[0];\n    for p in lv.iter().filter(|p| p.s == first) {\n        lw.push(mk_s());\n    }",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let mut sep = mk_s();\n    for w in ls.split(sep) {\n        sep.push_str(\"x\");\n    }",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let mut a = lv[0];\n    for w in lw.iter().filter(|w| a.n > 0) {\n        let k = lv.len();\n    }",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let sep = lp.s;\n    for w in ls.split(sep) {\n        lp.s = \"x\";\n    }",
+        "V0307",
+        "E0506",
+    ),
+    // A closure is a value of its own (M4 spec 2.2): `break` inside one
+    // would not leave the loop around it.
+    (
+        "while c {\n        let a = lk.map(|x| {\n            break;\n        });\n    }",
+        "V0001",
+        "E0267",
+    ),
+    // A closure only reads a name from outside it (M4 spec 3.2): a
+    // captured owned name kept by a `let` of the closure, or returned from
+    // an `Option::map` closure, would move it out; so would part of the
+    // closure's parameter, which ends with the closure.
+    (
+        "let a = lk.map(|x| {\n        let mut s = \"\";\n        s = ls;\n        s\n    });\n    read_s(ls);",
+        "V0304",
+        "E0382",
+    ),
+    ("let a = lk.map(|x| ls);\n    read_s(ls);", "V0304", "E0382"),
+    ("let a = Some(mk_s()).map(|s| s.trim());", "V0304", ""),
+    ("let a = lk.map(|x| ps);", "V0304", ""),
     // The root of an alias changed or given away while the alias is still
     // used, or used while a mutable alias is still used (spec 3.1).
     (
@@ -1101,18 +1695,108 @@ const MUST_REJECT: &[(&str, &str, &str)] = &[
         "let mut t = ext::Tally::new();\n    ext::swap(t, t);",
         "V0306",
         "E0502",
+    ), // A string binding of a `match` on a temporary string kept past the
+    // `match`: the head is a `&str` into a temporary (M4 spec 3.5).
+    (
+        "match mk_s() {\n        \"a\" => {}\n        other => {\n            ll = other;\n        }\n    }\n    read_s(ll);",
+        "V0304",
+        "E0716",
     ),
+    // A string literal below the top of a pattern (M4 spec 2.5): no Rust,
+    // since it does not type-check; rustc says E0308 to a `String` matched
+    // against a literal there.
+    (
+        "match mk_rs() {\n        Ok(\"yes\") => {}\n        _ => {}\n    }",
+        "V0205",
+        "",
+    ),
+    // A `HashMap` moves like a `Vec` (M4 spec 2.7).
+    (
+        "let m = mk_m();\n    let m2 = m;\n    let n = m.len();",
+        "V0305",
+        "E0382",
+    ),
+    // An owned argument of a row is an owned slot: the backend copies the
+    // `&str` rustc would accept, so Varyk is stricter here.
+    ("lw.insert(0, ps);", "V0304", ""),
+    // A changing row's argument that is its own receiver.
+    ("ls.push_str(ls);", "V0306", "E0502"),
+    // A taking row on a stored value whose contents are not Copy (M4 spec
+    // 3.4).
+    (
+        "let rv: Vec<Result<i32, string>> = vec![Ok(1)];\n    let n = rv[0].unwrap_or(0);",
+        "V0304",
+        "E0507",
+    ),
+    // A looked-into `get` anywhere but a head (M4 spec 2.8), stored and
+    // passed as an `Option<string>`. (A `let` of it alone, never used as
+    // one, is stricter than Rust.)
+    (
+        "let o: Option<string> = lw.get(0);\n    take_os(o);",
+        "V0208",
+        "E0308",
+    ),
+    ("take_os(lw.get(0));", "V0208", "E0308"),
+    // A borrowed-return result is part of its argument (M4 spec 3.1): the
+    // argument changed while the result is used, and a result on a local
+    // declared inside a block or a branch kept past it.
+    (
+        "let mut g = mk_g();\n    for t in g.tags() {\n        g.change();\n    }",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let mut g = mk_g();\n    let n = g.name_ref();\n    g.change();\n    read_s(n);",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let n = {\n        let u = mk_g();\n        u.name_ref()\n    };\n    read_s(n);",
+        "V0304",
+        "E0597",
+    ),
+    (
+        "println!(\"{}\", if c {\n        let u = mk_g();\n        u.name_ref()\n    } else {\n        \"x\"\n    });",
+        "V0304",
+        "E0597",
+    ),
+    (
+        "read_p(if c {\n        let u = mk_g();\n        u.first_item()\n    } else {\n        pp\n    });",
+        "V0304",
+        "E0597",
+    ),
+    // `trim` on a value made right there, and its result stored.
+    ("let t = mk_s().trim();\n    read_s(t);", "V0001", "E0716"),
+    ("lw.push(ls.trim());", "V0304", ""),
 ];
 
 /// The [`MUST_REJECT`] cases rustc accepts in the Rust the backend makes
 /// of them: Varyk is stricter than Rust there (no moving a field out of a
 /// local, spec 3.4), or the backend makes the text an owned `String`
-/// rather than generate a type error. Rejecting them is Varyk's rule, not
-/// soundness.
+/// rather than generate a type error. Rejecting those is Varyk's rule, not
+/// soundness. The number-parameter and `for`-variable entries at the end
+/// are soundness rejections: written as borrowed returns they are rustc's
+/// E0515, and the cross-check is off only because the backend then writes
+/// an owned copy.
 const STRICTER_THAN_RUST: &[&str] = &[
+    // The backend makes the closure's value the owned one the `Option`
+    // needs, with `.to_string()` on what is a `&str` in Rust.
+    "let a = Some(mk_s()).map(|s| s.trim());",
+    "let a = lk.map(|x| ps);",
     "let e = E::A(ps);",
+    "return Err(match mk_s() {\n        \"a\" => \"x\",\n        other => other,\n    });",
     "let e = E::B(lq.p);",
     "let v = vec![lp.s];",
+    "lw.insert(0, ps);",
+    "lw.push(ls.trim());",
+    // The same for the text a function returns from a number parameter
+    // (a [`MUST_REJECT_ITEMS`] case).
+    "read_s(sign(pi));",
+    "read_s(sign_of(ps, pi));",
+    // And from the copy a `for` makes of each number in a `Vec`.
+    "read_s(first_sign(vec![1, -2]));",
+    "let ns = Ns { ns: vec![1] };\n    read_s(ns.sign());",
+    "read_s(grid_sign(vec![vec![1]]));",
 ];
 
 /// The [`MUST_REJECT`] and [`MUST_REJECT_QUESTION`] cases that have no
@@ -1120,8 +1804,10 @@ const STRICTER_THAN_RUST: &[&str] = &[
 /// type checker newly rejects does not silently leave the rustc
 /// cross-check.
 const UNEMITTED: &[&str] = &[
+    "while c {\n        let a = lk.map(|x| {\n            break;\n        });\n    }",
     "match le {\n        E::A(s) => {}\n        C => {}\n    }",
     "let x = mk_r()?;",
+    "match mk_rs() {\n        Ok(\"yes\") => {}\n        _ => {}\n    }",
 ];
 
 /// Programs using `?` that `check` must reject, in a function returning
@@ -1154,6 +1840,127 @@ const MUST_REJECT_QUESTION: &[(&str, &str, &str)] = &[
         "let x = lr?;\n    read_p(lr?);\n    Ok(x.n)",
         "V0305",
         "E0382",
+    ), // A string binding of a string-literal `match` on a temporary,
+    // returned: rustc says E0515 to the reference itself, which the
+    // backend copies into the owned `String` the slot needs instead.
+    (
+        "return Err(match mk_s() {\n        \"a\" => \"x\",\n        other => other,\n    });",
+        "V0304",
+        "",
+    ),
+];
+
+/// The return type of a case returning an `Option`.
+const OPTION_RET: &str = " -> Option<string>";
+
+/// Programs that `check` must reject, in a function returning
+/// [`OPTION_RET`]: a looked-into `get` returned or used with `?` (M4 spec
+/// 2.8). As [`MUST_REJECT`].
+const MUST_REJECT_OPTION: &[(&str, &str, &str)] = &[
+    ("return lw.get(0);", "V0208", "E0308"),
+    ("let s = lw.get(0)?;\n    Some(s)", "V0208", "E0308"),
+    // A looked-into `find` on borrowed items (M4 spec 3.3), the same.
+    ("return lw.iter().find(|w| w.len() > 0);", "V0208", "E0308"),
+    (
+        "let s: string = lw.iter().find(|w| w.len() > 0)?;\n    Some(s)",
+        "V0208",
+        "E0308",
+    ),
+];
+
+/// Programs `check` must reject for a function of their own (M4 spec
+/// 3.1), as (items put before the case function, its body, the code
+/// `check` must reject it with, the code rustc rejects the Rust the
+/// backend makes of it with). The backend writes the borrowed return a
+/// rejected function would have had, so rustc judges that.
+const MUST_REJECT_ITEMS: &[(&str, &str, &str, &str)] = &[
+    // Part of a `mut` parameter: the caller cannot read its argument while
+    // the result is used.
+    (
+        "fn s_mut(mut p: P) -> string {\n    p.s\n}\n",
+        "let n = s_mut(lp);\n    read_p(lp);\n    read_s(n);",
+        "V0304",
+        "E0502",
+    ),
+    // Parts of two parameters.
+    (
+        "fn either(a: P, b: P, c: bool) -> string {\n    if c { a.s } else { b.s }\n}\n",
+        "read_s(either(pp, lp, c));",
+        "V0308",
+        "E0621",
+    ),
+    // A part beside a new value.
+    (
+        "fn mixed(p: P, c: bool) -> string {\n    if c { mk_s() } else { p.s }\n}\n",
+        "read_s(mixed(pp, c));",
+        "V0304",
+        "E0515",
+    ),
+    // A part beside a `?`, which returns a new `None` or `Err` early.
+    (
+        "struct OU {\n    nick: Option<string>,\n}\n\nfn ou_nick(u: OU) -> Option<string> {\n    let p = mk_o()?;\n    u.nick\n}\n",
+        "let u = OU { nick: Some(mk_s()) };\n    take_os(ou_nick(u));",
+        "V0304",
+        "E0277",
+    ),
+    (
+        "fn rs_pick(r: Result<string, string>) -> Result<string, string> {\n    let s = mk_rs()?;\n    r\n}\n",
+        "let r = mk_rs();\n    rs_pick(r);",
+        "V0304",
+        "E0277",
+    ),
+    // A recursive function, and a cycle of two, returning part of a
+    // parameter: a call inside the group counts as new.
+    (
+        "fn name_of(u: P, depth: i32, mut log: Vec<string>) -> string {\n    if depth > 0 {\n        let n = name_of(u, depth - 1, log);\n        log.push(n);\n    }\n    u.s\n}\n",
+        "read_s(name_of(pp, 2, lw));",
+        "V0304",
+        "E0308",
+    ),
+    (
+        "fn ca(u: P) -> string {\n    cb(u)\n}\n\nfn cb(u: P) -> string {\n    let x = ca(u);\n    u.s\n}\n",
+        "read_s(ca(pp));",
+        "V0304",
+        "E0308",
+    ),
+    // Part of a number parameter, which Rust passes by value: it roots
+    // nothing, so the result is part of a value that ends with the call.
+    // As a borrowed return, rustc rejects them (E0106, and E0515 beside a
+    // reference parameter); as rejected, the backend makes them owned.
+    (
+        "fn sign(n: i32) -> string {\n    ext::refnum(n)\n}\n",
+        "read_s(sign(pi));",
+        "V0304",
+        "",
+    ),
+    (
+        "fn sign_of(s: string, n: i32) -> string {\n    ext::refnum(n)\n}\n",
+        "read_s(sign_of(ps, pi));",
+        "V0304",
+        "",
+    ),
+    // The variable of a `for` over a `Vec` of numbers is a copy: a
+    // borrowed return from it is part of a value that ends with the
+    // function, in a free function, a method, and a nested loop. As a
+    // borrowed return, rustc rejects them (E0515); as rejected, the
+    // backend makes them owned.
+    (
+        "fn first_sign(v: Vec<i32>) -> string {\n    for n in v {\n        if n < 0 {\n            return ext::refnum(n);\n        }\n    }\n    ext::refnum(v[0])\n}\n",
+        "read_s(first_sign(vec![1, -2]));",
+        "V0304",
+        "",
+    ),
+    (
+        "struct Ns {\n    ns: Vec<i32>,\n}\n\nimpl Ns {\n    fn sign(self) -> string {\n        for n in self.ns {\n            return ext::refnum(n);\n        }\n        ext::refnum(self.ns[0])\n    }\n}\n",
+        "let ns = Ns { ns: vec![1] };\n    read_s(ns.sign());",
+        "V0304",
+        "",
+    ),
+    (
+        "fn grid_sign(g: Vec<Vec<i32>>) -> string {\n    for row in g {\n        for n in row {\n            return ext::refnum(n);\n        }\n    }\n    ext::refnum(g[0][0])\n}\n",
+        "read_s(grid_sign(vec![vec![1]]));",
+        "V0304",
+        "",
     ),
 ];
 
@@ -1289,7 +2096,7 @@ fn first_error(stderr: &str) -> &str {
 #[test]
 fn programs_that_pass_check_compile() {
     let cases = cases();
-    assert!(cases.len() <= 260, "keep this test small: {}", cases.len());
+    assert!(cases.len() <= 500, "keep this test small: {}", cases.len());
 
     let mut accepted = Vec::new();
     for (index, (label, body, ret)) in cases.iter().enumerate() {
@@ -1339,6 +2146,46 @@ fn programs_that_pass_check_compile() {
 /// Programs spread over nested modules (spec 3.1), as (label, files):
 /// each must pass `check` and build.
 const MUST_BUILD_TREES: &[(&str, &[(&str, &str)])] = &[
+    (
+        "a recursive enum and a struct holding itself through a `HashMap`, cloned and compared",
+        &[(
+            "main.vr",
+            "enum Tree {\n    Leaf(i32),\n    Node(Vec<Tree>),\n}\n\nstruct Dir {\n    name: string,\n    children: HashMap<string, Dir>,\n}\n\nfn same(a: Tree, b: Tree) -> bool {\n    a == b\n}\n\nfn main() {\n    let t = Tree::Node(vec![Tree::Leaf(1), Tree::Node(Vec::new())]);\n    let u = t.clone();\n    println!(\"{} {}\", t == u, same(t, u));\n    let mut d = Dir { name: \"root\", children: HashMap::new() };\n    d.children.insert(\"a\", Dir { name: \"a\", children: HashMap::new() });\n    let e = d.clone();\n    println!(\"{} {}\", d == e, d.children != e.children);\n}\n",
+        )],
+    ),
+    (
+        "a Rust struct and enum deriving `Clone` and `PartialEq`, cloned and compared, and held by a Varyk struct",
+        &[
+            (
+                "main.vr",
+                "mod ext;\n\nstruct Held {\n    point: ext::Point,\n    kind: ext::Kind,\n}\n\nfn main() {\n    let p = ext::origin();\n    let q = p.clone();\n    println!(\"{}\", p == q);\n    let h = Held { point: q, kind: ext::Kind::Word };\n    let g = h.clone();\n    println!(\"{} {}\", h == g, g.kind != ext::Kind::Number);\n}\n",
+            ),
+            (
+                "ext.rs",
+                "#[derive(Debug, Clone, PartialEq)]\npub struct Point {\n    pub x: i32,\n}\n\n#[derive(Clone, Copy, PartialEq, Eq)]\npub enum Kind {\n    Word,\n    Number,\n}\n\npub fn origin() -> Point {\n    Point { x: 0 }\n}\n",
+            ),
+        ],
+    ),
+    (
+        "a Varyk struct holding a Rust struct without derives, emitted with no `#[derive]`",
+        &[
+            (
+                "main.vr",
+                "mod ext;\n\nstruct Holder {\n    name: string,\n    handle: ext::Handle,\n}\n\nenum Slot {\n    Empty,\n    Full(Holder),\n}\n\nfn main() {\n    let h = Holder { name: \"h\", handle: ext::open() };\n    let s = Slot::Full(h);\n    match s {\n        Slot::Full(h) => println!(\"{}\", h.name),\n        Slot::Empty => {}\n    }\n}\n",
+            ),
+            (
+                "ext.rs",
+                "pub struct Handle {\n    pub id: i32,\n}\n\npub fn open() -> Handle {\n    Handle { id: 1 }\n}\n",
+            ),
+        ],
+    ),
+    (
+        "casts before `<`, `..=`, and `?` on `Option` and on `Ok(x)` with its types written out",
+        &[(
+            "main.vr",
+            include_str!("fixtures/codegen/expressions/main.vr"),
+        )],
+    ),
     (
         "imported functions and an enum payload of a file with item macros that define no types",
         &[
@@ -1728,6 +2575,20 @@ const MUST_RUN_TREES: &[(&str, Files, &str)] = &[
             ),
         ],
         "42\n",
+    ),
+    (
+        "a `&self` method of an imported struct returning `&str`, called from Varyk and used as a `trim` receiver",
+        &[
+            (
+                "main.vr",
+                "mod ext;\n\nfn main() {\n    let n = ext::Note::new(\"  hello  \");\n    let t = n.text().trim();\n    println!(\"[{}] [{}]\", t, n.text());\n    println!(\"[{}]\", ext::first_word(t));\n}\n",
+            ),
+            (
+                "ext.rs",
+                "pub struct Note {\n    body: String,\n}\n\nimpl Note {\n    pub fn new(body: &str) -> Note {\n        Note { body: body.to_string() }\n    }\n\n    pub fn text(&self) -> &str {\n        &self.body\n    }\n}\n\npub fn first_word(s: &str) -> &str {\n    s.split(' ').next().unwrap_or(\"\")\n}\n",
+            ),
+        ],
+        "[hello] [  hello  ]\n[hello]\n",
     ),
     (
         "std macros beside a `.rs` module exporting macros of the same names",
@@ -2138,6 +2999,18 @@ const MUST_REJECT_TREES: &[(&str, &str, Files, &str)] = &[
             (
                 "main.vr",
                 "mod res;\n\nfn main() {\n    match res::make() {\n        res::Ev::Msg(s) => res::keep(s),\n        res::Ev::Quit => {}\n    }\n}\n",
+            ),
+            ("res.rs", DROP_ENUM_RS),
+        ],
+        "E0509",
+    ),
+    (
+        "a payload taken out, at depth, of a temporary holding an imported enum with a destructor",
+        "V0304",
+        &[
+            (
+                "main.vr",
+                "mod res;\n\nfn main() {\n    match res::open() {\n        Some(res::Ev::Msg(s)) => res::keep(s),\n        _ => {}\n    }\n}\n",
             ),
             ("res.rs", DROP_ENUM_RS),
         ],
@@ -2596,6 +3469,10 @@ pub fn make() -> Ev {
     Ev::Msg(String::from(\"hi\"))
 }
 
+pub fn open() -> Option<Ev> {
+    Some(make())
+}
+
 pub fn keep(s: String) {
     println!(\"{s}\");
 }
@@ -2800,17 +3677,32 @@ fn programs_that_break_a_rule_fail_check() {
             MUST_REJECT_QUESTION
                 .iter()
                 .map(|(body, code, _)| (body, code, RESULT_RET)),
+        )
+        .chain(
+            MUST_REJECT_OPTION
+                .iter()
+                .map(|(body, code, _)| (body, code, OPTION_RET)),
         );
-    for (index, (body, code, ret)) in cases.enumerate() {
-        let entry = write_cases(&format!("reject{index:02}"), &[function("t", body, ret)]);
+    let cases = cases
+        .map(|(body, code, ret)| ("", *body, *code, ret))
+        .chain(
+            MUST_REJECT_ITEMS
+                .iter()
+                .map(|(items, body, code, _)| (*items, *body, *code, "")),
+        );
+    for (index, (items, body, code, ret)) in cases.enumerate() {
+        let entry = write_cases(
+            &format!("reject{index:02}"),
+            &[items.to_string(), function("t", body, ret)],
+        );
         let (checked, stderr) = run("check", &entry);
         let codes: Vec<&str> = stderr
             .lines()
             .filter_map(|line| line.strip_prefix("error[")?.split(']').next())
             .collect();
         assert!(
-            !checked && !codes.is_empty() && codes.iter().all(|c| c == code),
-            "expected `check` to reject with {code} only:\n{body}\n{stderr}"
+            !checked && !codes.is_empty() && codes.iter().all(|c| *c == code),
+            "expected `check` to reject with {code} only:\n{items}{body}\n{stderr}"
         );
     }
 }
@@ -2833,16 +3725,29 @@ fn programs_that_break_a_rule_fail_rustc() {
     let mut unemitted = Vec::new();
     let cases = MUST_REJECT
         .iter()
-        .map(|(body, _, rustc_code)| (*body, "", *rustc_code))
+        .map(|(body, _, rustc_code)| ("", *body, "", *rustc_code))
         .chain(
             MUST_REJECT_QUESTION
                 .iter()
-                .map(|(body, _, rustc_code)| (*body, RESULT_RET, *rustc_code)),
+                .map(|(body, _, rustc_code)| ("", *body, RESULT_RET, *rustc_code)),
+        )
+        .chain(
+            MUST_REJECT_OPTION
+                .iter()
+                .map(|(body, _, rustc_code)| ("", *body, OPTION_RET, *rustc_code)),
+        )
+        .chain(
+            MUST_REJECT_ITEMS
+                .iter()
+                .map(|(items, body, _, rustc_code)| (*items, *body, "", *rustc_code)),
         );
     // Writes the case as bin `name`; false when it does not type-check (a
     // `?` outside a `Result` function has no Rust).
-    let mut emit = |name: &str, body: &str, ret: &str| {
-        let entry = write_cases(&format!("emit_{name}"), &[function("t", body, ret)]);
+    let mut emit = |name: &str, items: &str, body: &str, ret: &str| {
+        let entry = write_cases(
+            &format!("emit_{name}"),
+            &[items.to_string(), function("t", body, ret)],
+        );
         let text = fs::read_to_string(&entry).expect("read main.vr");
         let mut sources = Vec::new();
         let Ok(program) = resolve(SourceFile::new(FileId(0), &entry, text), &mut sources)
@@ -2868,12 +3773,12 @@ fn programs_that_break_a_rule_fail_rustc() {
     // A case that breaks no rule must build: a failure of the whole crate
     // (a missing `ext.rs`, a broken prelude) fails it too.
     assert!(
-        emit("control", "", ""),
+        emit("control", "", "", ""),
         "the control case fails to type-check"
     );
-    for (index, (body, ret, rustc_code)) in cases.enumerate() {
+    for (index, (items, body, ret, rustc_code)) in cases.enumerate() {
         let name = format!("reject{index:02}");
-        if !emit(&name, body, ret) {
+        if !emit(&name, items, body, ret) {
             unemitted.push(body);
         } else if STRICTER_THAN_RUST.contains(&body) {
             accepted.push((name, body));

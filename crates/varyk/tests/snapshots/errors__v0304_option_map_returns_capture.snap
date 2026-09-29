@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `fallback` belongs to the function around this closure, so the closure cannot return it
+ --> crates/varyk/tests/fixtures/errors/v0304_option_map_returns_capture/main.vr:4:27
+  |
+4 |     let name = id.map(|n| fallback);
+  |                           ^^^^^^^^ `fallback` belongs to the function around this closure, so the closure cannot return it
+  |
+  = note: the `Option` or `Result` this call makes must own what it holds; return a copy instead, with `.clone()`
+  = note: in Rust terms, a borrowed value cannot move into a place that owns it
+help: insert `.clone()` after `fallback`

@@ -1,0 +1,5 @@
+fn main() {
+    let price: Option<i32> = Some(40);
+    let total = price.map(|p, tax| p + tax);
+    println!("{}", total.unwrap_or(0));
+}

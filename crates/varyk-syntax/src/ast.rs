@@ -176,13 +176,32 @@ pub struct EnumDecl {
     pub span: Span,
 }
 
-/// A unit variant (`Point`) or a tuple variant (`Circle(f64)`); `fields` is
-/// empty for a unit variant. Named-field variants (`Circle { x: f64 }`) are
-/// milestone 4 and never produce one of these: they are `V0001`.
+/// A variant of an enum: a unit variant (`Point`), a tuple variant
+/// (`Circle(f64)`), or a variant with named fields (`Click { x: i32 }`, M4
+/// spec 2.5).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumVariant {
     pub name: Ident,
-    pub fields: Vec<TypeExpr>,
+    pub fields: VariantFields,
+    pub span: Span,
+}
+
+/// What a variant holds: nothing, values by position (`Circle(f64)`; an
+/// empty `Circle()` is a `Tuple` of no types), or named fields.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VariantFields {
+    Unit,
+    Tuple(Vec<TypeExpr>),
+    Named(Vec<VariantField>),
+}
+
+/// A named field of a variant: `name: T`. It has no visibility of its own:
+/// a variant's fields are as visible as the enum, and Rust rejects `pub`
+/// on them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantField {
+    pub name: Ident,
+    pub ty: TypeExpr,
     pub span: Span,
 }
 
@@ -255,6 +274,14 @@ pub enum Stmt {
         body: Block,
         span: Span,
     },
+    /// `while let pattern = value { body }` (M4 spec 2.4): `value` is
+    /// parsed in condition position, as `while`'s condition is.
+    WhileLet {
+        pattern: Pattern,
+        value: Expr,
+        body: Block,
+        span: Span,
+    },
     /// `for var in head { body }` (spec 2.4). `head` is either a half-open
     /// range or a `Vec` iterated element by element; the loop variable's
     /// type and whether the `Vec` case borrows or owns each element is the
@@ -273,13 +300,17 @@ pub enum Stmt {
     },
 }
 
-/// The head of a `for` loop (spec 2.4): a half-open integer range
-/// (`a..b`), parsed only here since ranges exist nowhere else in Varyk, or
-/// an expression iterated element by element as a `Vec`. `..=` never
-/// produces a [`ForHead::Range`]: it is `V0001`, milestone 4.
+/// The head of a `for` loop (spec 2.4): an integer range, half-open
+/// (`a..b`) or `inclusive` (`a..=b`, M4 spec 2.11), parsed only here since
+/// an expression range exists nowhere else in Varyk, or an expression
+/// iterated element by element as a `Vec`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForHead {
-    Range { start: Box<Expr>, end: Box<Expr> },
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        inclusive: bool,
+    },
     Expr(Box<Expr>),
 }
 
@@ -462,6 +493,35 @@ pub enum ExprKind {
         else_: Option<Block>,
     },
 
+    /// `if let pattern = value { ... }`, with an optional `else` (M4 spec
+    /// 2.4). `value` is parsed in condition position, as `if`'s condition
+    /// is, and `else if` and `else if let` are a synthetic block holding
+    /// the nested expression as its tail, as for [`ExprKind::If`].
+    IfLet {
+        pattern: Pattern,
+        value: Box<Expr>,
+        then: Block,
+        else_: Option<Block>,
+        span: Span,
+    },
+
+    /// `|params| body` (M4 spec 2.2). The parameters carry no type; how
+    /// many there may be, and where a closure may appear, is the
+    /// checker's to decide.
+    Closure {
+        params: Vec<Ident>,
+        body: Box<Expr>,
+        span: Span,
+    },
+
+    /// `expr as T` (M4 spec 2.9), binding tighter than `*`. `ty` is a
+    /// plain name with no path and no generic arguments.
+    Cast {
+        expr: Box<Expr>,
+        ty: TypeExpr,
+        span: Span,
+    },
+
     /// `println!(format, args...)` or `format!(format, args...)` (spec
     /// 2.9): compiler intrinsics sharing one shape, told apart by `name`.
     /// `format` keeps the format string's raw text and span; placeholder
@@ -482,52 +542,70 @@ pub struct MatchArm {
     pub span: Span,
 }
 
-/// A `match` pattern, one level deep (spec 2.3). Not in milestone 2, each
-/// `V0001`: nested patterns, literal patterns, guards (`pattern if cond`),
-/// alternatives (`a | b`), rest patterns (`..`), range patterns, and `@`
-/// bindings.
+/// A pattern (spec 2.3, M4 spec 2.5), in a `match` arm, an `if let`, or a
+/// `while let`, nested to any depth. Not in Varyk, each `V0001` from the
+/// parser: guards (`pattern if cond`), alternatives (`a | b`), rest
+/// patterns (`..`), and `@` bindings.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     /// `_`: matches anything, binds nothing.
     Wildcard(Span),
     /// A bare name: matches anything and binds it. The parser cannot tell
     /// this apart from a zero-argument variant written without its type
-    /// (`None`): the type checker (task 8) decides against the matched
-    /// value's type.
+    /// (`None`): the type checker decides against the matched value's
+    /// type.
     Name(Ident),
-    /// A variant, optionally reached through a type and a module:
-    /// `Point`, `Some(p)`, `Shape::Circle(p, q)`, `geo::Shape::Point`.
-    Variant(VariantPattern),
+    /// A variant, optionally reached through a type and a module, with its
+    /// values by position: `Point`, `Some(p)`, `Shape::Circle(p, q)`,
+    /// `geo::Shape::Point`. `path`'s last segment is always the type
+    /// (unlike an expression path, a pattern never calls anything, so
+    /// there is no bare-module case to weigh it against); any segments
+    /// before that are the module chain. `span` ends at the closing `)`
+    /// when there are parentheses, so `Point()` is told apart from
+    /// `Point`.
+    Variant {
+        path: Option<Path>,
+        name: Ident,
+        fields: Vec<Pattern>,
+        span: Span,
+    },
+    /// A variant or struct with named fields: `Event::Click { x: 0, y }`.
+    /// A shorthand field `y` is `(y, Pattern::Name(y))`.
+    Struct {
+        path: Option<Path>,
+        name: Ident,
+        fields: Vec<(Ident, Pattern)>,
+        span: Span,
+    },
+    /// A literal: an integer with an optional `-`, a string, `true`, or
+    /// `false` (and a float, which the checker rejects).
+    Literal(Literal, Span),
+    /// `start..=end`, both ends included.
+    Range {
+        start: Literal,
+        end: Literal,
+        span: Span,
+    },
 }
 
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
-            Pattern::Wildcard(span) => *span,
+            Pattern::Wildcard(span) | Pattern::Literal(_, span) => *span,
             Pattern::Name(ident) => ident.span,
-            Pattern::Variant(variant) => variant.span,
+            Pattern::Variant { span, .. }
+            | Pattern::Struct { span, .. }
+            | Pattern::Range { span, .. } => *span,
         }
     }
 }
 
-/// A variant pattern (spec 2.3): `name`, or `type_::name`, or
-/// `module::type_::name`, each with an optional parenthesized list of
-/// sub-patterns, growing to any depth as [`ExprKind::Path`] does. `path`'s
-/// last segment is always the type (unlike an expression path, a pattern
-/// never calls anything, so there is no bare-module case to weigh it
-/// against); any segments before that are the module chain.
-#[derive(Debug, Clone, PartialEq)]
-pub struct VariantPattern {
-    pub path: Option<Path>,
-    pub name: Ident,
-    pub subpatterns: Vec<SubPattern>,
-    pub span: Span,
-}
-
-/// A sub-pattern inside a variant pattern's parentheses (spec 2.3): a name
-/// or `_`. Nothing else is one level deep.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SubPattern {
-    Wildcard(Span),
-    Name(Ident),
+/// The value of a literal pattern or of a range pattern's end, with the
+/// raw text of a number as lexed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Literal {
+    Int { text: String, negative: bool },
+    Float { text: String, negative: bool },
+    Str(String),
+    Bool(bool),
 }

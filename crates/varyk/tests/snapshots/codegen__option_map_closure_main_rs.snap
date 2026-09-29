@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let doubled = (Some(4)).map(|n| n * 2).is_some();
+    ::std::println!("{}", doubled);
+}

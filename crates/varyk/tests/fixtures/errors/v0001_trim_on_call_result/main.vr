@@ -1,0 +1,7 @@
+fn read_line() -> string {
+    "  hello  "
+}
+
+fn main() {
+    println!("[{}]", read_line().trim());
+}

@@ -3,6 +3,7 @@ source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"struct Label {\\n    text: string,\\n}\\n\\nfn main() {\\n    let s = \\\"x\\\";\\n    let label = Label { text: s };\\n    println!(\\\"{}\\\", label.text);\\n}\\n\")"
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Label {
     text: String,
 }

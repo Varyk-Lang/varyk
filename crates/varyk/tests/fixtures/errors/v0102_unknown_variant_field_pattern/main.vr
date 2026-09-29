@@ -1,0 +1,15 @@
+enum Event {
+    Click { x: i32, y: i32 },
+    Quit,
+}
+
+fn left(event: Event) -> i32 {
+    match event {
+        Event::Click { x, y, z } => x,
+        Event::Quit => 0,
+    }
+}
+
+fn main() {
+    println!("{}", left(Event::Quit));
+}

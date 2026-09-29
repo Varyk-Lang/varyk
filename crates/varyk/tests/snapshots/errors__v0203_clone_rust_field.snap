@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0203]: `Session` cannot be copied with `.clone()`, because of its field `handle`
+  --> crates/varyk/tests/fixtures/errors/v0203_clone_rust_field/main.vr:10:16
+   |
+10 |     let copy = session.clone();
+   |                ^^^^^^^^^^^^^^^ `Session` cannot be copied with `.clone()`, because of its field `handle`
+   |
+   = note: `Handle` is a Rust type whose `.rs` file does not derive `Clone` for it; write `#[derive(Clone)]` above it there, or add `Clone` to its `#[derive(..)]` list (Varyk reads only `#[derive(..)]`, not a hand-written `impl`)
+   = note: in Rust terms, `.clone()` needs the type to implement `Clone`, which Varyk derives for a struct or enum whose every field and payload has it, and reads from `#[derive(..)]` on a Rust type

@@ -1,8 +1,10 @@
 //! Typing of values and constructors (spec 2.2, 2.5, 2.6, 2.9): paths used
 //! as values, variant values, associated functions (`Type::name(..)`,
-//! `m::Type::name(..)`, `Vec::new()`), `Some`/`None`/`Ok`/`Err`,
+//! `m::Type::name(..)`, `Vec::new()`, `HashMap::new()`), `Some`/`None`/`Ok`/`Err`,
 //! `vec![..]`, and the type-hole rule for a value whose type comes from
 //! where it goes.
+
+use std::collections::HashMap;
 
 use varyk_syntax::{Expr, Ident, Path, Span};
 
@@ -11,8 +13,8 @@ use crate::builtins::{self, Owner};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirExpr, HirExprKind, VariantRef};
 use crate::resolve::{
-    Callee, EnumId, LookupError, UserType, display_path, no_parent, not_visible, path_text,
-    split_last,
+    Callee, EnumId, LookupError, UserType, VariantFieldsDef, display_path, no_parent, not_visible,
+    path_text, split_last,
 };
 use crate::types::Ty;
 
@@ -20,7 +22,8 @@ use crate::types::Ty;
 #[derive(Debug, Clone, Copy)]
 pub(super) enum PathOwner {
     User(UserType),
-    Vec,
+    /// `Vec` or `HashMap`.
+    Builtin(Owner),
 }
 
 impl FnChecker<'_> {
@@ -78,7 +81,8 @@ impl FnChecker<'_> {
     }
 
     /// For a path `T::name`, `m::T::name`, or `crate::m::T::name` (at
-    /// `span`) whose segments end at a type (`Vec` included): that type,
+    /// `span`) whose segments end at a type (`Vec` and `HashMap`
+    /// included): that type,
     /// with its path as written. `None` when there is no path, or it ends
     /// at a module or at a module path that does not resolve (the caller
     /// then looks the name up as a function of that module, which reports
@@ -92,8 +96,13 @@ impl FnChecker<'_> {
     ) -> Option<Option<(PathOwner, String)>> {
         let path = path?;
         let (prefix, last) = split_last(path)?;
-        if prefix.is_none() && last.name == "Vec" {
-            return Some(Some((PathOwner::Vec, "Vec".to_string())));
+        let builtin = match last.name.as_str() {
+            "Vec" => Some(Owner::Vec),
+            "HashMap" => Some(Owner::HashMap),
+            _ => None,
+        };
+        if let (None, Some(owner)) = (&prefix, builtin) {
+            return Some(Some((PathOwner::Builtin(owner), owner.name().to_string())));
         }
         // A module path when its prefix resolves and its last segment is
         // a module there (modules and types share one namespace, so it
@@ -157,7 +166,9 @@ impl FnChecker<'_> {
         span: Span,
     ) -> Option<HirExpr> {
         let user = match owner {
-            PathOwner::Vec => return self.vec_function(name, args, expected, path_span, span),
+            PathOwner::Builtin(owner) => {
+                return self.builtin_function(owner, name, args, expected, path_span, span);
+            }
             PathOwner::User(user) => user,
         };
         if let UserType::Enum(id) = user {
@@ -236,7 +247,11 @@ impl FnChecker<'_> {
         } else {
             let args = self.arguments(&full, &params, args.unwrap_or_default(), span)?;
             return Some(HirExpr {
-                kind: HirExprKind::Call { callee: id, args },
+                kind: HirExprKind::Call {
+                    callee: id,
+                    args,
+                    rooted: None,
+                },
                 ty: ret,
                 span,
             });
@@ -246,23 +261,25 @@ impl FnChecker<'_> {
         None
     }
 
-    /// `Vec::name(args)` (at `path_span`): an associated function of the
-    /// built-in table, `Vec::new()`, whose element type comes from
-    /// `expected` (spec 2.6).
-    fn vec_function(
+    /// `Vec::name(args)` or `HashMap::name(args)` (at `path_span`): an
+    /// associated function of the built-in table, `new()`, whose element
+    /// types come from `expected` (spec 2.6, M4 spec 2.7).
+    fn builtin_function(
         &mut self,
+        owner: Owner,
         name: &Ident,
         args: Option<&[Expr]>,
         expected: Option<Ty>,
         path_span: Span,
         span: Span,
     ) -> Option<HirExpr> {
-        let full = format!("Vec::{}", name.name);
-        let found = builtins::lookup(Owner::Vec, &name.name, false);
+        let type_name = owner.name();
+        let full = format!("{type_name}::{}", name.name);
+        let found = builtins::lookup(owner, &name.name, false);
         let (Some(id), Some(args)) = (found, args) else {
             let message = match found {
                 None => format!(
-                    "`Vec` has no function `{}`; the only one is `Vec::new()`",
+                    "`{type_name}` has no function `{}`; the only one is `{type_name}::new()`",
                     name.name
                 ),
                 Some(_) => {
@@ -274,24 +291,40 @@ impl FnChecker<'_> {
             return None;
         };
         let entry = id.get();
-        let Some(Ty::Vec(element)) = expected.clone() else {
+        let subst = expected
+            .as_ref()
+            .and_then(Owner::of)
+            .filter(|(of, _)| *of == owner)
+            .map(|(_, subst)| subst);
+        let Some(subst) = subst else {
             if args.len() == entry.params.len() {
-                let what = "the element type of `Vec::new()`";
-                let shape = "let v: Vec<i32> = Vec::new();";
-                self.type_hole(span, expected.as_ref(), "Vec<_>", what, shape);
+                let (found, what, shape) = match owner {
+                    Owner::HashMap => (
+                        "HashMap<_, _>",
+                        "the key and value types of `HashMap::new()`",
+                        "let m: HashMap<string, i32> = HashMap::new();",
+                    ),
+                    _ => (
+                        "Vec<_>",
+                        "the element type of `Vec::new()`",
+                        "let v: Vec<i32> = Vec::new();",
+                    ),
+                };
+                self.type_hole(span, expected.as_ref(), found, what, shape);
             } else {
                 self.arguments(&full, &[], args, span);
             }
             return None;
         };
-        let params: Vec<Ty> = entry.params.iter().map(|p| p.ty(&element)).collect();
+        let params: Vec<Ty> = entry.params.iter().map(|p| p.ty(&subst)).collect();
         let args = self.arguments(&full, &params, args, span)?;
         Some(HirExpr {
             kind: HirExprKind::Call {
                 callee: Callee::Builtin(id),
                 args,
+                rooted: None,
             },
-            ty: entry.result.ty(&element),
+            ty: entry.result.ty(&subst),
             span,
         })
     }
@@ -313,12 +346,131 @@ impl FnChecker<'_> {
         let index = def
             .variant(&name.name)
             .expect("`type_member` found the variant");
-        let payload = def.variants[index].1.clone();
+        let payload = match &def.variants[index].fields {
+            VariantFieldsDef::Tuple(types) => types.clone(),
+            VariantFieldsDef::Named(fields) => {
+                let names: Vec<String> = fields.iter().map(|(n, _)| format!("{n}: ..")).collect();
+                let message = format!(
+                    "`{full}` has named fields; write them in braces: `{full} {{ {} }}`",
+                    names.join(", ")
+                );
+                self.diagnostics
+                    .push(Diagnostic::new(codes::V0201, span, message));
+                return None;
+            }
+        };
         let args = self.payload(&full, &payload, args, span)?;
         Some(HirExpr {
             kind: HirExprKind::EnumLit {
                 variant: VariantRef::User(id, index),
                 args,
+                fields: None,
+                write_full_type: false,
+            },
+            ty: Ty::Enum(id),
+            span,
+        })
+    }
+
+    /// `path::name { fields }`, a value of the variant `name` of enum `id`
+    /// written with named fields (M4 spec 2.5): every field once, typed
+    /// against its declaration (V0102 for an unknown one, V0103 for one
+    /// named twice, V0201 for one left out, or for a variant with values
+    /// by position).
+    pub(super) fn named_variant(
+        &mut self,
+        id: EnumId,
+        path: &str,
+        name: &Ident,
+        fields: &[(Ident, Expr)],
+        span: Span,
+    ) -> Option<HirExpr> {
+        let def = &self.symbols.enums[id.0 as usize];
+        let full = format!("{path}::{}", name.name);
+        if let Some(reason) = def.opaque.clone() {
+            self.diagnostics
+                .push(opaque_variant(&full, &def.name, &reason, span));
+            return None;
+        }
+        let index = def.variant(&name.name)?;
+        let declared = match &def.variants[index].fields {
+            VariantFieldsDef::Named(declared) => declared.clone(),
+            VariantFieldsDef::Tuple(types) => {
+                let message = if types.is_empty() {
+                    format!("`{full}` holds no values; write it without braces: `{full}`")
+                } else {
+                    format!(
+                        "`{full}` holds values by position; write them in parentheses: \
+                         `{full}({})`",
+                        vec!["..."; types.len()].join(", ")
+                    )
+                };
+                self.diagnostics
+                    .push(Diagnostic::new(codes::V0201, span, message));
+                return None;
+            }
+        };
+        let mut failed = false;
+        let mut seen: HashMap<usize, Span> = HashMap::new();
+        let mut args = Vec::new();
+        let mut order = Vec::new();
+        for (field, value) in fields {
+            let Some(position) = declared.iter().position(|(f, _)| *f == field.name) else {
+                let message = format!("`{full}` has no field `{}`", field.name);
+                self.diagnostics
+                    .push(Diagnostic::new(codes::V0102, field.span, message));
+                failed = true;
+                continue;
+            };
+            if let Some(&first) = seen.get(&position) {
+                let diagnostic = Diagnostic::new(
+                    codes::V0103,
+                    field.span,
+                    format!("field `{}` is specified more than once", field.name),
+                )
+                .with_label(first, format!("`{}` first specified here", field.name));
+                self.diagnostics.push(diagnostic);
+                failed = true;
+                continue;
+            }
+            seen.insert(position, field.span);
+            let ty = &declared[position].1;
+            match self
+                .expr(value, Some(ty.clone()))
+                .and_then(|value| self.expect(value, ty))
+            {
+                Some(value) => {
+                    args.push(value);
+                    order.push(position);
+                }
+                None => failed = true,
+            }
+        }
+        let missing: Vec<String> = declared
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| !seen.contains_key(position))
+            .map(|(_, (field, _))| format!("`{field}`"))
+            .collect();
+        if !missing.is_empty() {
+            let message = format!(
+                "this value leaves out the field{} {} of `{full}`; a value names every field",
+                if missing.len() == 1 { "" } else { "s" },
+                missing.join(", ")
+            );
+            self.diagnostics
+                .push(Diagnostic::new(codes::V0201, span, message));
+            failed = true;
+        }
+        if failed {
+            return None;
+        }
+        Some(HirExpr {
+            kind: HirExprKind::EnumLit {
+                variant: VariantRef::User(id, index),
+                args,
+                fields: Some(order),
+                write_full_type: false,
             },
             ty: Ty::Enum(id),
             span,
@@ -429,7 +581,12 @@ impl FnChecker<'_> {
             }
         };
         Some(HirExpr {
-            kind: HirExprKind::EnumLit { variant, args },
+            kind: HirExprKind::EnumLit {
+                variant,
+                args,
+                fields: None,
+                write_full_type: false,
+            },
             ty,
             span,
         })
@@ -485,7 +642,7 @@ impl FnChecker<'_> {
     /// `_` for the unknown part): V0200 when something else is expected,
     /// else V0207 saying `what` cannot be worked out, with `shape`, a `let`
     /// that writes the type.
-    fn type_hole(
+    pub(super) fn type_hole(
         &mut self,
         span: Span,
         expected: Option<&Ty>,

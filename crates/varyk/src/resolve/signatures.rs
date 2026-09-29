@@ -62,6 +62,7 @@ impl<'a> Mapper<'a> {
             params,
             ret,
             signature: imported.signature,
+            ret_root: imported.ret_root.filter(|_| callable),
             callable,
             note,
             within: None,
@@ -92,6 +93,9 @@ impl<'a> Mapper<'a> {
     fn ret(&self, ty: &RustTy) -> Mapped<Ty> {
         match ty {
             RustTy::Unit => Ok(Ty::Unit),
+            // A borrowed return, rooted by the importer (M4 spec 2.12).
+            RustTy::Str => Ok(Ty::String),
+            RustTy::Ref(inner) => self.value(inner),
             other => self.value(other),
         }
     }
@@ -221,8 +225,9 @@ fn uncallable_note(imported: &ImportedFn) -> Option<String> {
                 .to_string(),
         ),
         RustTy::Opaque(text) if text.starts_with('&') => Some(
-            "a function that returns a borrow is not supported yet; return an owned value, such \
-             as `String` instead of `&str`"
+            "Varyk imports a returned `&str` or `&S` only from a `&self` method, or from a `pub \
+             fn` with exactly one `&T` parameter, when the signature writes no lifetime; \
+             otherwise return an owned value, such as `String` instead of `&str`"
                 .to_string(),
         ),
         _ => None,

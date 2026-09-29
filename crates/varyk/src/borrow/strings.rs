@@ -13,9 +13,10 @@
 //! `let`s therefore link them both ways, and [`infer`] computes the owned
 //! set by fixed-point iteration over those links. A `let` that is a
 //! changeable borrowed place is a `&mut String`, so every free `let` it may
-//! refer to is owned too. A `match` pattern binding or a `for` variable is
-//! a `&String` into a place matched on or looped over, or an owned `String`
-//! moved out of a temporary (spec 3.5).
+//! refer to is owned too. A pattern binding or a `for` variable is a
+//! `&String` into a place matched on or looped over, or an owned `String`
+//! moved out of a temporary (spec 3.5); one a pattern on a string binds is
+//! a `&str` into it, whatever it is (M4 spec 3.5).
 //!
 //! Assigning a free `let` text that is gone after the assignment (a field
 //! of a temporary, or of a local declared inside the assigned block) is
@@ -24,35 +25,49 @@
 //! variable's is its loop, so text from one over a temporary cannot be
 //! kept in a `let` outside it.
 
+use std::collections::HashMap;
+
 use varyk_syntax::Span;
 
+use super::chains::ItemKind;
+use super::returns::Classification;
 use super::{
-    Assigned, BORROWED_NOTE, Context, GONE_NOTE, Refers, clone_fix_it, dangling, gone_message,
-    owner_text, place_info, place_root, push_unique, what_to_do,
+    Assigned, BORROWED_NOTE, Context, GONE_NOTE, Refers, captured_in, clone_fix_it, dangling,
+    gone_message, owner_text, place_in, place_root, push_unique, what_to_do,
 };
+use crate::builtins::Owner;
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
-    HirBlock, HirExpr, HirExprKind, HirForHead, HirFunction, HirStmt, LocalId, LocalInfo, Origin,
-    StringRepr, declared_inside, field_root, is_block_like, leaves,
+    HirBlock, HirExpr, HirExprKind, HirForHead, HirFunction, HirPattern, HirStmt, LocalId,
+    LocalInfo, MethodRef, Origin, PlaceInfo, StringRepr, declared_inside, field_root,
+    is_block_like, leaves, rooted_argument,
 };
 use crate::types::{ParamMode, Ty};
 
 /// Fills in [`LocalInfo::repr`] for every `string` local of `function` and
 /// reports borrowed places flowing into a free `let` that must be owned,
 /// except for locals the places pass already reported (`reported`), so one mistake
-/// gets one code.
+/// gets one code. A function with a borrowed return (`class`) returns
+/// references, so its returns are no owned slot, and a free `let` it
+/// returns stays a `&str` unless it must be owned for another reason,
+/// which the borrowed places assigned to it then report (M4 spec 3.1).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn infer(
     cx: &Context,
     function: &mut HirFunction,
+    class: &Classification,
     reported: &[bool],
     refers: &Refers,
     assigned: &Assigned,
     dropped: &[Option<String>],
+    items: &HashMap<Span, (ItemKind, Option<StringRepr>)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut flows = Flows {
         cx,
         dropped,
+        items,
+        items_given: vec![None; function.locals.len()],
         refers,
         assigned,
         locals: &function.locals,
@@ -65,10 +80,13 @@ pub(super) fn infer(
         mixed: Vec::new(),
         str_leaves: vec![None; function.locals.len()],
         pattern_refs: vec![false; function.locals.len()],
+        str_patterns: vec![false; function.locals.len()],
         blocks: Vec::new(),
+        closures: Vec::new(),
+        owned_returns: function.ret != Ty::Unit && !matches!(class, Classification::Part(_)),
     };
     flows.block(&function.body);
-    if function.ret != Ty::Unit {
+    if flows.owned_returns {
         if let Some(tail) = &function.body.tail {
             flows.owned_slot(tail);
         }
@@ -82,6 +100,8 @@ pub(super) fn infer(
         mixed,
         str_leaves,
         pattern_refs,
+        str_patterns,
+        items_given,
         ..
     } = flows;
 
@@ -107,7 +127,10 @@ pub(super) fn infer(
         if local.ty != Ty::String {
             continue;
         }
-        reprs[index] = Some(if index < param_count {
+        reprs[index] = Some(if let Some(repr) = items_given[index] {
+            // A chain's item, as its closure or its `find` is handed it.
+            repr
+        } else if index < param_count {
             if local.mutable {
                 StringRepr::MutOwned
             } else {
@@ -122,6 +145,9 @@ pub(super) fn infer(
         } else if local.place.mutable {
             // It may change what it refers to, which a `&str` cannot.
             StringRepr::MutOwned
+        } else if str_patterns[index] {
+            // A name a pattern on a string binds: the head is a `&str`.
+            StringRepr::Str
         } else if pattern_refs[index] {
             // A `String` inside the value a `match` or a `for` looks at
             // (spec 3.5).
@@ -134,7 +160,7 @@ pub(super) fn infer(
             // borrowed as `&v()[i]` so that the temporary lives on.
             let to_str = match local.place.origin {
                 Some(Origin::Param(param)) => !locals[param.0 as usize].mutable,
-                Some(Origin::Struct(_) | Origin::Local(_)) | None => false,
+                Some(Origin::Struct(_) | Origin::Local(_) | Origin::Captured(_)) | None => false,
             };
             let str_leaf = str_leaves[index].as_ref().is_some_and(|(literal, ids)| {
                 *literal
@@ -220,6 +246,12 @@ struct Mixed {
 /// The string value flows of one function.
 struct Flows<'a> {
     cx: &'a Context<'a>,
+    /// The items of each chain call that makes a chain (see `chains`).
+    items: &'a HashMap<Span, (ItemKind, Option<StringRepr>)>,
+    /// Per local: the representation of the chain item a closure's
+    /// parameter, or the name a looked-into `find` binds, is handed (M4
+    /// spec 3.5).
+    items_given: Vec<Option<StringRepr>>,
     /// Per local: why a name bound inside a temporary with a destructor
     /// cannot be kept (see `places`).
     dropped: &'a [Option<String>],
@@ -250,18 +282,43 @@ struct Flows<'a> {
     /// place, a reference to the `String` inside what is matched on or
     /// looped over.
     pattern_refs: Vec<bool>,
+    /// Per local: a `string` a pattern on a string binds, a `&str`
+    /// borrowed from the head (M4 spec 3.5).
+    str_patterns: Vec<bool>,
     /// The scopes enclosing the statement being visited, outermost first:
-    /// blocks, and the `match` arms and `for` statements whose bindings
-    /// live only inside them.
+    /// blocks, and the `match` arms, `if let`s, `while let`s, and `for`
+    /// statements whose bindings live only inside them.
     blocks: Vec<Span>,
+    /// The closures whose bodies enclose the expression being visited,
+    /// outermost first, by the span of the whole closure (M4 spec 3.2).
+    closures: Vec<Span>,
+    /// The function's returns are owned slots: it returns a value, and not
+    /// a borrowed one.
+    owned_returns: bool,
 }
 
 impl Flows<'_> {
-    /// A `string` `let` that is not a borrowed place.
+    /// A `string` `let` that is not a borrowed place, where the analysis
+    /// is: a capture is borrowed from the function around the closure.
     fn free(&self, local: LocalId) -> bool {
         let index = local.0 as usize;
         let info = &self.locals[index];
-        index >= self.param_count && info.ty == Ty::String && !info.place.borrowed
+        index >= self.param_count
+            && info.ty == Ty::String
+            && !info.place.borrowed
+            && !self.captured(local)
+    }
+
+    /// Whether `local` is declared outside the innermost closure around
+    /// the expression being visited (M4 spec 3.2).
+    fn captured(&self, local: LocalId) -> bool {
+        captured_in(self.locals, &self.closures, local)
+    }
+
+    /// [`place_info`], where a place rooted at a capture is a read-only
+    /// borrowed place, unless Copy, as the places pass sees it.
+    fn place(&self, expr: &HirExpr) -> Option<PlaceInfo> {
+        place_in(self.locals, &self.closures, expr)
     }
 
     fn free_leaf(&self, leaf: &HirExpr) -> Option<LocalId> {
@@ -293,7 +350,7 @@ impl Flows<'_> {
                 match target.kind {
                     HirExprKind::Local(id) if self.free(id) => self.assign_free(id, value),
                     _ => {
-                        let borrowed = place_info(self.locals, target).is_some_and(|i| i.borrowed);
+                        let borrowed = self.place(target).is_some_and(|i| i.borrowed);
                         if borrowed {
                             self.owned_slot(value);
                         }
@@ -304,12 +361,30 @@ impl Flows<'_> {
             HirStmt::Return { value, .. } => {
                 if let Some(value) = value {
                     self.expr(value);
-                    self.owned_slot(value);
+                    if self.owned_returns {
+                        self.owned_slot(value);
+                    }
                 }
             }
             HirStmt::While { cond, body, .. } => {
                 self.expr(cond);
                 self.block(body);
+            }
+            HirStmt::WhileLet {
+                pattern,
+                value,
+                body,
+                head_is_str,
+                span,
+            } => {
+                self.expr(value);
+                self.blocks.push(*span);
+                for (local, _) in pattern.bindings() {
+                    self.binding(local, *head_is_str);
+                }
+                self.found(value, pattern);
+                self.block(body);
+                self.blocks.pop();
             }
             HirStmt::For {
                 local,
@@ -318,14 +393,21 @@ impl Flows<'_> {
                 span,
             } => {
                 match head {
-                    HirForHead::Range { start, end } => {
+                    HirForHead::Range { start, end, .. } => {
                         self.expr(start);
                         self.expr(end);
                     }
                     HirForHead::Vec(vec) => self.expr(vec),
+                    HirForHead::Chain(chain) => self.expr(chain),
                 }
                 self.blocks.push(*span);
-                self.binding(*local);
+                self.binding(*local, false);
+                if let HirForHead::Chain(chain) = head {
+                    // One of the chain's items (M4 spec 3.5).
+                    if let Some((_, Some(repr))) = self.items.get(&chain.span) {
+                        self.items_given[local.0 as usize] = Some(*repr);
+                    }
+                }
                 self.block(body);
                 self.blocks.pop();
             }
@@ -340,7 +422,7 @@ impl Flows<'_> {
             | HirExprKind::Bool(_)
             | HirExprKind::String(_)
             | HirExprKind::Local(_) => {}
-            HirExprKind::Call { callee, args } => {
+            HirExprKind::Call { callee, args, .. } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
                 self.call(args.iter(), &modes, keeps);
             }
@@ -348,7 +430,9 @@ impl Flows<'_> {
                 receiver,
                 method,
                 args,
+                ..
             } => {
+                self.chain_params(receiver, *method, args);
                 let (_, modes, keeps) = self.cx.method(*method);
                 self.call(std::iter::once(&**receiver).chain(args), &modes, keeps);
             }
@@ -363,7 +447,9 @@ impl Flows<'_> {
                     self.owned_slot(value);
                 }
             }
-            HirExprKind::Unary { operand, .. } => self.expr(operand),
+            HirExprKind::Unary { operand, .. } | HirExprKind::Cast { expr: operand, .. } => {
+                self.expr(operand);
+            }
             HirExprKind::Binary { lhs, rhs, .. } => {
                 self.expr(lhs);
                 self.expr(rhs);
@@ -381,7 +467,7 @@ impl Flows<'_> {
                     self.expr(arg);
                 }
             }
-            HirExprKind::Try(operand) => {
+            HirExprKind::Try { operand, .. } => {
                 self.expr(operand);
                 self.owned_slot(operand);
             }
@@ -391,13 +477,60 @@ impl Flows<'_> {
                     self.owned_slot(arg);
                 }
             }
-            HirExprKind::Match { scrutinee, arms } => {
+            HirExprKind::IfLet {
+                pattern,
+                value,
+                then,
+                else_,
+                head_is_str,
+            } => {
+                self.expr(value);
+                // The bindings live in `then`, and are declared in the
+                // `if let` before it.
+                self.blocks.push(expr.span);
+                for (local, _) in pattern.bindings() {
+                    self.binding(local, *head_is_str);
+                }
+                self.found(value, pattern);
+                self.block(then);
+                self.blocks.pop();
+                if let Some(else_) = else_ {
+                    self.block(else_);
+                }
+            }
+            // The parameter of `Option::map` or `map_err` owns the payload
+            // taken, as does one handed an owned item by value, and the
+            // closure's value is new (M4 spec 3.2), unless it is part of
+            // something a chain's `map` gives on.
+            HirExprKind::Closure {
+                param,
+                body,
+                returns_part,
+                ..
+            } => {
+                self.closures.push(expr.span);
+                let index = param.0 as usize;
+                if self.locals[index].ty == Ty::String && !self.locals[index].place.borrowed {
+                    self.owned[index] = true;
+                }
+                self.block(body);
+                if let (Some(tail), false) = (&body.tail, returns_part) {
+                    self.owned_slot(tail);
+                }
+                self.closures.pop();
+            }
+            HirExprKind::Match {
+                scrutinee,
+                arms,
+                head_is_str,
+            } => {
                 self.expr(scrutinee);
                 for arm in arms {
                     self.blocks.push(arm.span);
                     for (local, _) in arm.pattern.bindings() {
-                        self.binding(local);
+                        self.binding(local, *head_is_str);
                     }
+                    self.found(scrutinee, &arm.pattern);
                     self.expr(&arm.body);
                     self.blocks.pop();
                 }
@@ -405,19 +538,72 @@ impl Flows<'_> {
         }
     }
 
-    /// `local`, bound by a `match` pattern or a `for`: a `string` one
-    /// refers into a place matched on or looped over, and owns its text
-    /// moved out of a temporary (spec 3.5).
-    fn binding(&mut self, local: LocalId) {
+    /// `local`, bound by a pattern or a `for`: a `string` one refers into
+    /// a place matched on or looped over, and owns its text moved out of a
+    /// temporary (spec 3.5); one bound by a pattern on a string
+    /// (`head_is_str`) is a `&str` into it whatever the head is (M4 spec
+    /// 3.5).
+    fn binding(&mut self, local: LocalId, head_is_str: bool) {
         let index = local.0 as usize;
         if self.locals[index].ty != Ty::String {
             return;
         }
-        if self.locals[index].place.borrowed {
+        if head_is_str {
+            self.str_patterns[index] = true;
+        } else if self.locals[index].place.borrowed {
             self.pattern_refs[index] = true;
         } else {
             self.owned[index] = true;
         }
+    }
+
+    /// The representation of the item the closure of `method`, a row of a
+    /// chain called on `receiver`, hands its `string` parameter: the item
+    /// itself, or, for `filter` and `find` over owned items, a `&String`
+    /// looking at it (M4 spec 3.3).
+    fn chain_params(&mut self, receiver: &HirExpr, method: MethodRef, args: &[HirExpr]) {
+        let MethodRef::Builtin(id) = method else {
+            return;
+        };
+        let row = id.get();
+        if row.owner != Owner::Chain {
+            return;
+        }
+        let Some((kind, Some(repr))) = self.items.get(&receiver.span) else {
+            return;
+        };
+        let looks = matches!(row.name, "filter" | "find");
+        let repr = match kind {
+            ItemKind::Owned if looks => StringRepr::RefOwned,
+            _ => *repr,
+        };
+        for arg in args {
+            if let HirExprKind::Closure { param, .. } = arg.kind {
+                self.items_given[param.0 as usize] = Some(repr);
+            }
+        }
+    }
+
+    /// The name `pattern` binds to the item a looked-into `find`, `head`,
+    /// holds (`Some(w)`): an item of its chain (M4 spec 3.5).
+    fn found(&mut self, head: &HirExpr, pattern: &HirPattern) {
+        let HirExprKind::MethodCall {
+            receiver,
+            looked_into: true,
+            ..
+        } = &head.kind
+        else {
+            return;
+        };
+        let HirPattern::Variant { fields, .. } = pattern else {
+            return;
+        };
+        let (Some((_, Some(repr))), [HirPattern::Binding(local)]) =
+            (self.items.get(&receiver.span), fields.as_slice())
+        else {
+            return;
+        };
+        self.items_given[local.0 as usize] = Some(*repr);
     }
 
     /// The arguments of a call: one lent to a `mut` parameter, or kept by
@@ -459,9 +645,11 @@ impl Flows<'_> {
             return;
         }
         let leaves_of_value = leaves(value);
-        let literal = leaves_of_value
-            .iter()
-            .any(|leaf| matches!(leaf.kind, HirExprKind::String(_)));
+        // A literal, or text a borrowed row or a borrowed return gives,
+        // which is a `&str` (M4 spec 3.5).
+        let literal = leaves_of_value.iter().any(|leaf| {
+            matches!(leaf.kind, HirExprKind::String(_)) || rooted_argument(leaf).is_some()
+        });
         let ids = leaves_of_value
             .iter()
             .filter_map(|leaf| match leaf.kind {
@@ -489,7 +677,7 @@ impl Flows<'_> {
                 mix.free.push(id);
             } else if is_new_text(leaf) {
                 mix.owned_call = true;
-            } else if let Some(place) = place_info(self.locals, leaf) {
+            } else if let Some(place) = self.place(leaf) {
                 if place.borrowed {
                     mix.borrowed.push((leaf.span, place.origin));
                 }
@@ -518,7 +706,7 @@ impl Flows<'_> {
             } else if is_new_text(leaf) {
                 // A call result or a `format!` is a new `String` (spec 3.5).
                 self.owned[local.0 as usize] = true;
-            } else if let Some(place) = place_info(self.locals, leaf) {
+            } else if let Some(place) = self.place(leaf) {
                 if place.borrowed && (self.gone(leaf, value) || self.gone_at_block_end(leaf, local))
                 {
                     let name = &self.locals[local.0 as usize].name;
@@ -598,6 +786,8 @@ impl Flows<'_> {
             _ if is_block_like(base) => leaves(base)
                 .into_iter()
                 .any(|inner| self.gone(inner, whole)),
+            // Part of a literal, through a borrowed return: it lasts.
+            HirExprKind::String(_) => false,
             _ => true,
         }
     }
@@ -605,13 +795,14 @@ impl Flows<'_> {
 
 /// Whether `leaf`, a `string` value, is new text: a call or method call
 /// result (a `clone` included), a `format!` (spec 3.5), or the value of a
-/// `?`, taken out of an owned `Result`.
+/// `?`, taken out of an owned `Result`; not a call with `rooted`, which is
+/// part of its argument (M4 spec 3.1).
 fn is_new_text(leaf: &HirExpr) -> bool {
     matches!(
         leaf.kind,
         HirExprKind::Call { .. }
             | HirExprKind::MethodCall { .. }
             | HirExprKind::Format { .. }
-            | HirExprKind::Try(_)
-    )
+            | HirExprKind::Try { .. }
+    ) && rooted_argument(leaf).is_none()
 }

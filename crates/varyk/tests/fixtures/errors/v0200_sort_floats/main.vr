@@ -1,0 +1,4 @@
+fn main() {
+    let mut prices = vec![2.5, 1.0];
+    prices.sort();
+}

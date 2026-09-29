@@ -3,6 +3,7 @@ source: crates/varyk/tests/codegen.rs
 expression: "file(&krate, \"src/main.rs\")"
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Counter {
     count: i32,
 }

@@ -22,21 +22,23 @@
 //! (call results, struct literals, literals, operators) is a temporary: a
 //! mutable place that is not borrowed.
 
+use std::collections::{HashMap, HashSet};
+
 use varyk_syntax::{FixIt, SourceFile, Span};
 
+use crate::builtins::{BuiltinId, Owner, Receiver};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
-    HirBlock, HirEnum, HirExpr, HirExprKind, HirForHead, HirFunction, HirProgram, HirStmt,
-    HirStruct, LocalId, LocalInfo, MethodRef, Origin, PlaceInfo, VariantRef, declared_inside,
-    field_root, is_block_like, leaves,
+    HirBlock, HirEnum, HirExpr, HirExprKind, HirForHead, HirFunction, HirPattern, HirProgram,
+    HirStmt, HirStruct, LocalId, LocalInfo, MethodRef, Origin, PlaceInfo, StringRepr, VariantRef,
+    declared_inside, field_root, is_block_like, is_place, leaves, rooted_argument,
 };
 use crate::resolve::{Callee, ImportedSig, StructId};
 use crate::types::{ParamMode, Ty};
-use patterns::Bound;
-
-/// The Rust-facing note of a V0304 for a borrowed value kept somewhere
-/// that owns it; [`what_to_do`] gives the plain-words one.
-const BORROWED_NOTE: &str = "in Rust terms, a borrowed value cannot move into a place that owns it";
+use chains::{ItemKind, Items, chain_row};
+use patterns::{Body, Bound};
+use returns::{Classification, FnClassified, ReturnLeaf, Returns};
+use slots::{BORROWED_NOTE, Slot, clone_fix_it};
 
 /// The fix for an `if`, block, or `match` that cannot be read in place or
 /// stored with `let`.
@@ -76,10 +78,7 @@ pub fn analyze_unchecked(
     mut hir: HirProgram,
     sources: &[SourceFile],
 ) -> (HirProgram, Vec<Diagnostic>) {
-    let signatures: Vec<(String, Vec<ParamMode>)> = hir
-        .functions()
-        .map(|f| (f.name.clone(), f.params.iter().map(|p| p.mode).collect()))
-        .collect();
+    let signatures = signatures(&hir);
     let cx = Context {
         signatures: &signatures,
         imported: &hir.imported,
@@ -87,16 +86,25 @@ pub fn analyze_unchecked(
         enums: &hir.enums,
         sources,
     };
+    let classified = returns::classify(&cx, &mut hir.functions);
     let mut diagnostics = Vec::new();
-    for function in &mut hir.functions {
-        analyze_function(&cx, function, &mut diagnostics);
+    for (function, classified) in hir.functions.iter_mut().zip(classified) {
+        analyze_function(&cx, function, classified, &mut diagnostics);
     }
     (hir, diagnostics)
 }
 
+/// Every Varyk function's name and parameter modes, indexed by `FnId`.
+fn signatures(hir: &HirProgram) -> Vec<(String, Vec<ParamMode>)> {
+    hir.functions()
+        .map(|f| (f.name.clone(), f.params.iter().map(|p| p.mode).collect()))
+        .collect()
+}
+
 /// The [`PlaceInfo`] of a place expression (a `Local`, or a chain of
 /// `Field`s and `Index`es on one), read from `locals` as [`analyze`]
-/// annotated them; `None` for any other expression, which is a temporary.
+/// annotated them, or of a call with `rooted`, a place of the argument it
+/// borrows from; `None` for any other expression, which is a temporary.
 ///
 /// A field or an element is a borrowed place exactly when its type is not
 /// Copy (whatever its base: there are no partial moves), and is mutable
@@ -131,7 +139,51 @@ pub fn place_info(locals: &[LocalInfo], expr: &HirExpr) -> Option<PlaceInfo> {
                 origin,
             })
         }
-        _ => None,
+        // A call with `rooted` is part of that argument, as an element is
+        // of its `Vec` (M4 spec 2.8), and never changeable through: `let
+        // mut n = user.name_ref()` is not a mutable alias.
+        _ => rooted_argument(expr).map(|argument| {
+            let borrowed = !expr.ty.is_copy();
+            let origin = match place_info(locals, argument) {
+                _ if !borrowed => None,
+                Some(info) if info.borrowed => info.origin,
+                _ => place_root(argument).map(Origin::Local),
+            };
+            PlaceInfo {
+                borrowed,
+                mutable: false,
+                origin,
+            }
+        }),
+    }
+}
+
+/// Whether `local` is a capture where the analysis is: declared outside
+/// the innermost of `closures`, the spans of the closures enclosing it,
+/// outermost first (M4 spec 3.2). Every pass decides captures with this.
+fn captured_in(locals: &[LocalInfo], closures: &[Span], local: LocalId) -> bool {
+    closures
+        .last()
+        .is_some_and(|&closure| !declared_inside(&locals[local.0 as usize], closure))
+}
+
+/// [`place_info`] of `expr` where the analysis is, inside `closures` (see
+/// [`captured_in`]): a place rooted at a name the closure around it
+/// captures is read-only and, unless Copy, borrowed from the function
+/// around the closure, whatever it is outside (M4 spec 3.2); `None` for a
+/// temporary.
+fn place_in(locals: &[LocalInfo], closures: &[Span], expr: &HirExpr) -> Option<PlaceInfo> {
+    let info = place_info(locals, expr)?;
+    match place_root(expr) {
+        Some(root) if captured_in(locals, closures, root) => {
+            let borrowed = !expr.ty.is_copy();
+            Some(PlaceInfo {
+                borrowed,
+                mutable: false,
+                origin: borrowed.then_some(Origin::Captured(root)),
+            })
+        }
+        _ => Some(info),
     }
 }
 
@@ -184,7 +236,7 @@ impl Context<'_> {
         match variant {
             VariantRef::User(id, index) => {
                 let e = &self.enums[id.0 as usize];
-                format!("{}::{}", e.name, e.variants[index].0)
+                format!("{}::{}", e.name, e.variants[index].name)
             }
             VariantRef::Some => "Some".to_string(),
             VariantRef::None => "None".to_string(),
@@ -212,6 +264,10 @@ fn owner_text(cx: &Context, locals: &[LocalInfo], origin: Option<Origin>) -> Str
                 locals[local.0 as usize].name
             )
         }
+        Some(Origin::Captured(local)) => format!(
+            "`{}` belongs to the function around this closure",
+            locals[local.0 as usize].name
+        ),
         None => "this value belongs to someone else".to_string(),
     }
 }
@@ -252,17 +308,77 @@ fn what_to_do(cx: &Context, locals: &[LocalInfo], origin: Option<Origin>) -> Str
                  here instead"
             )
         }
+        Some(Origin::Captured(local)) => {
+            let name = &locals[local.0 as usize].name;
+            format!(
+                "inside a closure a name from outside can only be read; make a new value here \
+                 instead of keeping `{name}`"
+            )
+        }
         None => "make a new value here instead".to_string(),
     }
 }
 
-/// The local a place expression is rooted at; `None` for a temporary or a
-/// field or element of one, and for a field or element of an `if` or block.
+/// The locals the argument of a call with `rooted`, or the receiver of a
+/// looked-into row, is rooted at (M4 spec 3.1, 2.8): it must be a place,
+/// the result of another call with `rooted`, or a string literal, which
+/// lives for the whole program and has no root. Anything else (a call
+/// whose result is owned, a struct or enum value, an `if`, a block) is
+/// V0001: Varyk only lets the result point into a stored value (Rust
+/// drops a temporary at the end of its statement, too soon for a `let`).
+#[expect(
+    clippy::result_large_err,
+    reason = "a single diagnostic on a cold path, as `resolve::resolve_path`"
+)]
+fn borrowed_receiver(cx: &Context, expr: &HirExpr) -> Result<Vec<LocalId>, Diagnostic> {
+    match &expr.kind {
+        HirExprKind::String(_) => Ok(Vec::new()),
+        HirExprKind::Local(_) | HirExprKind::Field { .. } | HirExprKind::Index { .. }
+            if is_place(expr) =>
+        {
+            Ok(place_root(expr).into_iter().collect())
+        }
+        _ => match rooted_argument(expr) {
+            Some(argument) => borrowed_receiver(cx, argument),
+            None => {
+                let (what, kind) = match &expr.ty {
+                    Ty::Struct(id) => {
+                        let name = cx.struct_name(*id);
+                        (
+                            format!("this `{name}`"),
+                            format!("{} `{name}`", article(name)),
+                        )
+                    }
+                    Ty::String => ("this text".to_string(), "text".to_string()),
+                    _ => ("this value".to_string(), "a value".to_string()),
+                };
+                Err(Diagnostic::new(
+                    codes::V0001,
+                    expr.span,
+                    format!(
+                        "{what} is made right here, but this call needs {kind} stored in a name, \
+                         because its result is part of it; store it with `let` first, then use \
+                         that"
+                    ),
+                )
+                .with_note(
+                    "in Rust terms, the result is a reference into the value the call is made \
+                     on, and Varyk only lets it point into a value stored in a `let`, not into \
+                     a temporary one",
+                ))
+            }
+        },
+    }
+}
+
+/// The local a place expression (or a call with `rooted`) is rooted at;
+/// `None` for a temporary or a field or element of one, and for a field or
+/// element of an `if` or block.
 fn place_root(expr: &HirExpr) -> Option<LocalId> {
     match &expr.kind {
         HirExprKind::Local(id) => Some(*id),
         HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } => place_root(base),
-        _ => None,
+        _ => rooted_argument(expr).and_then(place_root),
     }
 }
 
@@ -383,13 +499,23 @@ fn gone_message(
     format!("this value only exists inside this block, so {consequence}")
 }
 
-/// Whether `local` is bound by the pattern of a `match` arm that `expr`
-/// may evaluate through (see [`leaves`]).
+/// Whether `local` is bound by the pattern of a `match` arm or an `if
+/// let` that `expr` may evaluate through (see [`leaves`]).
 fn arm_binds(expr: &HirExpr, local: LocalId) -> bool {
     let tail = |block: &HirBlock| block.tail.as_deref().is_some_and(|t| arm_binds(t, local));
     match &expr.kind {
         HirExprKind::Block(block) => tail(block),
         HirExprKind::If { then, else_, .. } => tail(then) || else_.as_ref().is_some_and(tail),
+        HirExprKind::IfLet {
+            pattern,
+            then,
+            else_,
+            ..
+        } => {
+            pattern.bindings().iter().any(|(bound, _)| *bound == local)
+                || tail(then)
+                || else_.as_ref().is_some_and(tail)
+        }
         HirExprKind::Match { arms, .. } => arms.iter().any(|arm| {
             arm.pattern
                 .bindings()
@@ -459,52 +585,93 @@ enum Leaf {
     Dangling,
 }
 
-/// Where a value flows that must own it.
-enum Slot {
-    Return,
-    StructField {
-        id: StructId,
-        field: usize,
-    },
-    ImportedParam(String),
-    Assignment,
-    /// A whole struct local that is not a borrowed place.
-    Local(String),
-    /// A payload of the variant written this way (`Shape::Circle`, `Some`).
-    Payload(String),
-    VecElement,
-    /// The operand of `?`.
-    Question,
-}
-
-fn analyze_function(cx: &Context, function: &mut HirFunction, diagnostics: &mut Vec<Diagnostic>) {
+/// Runs the passes after the first on `function`, whose first pass and
+/// return classification `classified` holds, appending every diagnostic
+/// of the function to `diagnostics` in order.
+fn analyze_function(
+    cx: &Context,
+    function: &mut HirFunction,
+    classified: FnClassified,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let start = diagnostics.len();
-    let (reported, refers, assigned, held, dropped) = places(cx, function, diagnostics);
+    let FnClassified {
+        class,
+        places,
+        buffered,
+        marks,
+        diagnostics: first,
+    } = classified;
+    let PlacesOutput {
+        mut reported,
+        refers,
+        assigned,
+        held,
+        head_reads,
+        dropped,
+        never_given_away,
+        items,
+    } = places;
+    diagnostics.extend(first);
+    diagnostics.extend(buffered);
+    for local in marks {
+        reported[local.0 as usize] = true;
+    }
     strings::infer(
         cx,
         function,
+        &class,
         &reported,
         &refers,
         &assigned,
         &dropped,
+        &items,
         diagnostics,
     );
-    moves::check(cx, function, diagnostics);
-    aliases::check(cx, function, &refers, &assigned, &held, diagnostics);
+    moves::check(cx, function, &never_given_away, diagnostics);
+    let loops = aliases::Loops {
+        held: &held,
+        head_reads: &head_reads,
+    };
+    aliases::check(cx, function, &refers, &assigned, loops, diagnostics);
     patterns::merge_arm_fix_its(cx.sources, &mut diagnostics[start..]);
 }
 
+/// What the first pass ([`places`]) finds, per local.
+pub(super) struct PlacesOutput {
+    /// A V0304 was reported for a flow of the local.
+    reported: Vec<bool>,
+    /// What it may refer to.
+    refers: Refers,
+    /// The roots of the borrowed places assigned to it (see [`Assigned`]).
+    assigned: Assigned,
+    /// It is the variable of a `for` that holds the place it loops over.
+    held: Vec<bool>,
+    /// For the variable of a `for` over a chain, every other local the
+    /// loop's head reads until the loop ends: the source's receiver and
+    /// argument, and the captures of its closures (M4 spec 3.3); empty for
+    /// every other local.
+    pub(super) head_reads: Vec<Vec<LocalId>>,
+    /// For a name bound inside a temporary of an enum with a destructor,
+    /// why it cannot be kept.
+    dropped: Vec<Option<String>>,
+    /// The parameters of `any` and `all` closures over owned items: owned
+    /// locals of the closure that only look at the item, so never given
+    /// away (M4 spec 3.3).
+    pub(super) never_given_away: HashSet<LocalId>,
+    /// The items of each chain call that makes a chain, by its span, with
+    /// their representation when they are text (M4 spec 3.3, 3.5).
+    pub(super) items: HashMap<Span, (ItemKind, Option<StringRepr>)>,
+}
+
 /// The first pass: place info, mutability contracts, and owned slots.
-/// Returns, per local, whether a V0304 was reported for a flow of it, what
-/// it may refer to, (see [`Assigned`]) the roots of the borrowed places
-/// assigned to it, whether it is the variable of a `for` that holds the
-/// place it loops over, and, for a name bound inside a temporary of an
-/// enum with a destructor, why it cannot be kept.
+/// Returns what it found about the function's locals and chains (see
+/// [`PlacesOutput`]) and what the function returns (see [`Returns`]).
 fn places(
     cx: &Context,
     function: &mut HirFunction,
     diagnostics: &mut Vec<Diagnostic>,
-) -> (Vec<bool>, Refers, Assigned, Vec<bool>, Vec<Option<String>>) {
+) -> (PlacesOutput, Returns) {
     let HirFunction {
         name,
         params,
@@ -516,6 +683,10 @@ fn places(
     let mut blame = vec![None; locals.len()];
     let patterns = vec![None; locals.len()];
     let held = vec![false; locals.len()];
+    let call_results = vec![false; locals.len()];
+    let made_by = vec![None; locals.len()];
+    let made_from = vec![None; locals.len()];
+    let head_reads = vec![Vec::new(); locals.len()];
     let reported = vec![false; locals.len()];
     let gone = vec![false; locals.len()];
     let alias_notes = vec![None; locals.len()];
@@ -551,24 +722,58 @@ fn places(
         assigned,
         patterns,
         held,
+        call_results,
+        made_by,
+        made_from,
+        head_reads,
+        closures: Vec::new(),
+        returns: Returns {
+            leaves: Vec::new(),
+            buffered: Vec::new(),
+            marks: Vec::new(),
+        },
+        items: HashMap::new(),
+        finds: HashSet::new(),
+        parts: HashSet::new(),
+        never_given_away: HashSet::new(),
         diagnostics,
     };
     analyzer.block(body);
     if *ret != Ty::Unit {
         if let Some(tail) = &body.tail {
-            analyzer.owned_slot(tail, &Slot::Return);
+            analyzer.returned(tail);
         }
     }
     let dropped = (0..analyzer.locals.len())
         .map(|id| analyzer.dropped_advice(LocalId(id as u32)))
         .collect();
-    (
-        analyzer.reported,
-        analyzer.refers,
-        analyzer.assigned,
-        analyzer.held,
+    // What the walk decided about chains, recorded in the HIR for the
+    // passes after it and the backend.
+    let (finds, parts) = (&analyzer.finds, &analyzer.parts);
+    returns::walk_block(body, &mut |expr| match &mut expr.kind {
+        HirExprKind::MethodCall { looked_into, .. } if finds.contains(&expr.span) => {
+            *looked_into = true;
+        }
+        HirExprKind::Closure { returns_part, .. } if parts.contains(&expr.span) => {
+            *returns_part = true;
+        }
+        _ => {}
+    });
+    let places = PlacesOutput {
+        reported: analyzer.reported,
+        refers: analyzer.refers,
+        assigned: analyzer.assigned,
+        held: analyzer.held,
+        head_reads: analyzer.head_reads,
         dropped,
-    )
+        never_given_away: analyzer.never_given_away,
+        items: analyzer
+            .items
+            .into_iter()
+            .map(|(span, items)| (span, (items.kind, items.repr)))
+            .collect(),
+    };
+    (places, analyzer.returns)
 }
 
 struct FnAnalyzer<'a> {
@@ -602,10 +807,183 @@ struct FnAnalyzer<'a> {
     /// Per local: the variable of a `for` over a place, which the loop
     /// holds until it ends (spec 3.1).
     held: Vec<bool>,
+    /// Per `let`: bound to the result of a call returning part of a value
+    /// (M4 spec 3.1), which no `mut` can make changeable.
+    call_results: Vec<bool>,
+    /// Per `let`: what made its value when it is a `match`, `if`, or
+    /// block, as V0304's note names it: an article and a noun.
+    made_by: Vec<Option<(&'static str, &'static str)>>,
+    /// Per `let mut`: the element or field it is another name for, as
+    /// written (`names[0]`), and whether it is an element, for V0304's
+    /// wording when a borrowed value is assigned to it.
+    made_from: Vec<Option<(String, bool)>>,
+    /// See [`PlacesOutput::head_reads`].
+    head_reads: Vec<Vec<LocalId>>,
+    /// The closures whose bodies enclose the expression being analysed,
+    /// outermost first, each by the span of the whole closure: a local
+    /// declared outside the innermost one is a capture there (M4 spec
+    /// 3.2).
+    closures: Vec<Span>,
+    /// The function's returns, for its classification (M4 spec 3.1).
+    returns: Returns,
+    /// The items of each chain call that makes a chain, by its span (M4
+    /// spec 3.3).
+    items: HashMap<Span, Items>,
+    /// The `find`s on borrowed items, by span: looked into (M4 spec 2.8).
+    finds: HashSet<Span>,
+    /// The closures of `map`s whose value is part of something, by span.
+    parts: HashSet<Span>,
+    /// See [`PlacesOutput::never_given_away`].
+    never_given_away: HashSet<LocalId>,
     diagnostics: &'a mut Vec<Diagnostic>,
 }
 
 impl FnAnalyzer<'_> {
+    /// `value`, the tail or a `return` operand of a function returning a
+    /// value: records its leaves, and runs the return owned-slot check
+    /// into [`Returns::buffered`], which only a function whose returns are
+    /// all new reports (M4 spec 3.1).
+    fn returned(&mut self, value: &HirExpr) {
+        for leaf in leaves(value) {
+            let leaf = self.return_leaf(leaf);
+            self.returns.leaves.push(leaf);
+        }
+        let start = self.diagnostics.len();
+        let before = self.reported.clone();
+        self.owned_slot(value, &Slot::Return);
+        let reported: Vec<Diagnostic> = self.diagnostics.drain(start..).collect();
+        self.returns.buffered.extend(reported);
+        for (index, was) in before.into_iter().enumerate() {
+            if self.reported[index] && !was {
+                self.reported[index] = false;
+                push_unique(&mut self.returns.marks, LocalId(index as u32));
+            }
+        }
+    }
+
+    /// `leaf`, a value a function or a closure returns, as its
+    /// classification sees it (M4 spec 3.1).
+    fn return_leaf(&self, leaf: &HirExpr) -> ReturnLeaf {
+        let root = place_root(leaf);
+        let borrowed = self.info(leaf).borrowed
+            && !leaf.ty.is_copy()
+            && !self.looked_into(leaf)
+            // Already said: what it holds is gone before this.
+            && !root.is_some_and(|root| self.gone[root.0 as usize]);
+        let roots = match leaf.kind {
+            _ if borrowed => roots(leaf),
+            // A `let` holding text may have been assigned parts.
+            HirExprKind::Local(id) if leaf.ty == Ty::String => vec![id],
+            _ => Vec::new(),
+        };
+        ReturnLeaf {
+            span: leaf.span,
+            roots,
+            new: !borrowed,
+            literal: matches!(leaf.kind, HirExprKind::String(_)),
+        }
+    }
+
+    /// `closure`, an argument of the built-in `row` (`None` for another
+    /// call), analysed as any expression unless it is a closure. A
+    /// closure's parameter is bound (handed `items` when `row` is a row of
+    /// a chain), its body analysed with every name from outside it
+    /// read-only (M4 spec 3.2), and what it returns classified by row: a
+    /// closure of `Option::map` or `Result::map_err` must return something
+    /// new (M4 spec 3.1); one of a chain's `map` may also return part of
+    /// its parameter, when the items are borrowed, or of a captured name;
+    /// those of `filter`, `any`, `all`, and `find` give a `bool`. Returns
+    /// the classification of a chain's `map` closure when it is not in
+    /// error.
+    fn argument(
+        &mut self,
+        closure: &HirExpr,
+        row: Option<BuiltinId>,
+        items: Option<&Items>,
+    ) -> Option<Classification> {
+        let HirExprKind::Closure {
+            param,
+            captures,
+            body,
+            ..
+        } = &closure.kind
+        else {
+            self.expr(closure);
+            return None;
+        };
+        self.closures.push(closure.span);
+        match (row, items) {
+            (Some(row), Some(items)) => self.chain_param(*param, row.get(), items, body),
+            _ => self.closure_param(*param, body, None),
+        }
+        self.block(body);
+        let tail = body.tail.as_deref();
+        let leaves: Vec<ReturnLeaf> = tail.map_or_else(Vec::new, |tail| {
+            leaves(tail)
+                .into_iter()
+                .map(|leaf| self.return_leaf(leaf))
+                .collect()
+        });
+        self.closures.pop();
+        let (Some(tail), Some(row)) = (tail, row) else {
+            return None;
+        };
+        let entry = row.get();
+        let chain_map = entry.owner == Owner::Chain && entry.name == "map";
+        // The other closures of a chain give a `bool`.
+        if entry.owner == Owner::Chain && !chain_map {
+            return None;
+        }
+        // Over items that are not borrowed, the parameter is a local of the
+        // closure like any other.
+        let borrowed_items = items.is_some_and(|items| matches!(items.kind, ItemKind::Borrowed(_)));
+        let mut allowed = Vec::new();
+        if !chain_map || borrowed_items {
+            allowed.push(*param);
+        }
+        allowed.extend(captures);
+        let alias_roots = aliases::alias_roots(
+            self.locals,
+            self.param_count,
+            &self.refers,
+            &self.assigned,
+            &[],
+            &allowed,
+        );
+        let class = returns::classify_body(
+            self.cx,
+            &leaves,
+            &alias_roots,
+            self.locals,
+            &allowed,
+            &[],
+            false,
+        );
+        let closure_roots = returns::ClosureRoots {
+            leaves: &leaves,
+            alias_roots: &alias_roots,
+            locals: self.locals,
+            allowed: &allowed,
+            param: *param,
+            span: closure.span,
+            chain: chain_map,
+        };
+        let diagnostic = match class {
+            Classification::Part(_) if chain_map => None,
+            _ => closure_roots.diagnostic(class, &tail.ty),
+        };
+        let Some(diagnostic) = diagnostic else {
+            return chain_map.then_some(class);
+        };
+        self.diagnostics.push(diagnostic);
+        for leaf in &leaves {
+            for root in &leaf.roots {
+                self.reported[root.0 as usize] = true;
+            }
+        }
+        None
+    }
+
     fn block(&mut self, block: &HirBlock) {
         for stmt in &block.stmts {
             self.stmt(stmt);
@@ -633,7 +1011,7 @@ impl FnAnalyzer<'_> {
                 if let Some(value) = value {
                     self.expr(value);
                     if self.ret != Ty::Unit {
-                        self.owned_slot(value, &Slot::Return);
+                        self.returned(value);
                     }
                 }
             }
@@ -641,15 +1019,26 @@ impl FnAnalyzer<'_> {
                 self.expr(cond);
                 self.block(body);
             }
+            HirStmt::WhileLet {
+                pattern,
+                value,
+                body,
+                head_is_str,
+                ..
+            } => {
+                self.head(value, &[pattern]);
+                self.pattern(value, pattern, Body::Block(body), *head_is_str);
+                self.block(body);
+            }
             HirStmt::For {
                 local, head, body, ..
             } => {
                 match head {
-                    HirForHead::Range { start, end } => {
+                    HirForHead::Range { start, end, .. } => {
                         self.expr(start);
                         self.expr(end);
                     }
-                    HirForHead::Vec(vec) => self.expr(vec),
+                    HirForHead::Vec(head) | HirForHead::Chain(head) => self.expr(head),
                 }
                 self.for_variable(*local, head, body);
                 self.block(body);
@@ -665,29 +1054,16 @@ impl FnAnalyzer<'_> {
             | HirExprKind::Bool(_)
             | HirExprKind::String(_)
             | HirExprKind::Local(_) => {}
-            HirExprKind::Call { callee, args } => {
+            HirExprKind::Call { callee, args, .. } => {
                 for arg in args {
                     self.expr(arg);
                 }
                 let (name, modes, keeps) = self.cx.callee(*callee);
                 let args: Vec<&HirExpr> = args.iter().collect();
                 self.call(&name, &modes, keeps, &args, None);
+                self.rooted_argument_stored(expr);
             }
-            // The receiver is an argument passed as the method's `self`, or
-            // the table's receiver mode, says (spec 2.5).
-            HirExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-            } => {
-                self.expr(receiver);
-                for arg in args {
-                    self.expr(arg);
-                }
-                let (name, modes, keeps) = self.cx.method(*method);
-                let values: Vec<&HirExpr> = std::iter::once(&**receiver).chain(args).collect();
-                self.call(&name, &modes, keeps, &values, Some(*method));
-            }
+            HirExprKind::MethodCall { .. } => self.method_value(expr, None),
             HirExprKind::Field { base, .. } => {
                 self.expr(base);
                 // A field access reads its base in place.
@@ -712,7 +1088,9 @@ impl FnAnalyzer<'_> {
                     );
                 }
             }
-            HirExprKind::Unary { operand, .. } => self.expr(operand),
+            HirExprKind::Unary { operand, .. } | HirExprKind::Cast { expr: operand, .. } => {
+                self.expr(operand);
+            }
             HirExprKind::Binary { lhs, rhs, .. } => {
                 self.expr(lhs);
                 self.expr(rhs);
@@ -730,16 +1108,26 @@ impl FnAnalyzer<'_> {
                     self.block(else_);
                 }
             }
-            HirExprKind::EnumLit { variant, args } => {
+            HirExprKind::EnumLit { variant, args, .. } => {
                 let slot = Slot::Payload(self.cx.variant_name(*variant));
                 for arg in args {
                     self.expr(arg);
                     self.owned_slot(arg, &slot);
                 }
             }
-            HirExprKind::Try(operand) => {
+            HirExprKind::Try { operand, .. } => {
                 self.expr(operand);
                 self.owned_slot(operand, &Slot::Question);
+                // A `?` returns early with a new `None` or `Err` (M4 spec
+                // 3.1); closures cannot hold one.
+                if self.closures.is_empty() {
+                    self.returns.leaves.push(ReturnLeaf {
+                        span: expr.span,
+                        roots: Vec::new(),
+                        new: true,
+                        literal: false,
+                    });
+                }
             }
             HirExprKind::VecLit(elements) => {
                 for element in elements {
@@ -747,12 +1135,34 @@ impl FnAnalyzer<'_> {
                     self.owned_slot(element, &Slot::VecElement);
                 }
             }
-            HirExprKind::Match { scrutinee, arms } => {
-                self.expr(scrutinee);
+            HirExprKind::IfLet {
+                pattern,
+                value,
+                then,
+                else_,
+                head_is_str,
+            } => {
+                self.head(value, &[&**pattern]);
+                self.pattern(value, pattern, Body::Block(then), *head_is_str);
+                self.block(then);
+                if let Some(else_) = else_ {
+                    self.block(else_);
+                }
+            }
+            HirExprKind::Match {
+                scrutinee,
+                arms,
+                head_is_str,
+            } => {
+                let patterns: Vec<&HirPattern> = arms.iter().map(|arm| &arm.pattern).collect();
+                self.head(scrutinee, &patterns);
                 for arm in arms {
-                    self.pattern(scrutinee, arm);
+                    self.pattern(scrutinee, &arm.pattern, Body::Arm(&arm.body), *head_is_str);
                     self.expr(&arm.body);
                 }
+            }
+            HirExprKind::Closure { .. } => {
+                self.argument(expr, None, None);
             }
             HirExprKind::Println { args, .. } | HirExprKind::Format { args, .. } => {
                 let mut reported = false;
@@ -776,10 +1186,175 @@ impl FnAnalyzer<'_> {
         }
     }
 
+    /// `call`, `receiver.method(args)`: the receiver is an argument passed
+    /// as the method's `self`, or the table's receiver mode, says (spec
+    /// 2.5). A call of a chain records its items (M4 spec 3.3), which a
+    /// row of a chain hands its closure.
+    fn method_call(&mut self, call: &HirExpr) {
+        let HirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } = &call.kind
+        else {
+            return self.expr(call);
+        };
+        let (name, modes, keeps) = self.cx.method(*method);
+        if let HirExprKind::MethodCall { .. } = receiver.kind {
+            self.method_value(receiver, Some(&name));
+        } else {
+            self.expr(receiver);
+        }
+        let row = match method {
+            MethodRef::Builtin(id) => Some(*id),
+            _ => None,
+        };
+        let chain = chain_row(*method);
+        let incoming = chain
+            .filter(|entry| entry.owner == Owner::Chain)
+            .map(|_| self.items_of(receiver));
+        let mut mapped = None;
+        for arg in args {
+            if let Some(class) = self.argument(arg, row, incoming.as_ref()) {
+                mapped = Some(class);
+            }
+        }
+        let values: Vec<&HirExpr> = std::iter::once(&**receiver).chain(args).collect();
+        self.call(&name, &modes, keeps, &values, Some(*method));
+        if let Some(entry) = chain {
+            self.chain_call(call, receiver, entry, incoming, mapped);
+        }
+    }
+
+    /// `call`, a method call used as a value, or as the receiver of the
+    /// method `called` (for V0208's wording).
+    fn method_value(&mut self, call: &HirExpr, called: Option<&str>) {
+        self.method_call(call);
+        // Only a head may hold a looked-into result (see [`Self::head`]).
+        if self.looked_into(call) {
+            self.looked_into_here(call, None, called);
+        } else {
+            self.rooted_argument_stored(call);
+        }
+    }
+
+    /// The head of a `match`, `if let`, or `while let`, matched by
+    /// `patterns`: the one place a looked-into result may be (M4 spec
+    /// 2.8). Its receiver must be a place, so that the names bound inside
+    /// it have a root (V0001), and no pattern may name it whole (V0208).
+    fn head(&mut self, value: &HirExpr, patterns: &[&HirPattern]) {
+        let HirExprKind::MethodCall { receiver, .. } = &value.kind else {
+            return self.expr(value);
+        };
+        self.method_call(value);
+        if !self.looked_into(value) {
+            return self.rooted_argument_stored(value);
+        }
+        // A `find`'s items have their roots from the chain's source.
+        let found = self.found_items(value).is_some();
+        if !found && borrowed_receiver(self.cx, receiver).is_err() {
+            let diagnostic = Diagnostic::new(
+                codes::V0001,
+                receiver.span,
+                "this value is made right here, but looking inside the result of this call \
+                 needs a value stored in a name, because the names the pattern makes are parts \
+                 of it; store it with `let` first, then look inside that",
+            )
+            .with_note(
+                "the names a pattern binds inside this `Option` are other names for parts of \
+                 the value it is called on, and Varyk only lets them name parts of a value \
+                 stored in a `let`",
+            );
+            self.diagnostics.push(diagnostic);
+            return;
+        }
+        let whole = patterns
+            .iter()
+            .flat_map(|pattern| pattern.bindings())
+            .find(|(_, whole)| *whole);
+        if let Some((local, _)) = whole {
+            self.looked_into_here(value, Some(local), None);
+        }
+    }
+
+    /// V0001 when `call` has `rooted` and the argument it borrows from is
+    /// not stored anywhere (see [`borrowed_receiver`]).
+    fn rooted_argument_stored(&mut self, call: &HirExpr) {
+        if let Some(argument) = rooted_argument(call) {
+            if let Err(diagnostic) = borrowed_receiver(self.cx, argument) {
+                self.diagnostics.push(diagnostic);
+            }
+        }
+    }
+
+    /// V0208 for `value`, a looked-into result anywhere but a head, or
+    /// named whole there by `binding`, or with the method `called` called
+    /// on it (M4 spec 2.8).
+    fn looked_into_here(
+        &mut self,
+        value: &HirExpr,
+        binding: Option<LocalId>,
+        called: Option<&str>,
+    ) {
+        let found = self
+            .found_items(value)
+            .and_then(|items| items.roots().first().copied());
+        let part = match rooted_argument(value).and_then(place_root).or(found) {
+            Some(root) => format!("part of `{}`", self.local(root).name),
+            None => "part of the value it is called on".to_string(),
+        };
+        let (span, message) = match binding {
+            Some(local) => {
+                let info = self.local(local);
+                (
+                    info.span,
+                    format!(
+                        "`{}` would be this `Option` itself, which holds {part} and must be \
+                         used where it is made; look inside it with a pattern such as \
+                         `Some(x)`, in `match` or `if let`",
+                        info.name
+                    ),
+                )
+            }
+            None => match called {
+                Some(method) => (
+                    value.span,
+                    format!(
+                        "this `Option` holds {part}, so no method can be called on it, \
+                         `{method}` included; look inside it here instead, with \
+                         `if let Some(x) = ... {{ .. }}` or `match`"
+                    ),
+                ),
+                None => (
+                    value.span,
+                    format!(
+                        "this `Option` holds {part} and must be used where it is made; look \
+                         inside it here with `match` or `if let`"
+                    ),
+                ),
+            },
+        };
+        let diagnostic = Diagnostic::new(codes::V0208, span, message).with_note(
+            "in Rust terms, this is an `Option<&T>`, a reference inside an `Option`, which \
+             Varyk has no type for",
+        );
+        self.diagnostics.push(diagnostic);
+    }
+
     // --- Places ---------------------------------------------------------------
 
+    /// The place info of `expr`: a place rooted at a name captured by the
+    /// closure around it is read-only and, unless Copy, borrowed from the
+    /// function around the closure, whatever it is outside (M4 spec 3.2).
     fn info(&self, expr: &HirExpr) -> PlaceInfo {
-        place_info(self.locals, expr).unwrap_or(TEMPORARY)
+        place_in(self.locals, &self.closures, expr).unwrap_or(TEMPORARY)
+    }
+
+    /// Whether `local` is a capture where the analysis is: declared
+    /// outside the innermost closure around it (M4 spec 3.2).
+    fn captured(&self, local: LocalId) -> bool {
+        captured_in(self.locals, &self.closures, local)
     }
 
     /// Who is at fault that `expr` is not a mutable place.
@@ -801,7 +1376,7 @@ impl FnAnalyzer<'_> {
     fn origin(&self, leaf: &HirExpr, info: PlaceInfo) -> Option<Origin> {
         match (&leaf.kind, place_root(leaf)) {
             (HirExprKind::Field { .. } | HirExprKind::Index { .. }, Some(root))
-                if !self.local(root).place.borrowed =>
+                if !self.local(root).place.borrowed && !self.captured(root) =>
             {
                 Some(Origin::Local(root))
             }
@@ -830,11 +1405,19 @@ impl FnAnalyzer<'_> {
     /// Computes the place info of `let local = value`.
     fn bind(&mut self, local: LocalId, value: &HirExpr) {
         let declared_mut = self.local(local).mutable;
+        self.made_by[local.0 as usize] = match value.kind {
+            HirExprKind::Match { .. } => Some(("a", "`match`")),
+            HirExprKind::If { .. } => Some(("an", "`if`")),
+            HirExprKind::IfLet { .. } => Some(("an", "`if let`")),
+            HirExprKind::Block(_) => Some(("a", "block")),
+            _ => None,
+        };
         let mut borrowed = None;
         let mut shared = None;
         self.refers[local.0 as usize] = (
             leaves(value).into_iter().any(|leaf| {
-                !matches!(leaf.kind, HirExprKind::String(_)) && place_root(leaf).is_none()
+                !matches!(field_root(leaf).kind, HirExprKind::String(_))
+                    && place_root(leaf).is_none()
             }),
             roots(value),
         );
@@ -844,7 +1427,21 @@ impl FnAnalyzer<'_> {
                 borrowed = Some(self.origin(leaf, info));
             }
             if !info.mutable && shared.is_none() {
-                shared = Some(self.blame(leaf));
+                // A call's result, or a part of it, is read-only whatever
+                // the argument is: the `let` itself is at fault, not the
+                // argument's `mut`.
+                let mut part = leaf;
+                while let HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } =
+                    &part.kind
+                {
+                    part = base;
+                }
+                if rooted_argument(part).is_some() {
+                    self.call_results[local.0 as usize] = true;
+                    shared = Some(Some(local));
+                } else {
+                    shared = Some(self.blame(leaf));
+                }
             }
         }
         let (place, blame) = match borrowed {
@@ -881,6 +1478,12 @@ impl FnAnalyzer<'_> {
             self.alias_notes[local.0 as usize] = alias_note(self.locals, local, value);
         }
         if place.borrowed && place.mutable {
+            if let HirExprKind::Index { .. } | HirExprKind::Field { .. } = value.kind {
+                self.made_from[local.0 as usize] = Some((
+                    place_shape_text(self.locals, value),
+                    matches!(value.kind, HirExprKind::Index { .. }),
+                ));
+            }
             // A mutable alias reaches its element mutably.
             for leaf in leaves(value) {
                 self.index_uses_root(leaf);
@@ -916,6 +1519,8 @@ impl FnAnalyzer<'_> {
                 Leaf::Lasting => false,
                 Leaf::New => match leaf.kind {
                     HirExprKind::Local(_) => true,
+                    // Part of a local declared inside.
+                    _ if rooted_argument(leaf).is_some() => true,
                     HirExprKind::Field { .. } | HirExprKind::Index { .. } => {
                         place_root(leaf).is_some() || as_str
                     }
@@ -961,7 +1566,18 @@ impl FnAnalyzer<'_> {
         } else if info.borrowed {
             // Writing through a borrowed place stores into storage the
             // caller or a struct owns.
-            self.owned_slot(value, &Slot::Assignment);
+            let slot = match target.kind {
+                HirExprKind::Local(id) => match &self.made_from[id.0 as usize] {
+                    Some((from, element)) => Slot::Alias {
+                        name: self.local(id).name.clone(),
+                        from: from.clone(),
+                        element: *element,
+                    },
+                    None => Slot::Assignment,
+                },
+                _ => Slot::Assignment,
+            };
+            self.owned_slot(value, &slot);
         } else if let HirExprKind::Local(id) = target.kind {
             // A whole struct local that is not a borrowed place owns its
             // value. (A `string` one may be `&str`; the `strings` pass
@@ -991,8 +1607,18 @@ impl FnAnalyzer<'_> {
         method: Option<MethodRef>,
     ) {
         let reported = self.diagnostics.len();
+        let takes = matches!(method, Some(MethodRef::Builtin(id))
+            if id.get().receiver == Receiver::Takes);
         for (index, (arg, mode)) in args.iter().zip(modes.iter().copied()).enumerate() {
             match mode {
+                // A taking row's receiver (M4 spec 3.4): a stored one is
+                // copied out when it is Copy in Rust, and otherwise it
+                // cannot be taken.
+                ParamMode::Owned if index == 0 && takes => {
+                    if !arg.ty.copy_in_rust() {
+                        self.owned_slot(arg, &Slot::Taken(name.to_string()));
+                    }
+                }
                 ParamMode::MutableBorrow => {
                     let indexed = leaves(arg)
                         .into_iter()
@@ -1149,7 +1775,7 @@ impl FnAnalyzer<'_> {
                     _ => self.uses_on_the_way(base, at_leaf, exclusive, out),
                 }
             }
-            HirExprKind::Call { callee, args } => {
+            HirExprKind::Call { callee, args, .. } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
                 self.call_uses(args.iter(), &modes, keeps, out);
             }
@@ -1158,6 +1784,7 @@ impl FnAnalyzer<'_> {
                 receiver,
                 method,
                 args,
+                ..
             } => {
                 let (_, modes, keeps) = self.cx.method(*method);
                 self.call_uses(std::iter::once(&**receiver).chain(args), &modes, keeps, out);
@@ -1167,7 +1794,9 @@ impl FnAnalyzer<'_> {
                     self.uses_on_the_way(value, false, !value.ty.is_copy(), out);
                 }
             }
-            HirExprKind::Unary { operand, .. } => self.uses_on_the_way(operand, false, false, out),
+            HirExprKind::Unary { operand, .. } | HirExprKind::Cast { expr: operand, .. } => {
+                self.uses_on_the_way(operand, false, false, out);
+            }
             HirExprKind::Binary { lhs, rhs, .. } => {
                 self.uses_on_the_way(lhs, false, false, out);
                 self.uses_on_the_way(rhs, false, false, out);
@@ -1177,7 +1806,7 @@ impl FnAnalyzer<'_> {
                     self.uses_on_the_way(arg, false, false, out);
                 }
             }
-            HirExprKind::Try(operand) => self.uses_on_the_way(operand, false, true, out),
+            HirExprKind::Try { operand, .. } => self.uses_on_the_way(operand, false, true, out),
             HirExprKind::EnumLit { args, .. } | HirExprKind::VecLit(args) => {
                 for arg in args {
                     self.uses_on_the_way(arg, false, !arg.ty.is_copy(), out);
@@ -1191,12 +1820,26 @@ impl FnAnalyzer<'_> {
                     self.block_uses(else_, at_leaf, exclusive, out);
                 }
             }
-            HirExprKind::Match { scrutinee, arms } => {
+            HirExprKind::IfLet {
+                value, then, else_, ..
+            } => {
+                self.uses_on_the_way(value, false, false, out);
+                self.block_uses(then, at_leaf, exclusive, out);
+                if let Some(else_) = else_ {
+                    self.block_uses(else_, at_leaf, exclusive, out);
+                }
+            }
+            HirExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 self.uses_on_the_way(scrutinee, false, false, out);
                 for arm in arms {
                     self.uses_on_the_way(&arm.body, at_leaf, exclusive, out);
                 }
             }
+            // What a closure uses, it uses while the call runs; it can
+            // only read a name from outside (M4 spec 3.2).
+            HirExprKind::Closure { body, .. } => self.block_uses(body, false, false, out),
         }
     }
 
@@ -1247,17 +1890,22 @@ impl FnAnalyzer<'_> {
                         self.uses_on_the_way(value, false, !value.ty.is_copy(), out);
                     }
                 }
-                HirStmt::While { cond, body, .. } => {
+                HirStmt::While { cond, body, .. }
+                | HirStmt::WhileLet {
+                    value: cond, body, ..
+                } => {
                     self.uses_on_the_way(cond, false, false, out);
                     self.block_uses(body, false, false, out);
                 }
                 HirStmt::For { head, body, .. } => {
                     match head {
-                        HirForHead::Range { start, end } => {
+                        HirForHead::Range { start, end, .. } => {
                             self.uses_on_the_way(start, false, false, out);
                             self.uses_on_the_way(end, false, false, out);
                         }
-                        HirForHead::Vec(vec) => self.uses_on_the_way(vec, false, false, out),
+                        HirForHead::Vec(head) | HirForHead::Chain(head) => {
+                            self.uses_on_the_way(head, false, false, out);
+                        }
                     }
                     self.block_uses(body, false, false, out);
                 }
@@ -1364,7 +2012,14 @@ impl FnAnalyzer<'_> {
     /// [`Self::kept_by_reference`]).
     fn leaf(&self, leaf: &HirExpr, whole: &HirExpr, mutable: bool) -> Leaf {
         match self.leaf_kind(leaf, whole, mutable) {
-            Leaf::New if !leaf.ty.is_copy() && through_index(leaf) => Leaf::Dangling,
+            // So is the result of a call with `rooted` on a local
+            // declared inside `whole`: it is part of that local.
+            Leaf::New
+                if !leaf.ty.is_copy()
+                    && (through_index(leaf) || rooted_argument(leaf).is_some()) =>
+            {
+                Leaf::Dangling
+            }
             kind => kind,
         }
     }
@@ -1558,9 +2213,19 @@ impl FnAnalyzer<'_> {
                 self.diagnostics.push(diagnostic);
                 continue;
             }
+            if self.captured(root) {
+                let diagnostic = self.capture_unchangeable(codes::V0303, leaf.span, root, callee);
+                self.diagnostics.push(diagnostic);
+                continue;
+            }
             if self.patterns[blamed.0 as usize].is_some() {
                 let diagnostic =
                     self.binding_unchangeable(codes::V0303, leaf.span, blamed, root, callee);
+                self.diagnostics.push(diagnostic);
+                continue;
+            }
+            if let Some(diagnostic) = self.read_only_result(codes::V0302, leaf.span, blamed, callee)
+            {
                 self.diagnostics.push(diagnostic);
                 continue;
             }
@@ -1675,6 +2340,9 @@ impl FnAnalyzer<'_> {
     /// V0300 or V0301 at `span`, a place rooted at `root` that is changed
     /// but is not a mutable place because `blamed` lacks `mut`.
     fn cannot_change(&self, span: Span, root: LocalId, blamed: LocalId) -> Diagnostic {
+        if self.captured(root) {
+            return self.capture_unchangeable(codes::V0301, span, root, "");
+        }
         if self.patterns[blamed.0 as usize].is_some() {
             let diagnostic = self.binding_unchangeable(codes::V0301, span, blamed, root, "");
             // `root` is a `let mut` alias of `blamed` (a pattern or `for`
@@ -1685,6 +2353,9 @@ impl FnAnalyzer<'_> {
                 Some(note) if root != blamed => diagnostic.with_note(note.clone()),
                 _ => diagnostic,
             };
+        }
+        if let Some(diagnostic) = self.read_only_result(codes::V0301, span, blamed, "") {
+            return diagnostic;
         }
         let diagnostic = if self.is_param(blamed) {
             let param = &self.local(blamed).name;
@@ -1704,6 +2375,79 @@ impl FnAnalyzer<'_> {
             )
         };
         self.add_mut_fix_it(diagnostic, root, blamed)
+    }
+
+    /// V0301 (an assignment or a changing method, `callee` empty) or V0303
+    /// (an argument to a `mut` parameter of `callee`) at `span`, changing
+    /// `root`, a name captured by the closure around `span`, which can
+    /// only read it (M4 spec 2.2, 3.2).
+    fn capture_unchangeable(
+        &self,
+        code: &'static str,
+        span: Span,
+        root: LocalId,
+        callee: &str,
+    ) -> Diagnostic {
+        let info = self.local(root);
+        let name = &info.name;
+        let message = if callee.is_empty() {
+            format!(
+                "inside a closure a name from outside can only be read, so `{name}` cannot be \
+                 changed here"
+            )
+        } else {
+            format!(
+                "`{callee}` may change `{name}`, but inside a closure a name from outside can \
+                 only be read"
+            )
+        };
+        Diagnostic::new(code, span, message)
+            .with_label(info.span, format!("`{name}` is declared outside the closure"))
+            .with_note("change it after the call the closure is given to, or make a new value inside the closure instead")
+            .with_note(format!(
+                "in Rust terms, the closure borrows `{name}` as a shared reference"
+            ))
+    }
+
+    /// V0301 (an assignment, `callee` empty) or V0302 (an argument to a
+    /// `mut` parameter of `callee`) at `span`, changing `blamed`, a `let`
+    /// that is read-only whatever its `mut`: it holds the result of a call
+    /// returning part of a value (M4 spec 3.1), which no `mut` can make
+    /// changeable. `None` for any other local.
+    fn read_only_result(
+        &self,
+        code: &'static str,
+        span: Span,
+        blamed: LocalId,
+        callee: &str,
+    ) -> Option<Diagnostic> {
+        if !self.call_results[blamed.0 as usize] {
+            return None;
+        }
+        let info = self.local(blamed);
+        let name = &info.name;
+        let part = match self.refers[blamed.0 as usize].1.first() {
+            Some(root) => format!("part of `{}`", self.local(*root).name),
+            None => "part of what a call was made on".to_string(),
+        };
+        let lead = if callee.is_empty() {
+            String::new()
+        } else {
+            format!("`{callee}` may change `{name}`, but ")
+        };
+        let diagnostic = Diagnostic::new(
+            code,
+            span,
+            format!(
+                "{lead}`{name}` is another name for {part}, given by a call, and cannot be changed"
+            ),
+        )
+        .with_label(info.span, format!("`{name}` is bound here"))
+        .with_note("to change a copy of it instead, write `.clone()` after that call")
+        .with_note(format!(
+            "in Rust terms, `{name}` is a shared reference, whatever `mut` says about the name"
+        ));
+        Some(diagnostic)
     }
 
     /// Adds the fix-it inserting `mut ` before `blamed`'s name, a label
@@ -1740,75 +2484,14 @@ impl FnAnalyzer<'_> {
         }
         diagnostic
     }
-
-    /// A borrowed place of non-Copy type cannot flow into an owned slot.
-    fn owned_slot(&mut self, value: &HirExpr, slot: &Slot) {
-        for leaf in leaves(value) {
-            let info = self.info(leaf);
-            if !info.borrowed || leaf.ty.is_copy() {
-                continue;
-            }
-            if let Some(root) = place_root(leaf) {
-                // Already said: what it holds is gone before this.
-                if self.gone[root.0 as usize] {
-                    continue;
-                }
-                self.reported[root.0 as usize] = true;
-            }
-            let owner = if info.origin.is_none() && through_index(leaf) {
-                "the `Vec` this value is part of is gone after this line".to_string()
-            } else {
-                owner_text(self.cx, self.locals, info.origin)
-            };
-            let advice = self
-                .match_on_the_call(leaf)
-                .unwrap_or_else(|| what_to_do(self.cx, self.locals, info.origin));
-            let into = match slot {
-                Slot::Return => "returned from here".to_string(),
-                Slot::StructField { id, field } => format!(
-                    "stored in field `{}` of `{}`",
-                    self.cx.structs[id.0 as usize].fields[*field].name,
-                    self.cx.struct_name(*id)
-                ),
-                Slot::ImportedParam(callee) => {
-                    format!("given to `{callee}`, which keeps what it is given")
-                }
-                Slot::Assignment => "stored there".to_string(),
-                Slot::Local(name) => format!("kept in `{name}`"),
-                Slot::Payload(variant) => format!("put inside `{variant}`"),
-                Slot::VecElement => "put in a `vec!`".to_string(),
-                Slot::Question => "used up by `?`".to_string(),
-            };
-            let diagnostic = Diagnostic::new(
-                codes::V0304,
-                leaf.span,
-                format!("{owner}, so it cannot be {into}"),
-            )
-            .with_note(advice)
-            .with_note(BORROWED_NOTE);
-            self.diagnostics
-                .push(clone_fix_it(diagnostic, leaf.span, &leaf.ty));
-        }
-    }
-}
-
-/// Adds the fix-it `.clone()` after the value at `span` to a V0304 when
-/// the value (of type `ty`) is a `string`: the one deliberate copy (spec
-/// 3.3, 3.5). Nothing else has a `clone`.
-fn clone_fix_it(diagnostic: Diagnostic, span: Span, ty: &Ty) -> Diagnostic {
-    if *ty != Ty::String {
-        return diagnostic;
-    }
-    let end = Span::new(span.file, span.end, span.end);
-    diagnostic.with_fix_it(FixIt {
-        span: end,
-        replacement: ".clone()".to_string(),
-    })
 }
 
 mod aliases;
+mod chains;
 mod moves;
 mod patterns;
+mod returns;
+mod slots;
 mod strings;
 #[cfg(test)]
 mod tests;

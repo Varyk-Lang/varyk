@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0201]: this value leaves out the field `y` of `Event::Click`; a value names every field
+ --> crates/varyk/tests/fixtures/errors/v0201_missing_variant_field/main.vr:7:13
+  |
+7 |     let e = Event::Click { x: 1 };
+  |             ^^^^^^^^^^^^^^^^^^^^^ this value leaves out the field `y` of `Event::Click`; a value names every field

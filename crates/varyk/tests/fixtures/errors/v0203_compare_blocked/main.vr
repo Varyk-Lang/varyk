@@ -1,0 +1,12 @@
+mod ext;
+
+struct Session {
+    name: string,
+    handle: ext::Handle,
+}
+
+fn main() {
+    let a = Session { name: "a", handle: ext::open() };
+    let b = a.clone();
+    println!("{}", a == b);
+}

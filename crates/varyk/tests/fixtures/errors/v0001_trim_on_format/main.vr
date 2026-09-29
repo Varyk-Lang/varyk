@@ -1,0 +1,5 @@
+fn main() {
+    let mut out = format!("total: ");
+    out.push_str(format!("  {}  ", 42).trim());
+    println!("{}", out);
+}

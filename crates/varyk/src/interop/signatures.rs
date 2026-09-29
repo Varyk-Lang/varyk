@@ -362,9 +362,22 @@ pub(super) fn map_param_type(ty: &Type, names: &Names) -> RustTy {
     }
 }
 
-/// Maps a return type. A reference in return position is always
-/// [`RustTy::Opaque`] (spec 4.5), even `-> &str`, unlike in parameter
-/// position.
-pub(super) fn map_return_type(ty: &Type, names: &Names) -> RustTy {
+/// Maps a return type. A reference in return position is
+/// [`RustTy::Opaque`] (spec 4.5) unless `elided` says lifetime elision
+/// roots it at a parameter (M4 spec 2.12), and it is `&str` or `&S` for a
+/// named type `S`: then [`RustTy::Str`] or [`RustTy::Ref`].
+pub(super) fn map_return_type(ty: &Type, names: &Names, elided: bool) -> RustTy {
+    if let (true, Type::Reference(reference)) = (elided, ty) {
+        if reference.lifetime.is_none() && reference.mutability.is_none() {
+            let inner = reference.elem.as_ref();
+            if is_named(inner, "str", names) {
+                return RustTy::Str;
+            }
+            if let RustTy::Named(path) = map_value(inner, names) {
+                return RustTy::Ref(Box::new(RustTy::Named(path)));
+            }
+        }
+        return RustTy::Opaque(type_to_text(ty));
+    }
     map_value(ty, names)
 }
