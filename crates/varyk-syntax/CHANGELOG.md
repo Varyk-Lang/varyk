@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/Varyk-Lang/varyk/compare/varyk-syntax-v0.1.0...varyk-syntax-v0.2.0) (2026-09-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* the public syntax tree of varyk-syntax changed (new expression, statement, and pattern variants, and new fields), so code matching on it must be updated. Varyk programs that milestone 3 accepted are still accepted.
+
+### Features
+
+* milestone 4, closures, iterators, and patterns ([d336da5](https://github.com/Varyk-Lang/varyk/commit/d336da5c8687af3593867b704957f59c91a5de84))
+
 ## [0.1.0](https://github.com/Varyk-Lang/varyk/compare/varyk-syntax-v0.0.2...varyk-syntax-v0.1.0) (2026-09-28)
 
 
