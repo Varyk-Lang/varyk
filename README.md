@@ -151,11 +151,12 @@ shipped as safe Rust. First, developers building services in Go,
 TypeScript, or Python, who want Go's simplicity and one-binary deployment
 without the garbage collector, with rustc catching the bugs those languages
 compile. Then developers coming from Rust, who want the same safety model
-with less ceremony for application code. And coding agents are unusually
-good at writing it: Rust syntax that models already know, minus the
-ownership decisions they most often get wrong, with rustc checking what the
-model wrote and diagnostics with codes and fix-its in machine-readable
-form.
+with less ceremony for application code. And teams that write code with
+coding agents: agents already write good code, and the slow part is
+reviewing it. A small, concrete language with one way to do each thing
+keeps agent output reviewable, rustc checks its memory safety and data
+races, and diagnostics with codes and fix-its come in machine-readable
+form, so the agent fixes its own mistakes before a person looks.
 
 ## Try it
 
