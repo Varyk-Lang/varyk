@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0205]: this arm can never run, because the arms above it already handle every value it fits; remove it
+ --> crates/varyk/tests/fixtures/errors/v0205_unreachable_arm/main.vr:5:9
+  |
+5 |         4 => "four",
+  |         ^^^^^^^^^^^ this arm can never run, because the arms above it already handle every value it fits; remove it
+  |
+  = note: in Rust terms, the pattern is unreachable

@@ -1,0 +1,15 @@
+enum Event {
+    Click { x: i32, y: i32 },
+    Quit,
+}
+
+fn describe(e: Event) {
+    match e {
+        Event::Click { x, .. } => println!("click at {}", x),
+        Event::Quit => println!("quit"),
+    }
+}
+
+fn main() {
+    describe(Event::Quit);
+}

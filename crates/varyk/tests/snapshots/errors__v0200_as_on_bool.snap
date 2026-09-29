@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0200]: `as` converts between number types, and this is `bool` as `i32`
+ --> crates/varyk/tests/fixtures/errors/v0200_as_on_bool/main.vr:3:13
+  |
+3 |     let n = ready as i32;
+  |             ^^^^^^^^^^^^ `as` converts between number types, and this is `bool` as `i32`
+  |
+  = note: both sides of `as` must be integers, `usize`, `f32`, or `f64`

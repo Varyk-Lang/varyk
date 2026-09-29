@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0307]: this loop's head reads `seen`, so `seen` cannot be changed inside it
+ --> crates/varyk/tests/fixtures/errors/v0307_for_head_capture_changed/main.vr:5:9
+  |
+4 |     for w in words.iter().filter(|w| !seen.contains(w)) {
+  |              ------------------------------------------ the loop goes over this until it ends
+5 |         seen.push(w.clone());
+  |         ^^^^ this loop's head reads `seen`, so `seen` cannot be changed inside it
+  |
+  = note: in Rust terms, the `for` loop keeps its iterator, and every borrow its closures and arguments hold, until it ends, and a value cannot be changed while it is borrowed

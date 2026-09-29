@@ -1,6 +1,6 @@
 # The Varyk language
 
-This page describes everything Varyk accepts today, in milestone 3 of an
+This page describes everything Varyk accepts today, in milestone 4 of an
 experimental, pre-1.0 language (see [roadmap.md](roadmap.md) for what comes
 next). Anything not described here is rejected with an error that names
 what is not supported. For the reasons behind the design, see
@@ -224,19 +224,21 @@ A comment starts with `//` and runs to the end of the line.
 
 The keywords are `fn`, `pub`, `let`, `mut`, `struct`, `mod`, `if`, `else`,
 `while`, `break`, `continue`, `return`, `enum`, `impl`, `match`, `for`, `in`,
-`self`, `crate`, `super`, `use`, `true`, and `false`. `self`, `crate`, and
-`super` also start a path: `self::`, `crate::`, and `super::`.
+`self`, `crate`, `super`, `use`, `as`, `true`, and `false`. `self`, `crate`,
+and `super` also start a path: `self::`, `crate::`, and `super::`. `as`
+names a `use` (`use path as name;`) and converts a number (`n as i64`, see
+[Expressions and operators](#expressions-and-operators)); no keyword can be
+used as a name.
 
-Every other Rust keyword is reserved: `as`, `async`, `await`, `const`,
-`dyn`, `extern`, `loop`, `move`, `ref`, `Self`, `static`, `trait`, `type`,
+Every other Rust keyword is reserved: `async`, `await`, `const`, `dyn`,
+`extern`, `loop`, `move`, `ref`, `Self`, `static`, `trait`, `type`,
 `unsafe`, `where`, `abstract`, `become`, `box`, `do`, `final`, `gen`,
 `macro`, `override`, `priv`, `try`, `typeof`, `unsized`, `virtual`, and
 `yield`. Using one is an error that says the construct is not supported
-yet, except `as` in `use path as name;`. None of them can be used as a
-name.
+yet. None of them can be used as a name.
 
-`Some`, `None`, `Ok`, `Err`, `Option`, `Result`, `Vec`, and `String` are
-reserved names: no function, method, struct, enum, variant, field, module,
+`Some`, `None`, `Ok`, `Err`, `Option`, `Result`, `Vec`, `HashMap`, and
+`String` are reserved names: no function, method, struct, enum, variant, field, module,
 parameter, or `let` name can be any of them, because the generated Rust
 would then hide Rust's own. A struct, enum, or module also cannot take a
 built-in type's name (`i32`, `string`, `str`, and so on); a function, field,
@@ -255,6 +257,7 @@ or local can (`let string = "x";` is fine).
 | a struct you declare | a group of named fields |
 | an enum you declare | one of several variants, each with its own values |
 | `Option<T>`, `Result<T, E>`, `Vec<T>` | Rust's standard types, written as in Rust and nested freely |
+| `HashMap<K, V>` | values of type `V` found by keys of type `K`, an integer type, `bool`, or `string` |
 
 A struct declares its fields and their types. A field is private unless
 marked `pub`, and follows the same rule as any other item without `pub`:
@@ -276,8 +279,9 @@ with a dot: `user.name`. Reading, changing, or naming a private field from
 outside its module is an error suggesting either `pub` on the field or a
 `pub fn` on the struct that does the work instead.
 
-An enum lists its variants. A variant is a plain name or carries values of
-the types in parentheses:
+An enum lists its variants. A variant is a plain name, carries values of
+the types in parentheses, or carries named fields in braces, written like a
+struct's:
 
 ```varyk
 enum Shape {
@@ -285,10 +289,19 @@ enum Shape {
     Rect(f64, f64),
     Point,
 }
+
+enum Event {
+    Click { x: i32, y: i32 },
+    Key(string),
+    Quit,
+}
 ```
 
+A variant's fields are as visible as its enum, as in Rust, so they take no
+`pub`; two fields of one name in a variant are an error.
+
 An enum cannot contain itself, directly or through a struct, another enum,
-or an `Option` or `Result`; inside a `Vec` it can:
+or an `Option` or `Result`; inside a `Vec` or a `HashMap` it can:
 `enum Tree { Node(Vec<Tree>) }`.
 
 An enum value is written with the enum's name and the variant, followed by
@@ -296,11 +309,18 @@ the variant's values in parentheses when it has any: `Shape::Point`,
 `Shape::Circle(2.0)`, `Shape::Rect(1.0, 2.0)`. An enum of another module is
 reached through it: `geo::Shape::Point`. The number of values must match the
 variant, so `Shape::Circle()`, `Shape::Point(1.0)`, and `Shape::Circle`
-without its value are errors, as is a variant the enum does not have.
+without its value are errors, as is a variant the enum does not have. A
+variant with named fields is written like a struct value, with every field
+once, in any order: `Event::Click { x: 1, y: 2 }`; a missing field, an
+unknown one, or one written twice is an error, and so are parentheses on it
+or braces on a variant with values by position.
 
-`Option`, `Result`, and `Vec` need exactly their types: `Option<i32>`,
-`Result<User, string>`, `Vec<Option<Shape>>`. A `string` inside them is an
-owned `String` in the generated Rust. Their values are written as in Rust:
+`Option`, `Result`, `Vec`, and `HashMap` need exactly their types:
+`Option<i32>`, `Result<User, string>`, `Vec<Option<Shape>>`,
+`HashMap<string, i32>`. A `HashMap`'s key type is an integer type, `bool`,
+or `string`; its value type is any type. A `string` inside them is an owned
+`String` in the generated Rust, and a `HashMap` is Rust's
+`std::collections::HashMap`. Their values are written as in Rust:
 
 ```varyk
 let some = Some(5);               // Option<i32>
@@ -309,18 +329,37 @@ let ok: Result<i32, string> = Ok(1);
 let failed: Result<i32, string> = Err("no");
 let numbers = vec![1, 2, 3];      // Vec<i32>; every element has one type
 let empty: Vec<string> = vec![];
+let ages: HashMap<string, i32> = HashMap::new();
 ```
 
 `Some(x)` and `vec![a, b]` know their type from what is inside. `None`,
-`Vec::new()`, an empty `vec![]`, `Ok(x)` (its error type), and `Err(e)` (its
-value type) take their type from where they go: a `let` with a written type,
+`Vec::new()`, `HashMap::new()`, an empty `vec![]`, `Ok(x)` (its error type),
+`Err(e)` (its value type), and `s.parse()` take their type from where they
+go: a `let` with a written type,
 a parameter, a return value, a field, or a `vec!` element after one whose
 type is known. Anywhere else, write the type in a `let` first; the compiler
 never works it out from later lines.
 
 Numbers and `bool` are called Copy types: using one makes a copy, and the
-original stays usable. `string`, structs, enums, `Option`, `Result`, and
-`Vec` are not Copy.
+original stays usable. `string`, structs, enums, `Option`, `Result`, `Vec`,
+and `HashMap` are not Copy.
+
+**Copies and comparisons.** A struct or enum can be copied with
+`x.clone()` when every field and value it holds can be: a number, a `bool`,
+a `string`, an `Option`, `Result`, `Vec`, or `HashMap` of such types,
+another struct or enum that can be copied, or a Rust type whose `.rs` file
+derives `Clone` for it (see [Rust structs and methods](#rust-structs-and-methods)).
+Two values of a type can be compared with `==` and `!=` by the same rule,
+with `PartialEq` in place of `Clone`. A type that holds itself through a
+`Vec` or a `HashMap` counts as if it could, as in Rust. `x.clone()` is a
+new, owned copy of everything inside; it works the same way on an
+`Option`, `Result`, `Vec`, or `HashMap` whose contents can be copied, and
+on a number or `bool` it is an error (V0100), since those are copied on use
+already. When something inside is in the way, `.clone()` and `==` are
+errors (V0203) that name the field, and, for a Rust type, say to derive the
+trait in its `.rs` file. In the generated Rust, a struct or enum carries one
+`#[derive(Clone, PartialEq)]` line listing what it allows (none when it
+allows neither); nothing is ever copied unless `.clone()` is written.
 
 An `impl` block adds functions to a struct or enum declared in the same
 file. A function whose parameter list starts with `self` is a method; `self`
@@ -351,11 +390,18 @@ value), and the compiler suggests where to add `mut` when it is not.
 
 In the generated Rust, `self` is `&self` and `mut self` is `&mut self`.
 
-### Calls on `Vec` and `string`
+### Calls on built-in types
 
-These are all the calls `Vec` and `string` have. "Reads" borrows the value
-the call is made on, "changes" needs a value that may be changed, like a
-`mut` parameter.
+These are all the calls `Vec`, `string`, `Option`, `Result`, and `HashMap`
+have, beside the calls of a chain (see [Chains](#chains)); any other is an
+error listing the type's calls. "Reads" borrows the
+value the call is made on, "changes" needs a value that may be changed, like
+a `mut` parameter, and "takes" uses the value up, as `?` does (see below).
+An argument is kept, like a struct field, unless the
+table says it is read: a read argument is only borrowed, so a parameter or
+another name for a value can be passed.
+
+**`Vec<T>`:**
 
 | Call | Uses the value | Result |
 |---|---|---|
@@ -363,20 +409,115 @@ the call is made on, "changes" needs a value that may be changed, like a
 | `v.push(x)` | changes | nothing; `x` is kept in `v` |
 | `v.pop()` | changes | `Option<T>`: the last element, taken out, or `None` |
 | `v.len()` | reads | `usize`, the number of elements |
+| `v.is_empty()` | reads | `bool` |
+| `v.insert(i, x)`; `i: usize` | changes | nothing; `x` is kept at `i`, and the elements from `i` on move up one |
+| `v.remove(i)`; `i: usize` | changes | `T`: the element at `i`, taken out |
+| `v.contains(x)`; `x` read | reads | `bool`; `T` is a number type, `bool`, or `string` |
+| `v.sort()` | changes | nothing; `T` is an integer type, `bool`, or `string` |
+| `v.join(sep)`; `sep: string` read | reads | new text: the elements with `sep` between them; `T` is `string` |
+| `v.get(i)`; `i: usize` | reads | `Option<T>`: the element at `i`, or `None` past the end; looked into where it is made unless `T` is a number type or `bool` (see below) |
+| `v.iter()` | reads; `v` must be stored | a chain of the elements (see [Chains](#chains)) |
 | `v[i]` | reads, or changes when assigned | the element at `i`, which is a `usize` |
+
+`push` and `insert` keep what they are given, like a struct field: a
+literal string is copied in, a name holding its own value is given away,
+and a value the function only borrows is an error. `v[i]` is a place, like
+a field: it can be read, assigned (`v[0] = 5;`), have its fields read or
+assigned, and have methods called on it (`tasks[0].complete()`). With `i`
+past the end, `v[i]`, `insert`, and `remove` stop the program with Rust's
+message. `sort` on floats, or `contains` or `sort` on structs, is an error,
+and so is `join` on anything but strings.
+
+**`string`:**
+
+| Call | Uses the value | Result |
+|---|---|---|
 | `s.len()` | reads | `usize`, the length of the text in bytes |
 | `s.clone()` | reads | a new copy of the text |
+| `s.is_empty()` | reads | `bool` |
+| `s.contains(p)`, `s.starts_with(p)`; `p: string` read | reads | `bool` |
+| `s.to_uppercase()` | reads | new text |
+| `s.replace(from, to)`; both `string`, read | reads | new text |
+| `s.trim()` | reads; `s` must be stored, or a literal | the text of `s` without the spaces at either end: part of `s`, not a copy (see "Returning part of a parameter") |
+| `s.split(sep)`; `sep: string` read | reads; `s` must be stored, or a literal | a chain of the pieces of `s` between the places `sep` appears, each part of `s`, not a copy (see [Chains](#chains)) |
+| `s.push_str(t)`; `t: string` read | changes | nothing; `t` is added to the end of `s` |
+| `s.parse()` | reads | `Option<T>`, `T` a number type or `bool` |
 
-`push` keeps what it is given, like a struct field: a literal string is
-copied in, a name holding its own value is given away, and a value the
-function only borrows is an error. `v[i]` is a place, like a field: it can
-be read, assigned (`v[0] = 5;`), have its fields read or assigned, and have
-methods called on it (`tasks[0].complete()`). With `i` past the end, the
-program stops with Rust's message. `s.clone()` is the one way to copy text,
-and it always makes owned text.
+`s.clone()` is the one way to copy text, and it always makes owned text.
+`parse` gives `None` when the text is not a value of `T`, with Rust's rules
+for what the text may look like. `T` comes from where the result goes, as
+`None`'s type does, `?` included: `let n: Option<i32> = text.parse();`, or
+`let n: i32 = text.parse()?;` in a function returning an `Option`. A
+function returning a `Result` writes two statements,
+`let parsed: Option<i32> = text.parse();` and then `parsed.ok_or(e)?`;
+`text.parse()?` there is an error (V0206).
 
-`Option` and `Result` have no calls; the rest of Rust's calls on these types
-are not available yet.
+**`Option<T>`:**
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `o.is_some()` | reads | `bool` |
+| `o.unwrap_or(d)`; `d: T` | takes | `T`: the value inside, or `d` for `None` |
+| `o.ok_or(e)` | takes | `Result<T, E>`: `Ok` of the value inside, or `Err(e)` for `None`; `E` comes from where the result goes, as for `None`, and otherwise from `e` |
+| `o.map(\|x\| ..)`; `x: T` | takes | `Option<R>`, `R` what the closure gives: `Some` of the closure's value for the value inside, or `None` for `None` (see [Closures](#closures)) |
+
+**`Result<T, E>`:**
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `r.is_ok()`, `r.is_err()` | reads | `bool` |
+| `r.ok()` | takes | `Option<T>`: the `Ok` value, or `None` for an `Err` |
+| `r.unwrap_or(d)`; `d: T` | takes | `T`: the `Ok` value, or `d` for an `Err` |
+| `r.map_err(\|e\| ..)`; `e: E` | takes | `Result<T, R>`, `R` what the closure gives: the `Ok` value as it is, or `Err` of the closure's value for an `Err` (see [Closures](#closures)) |
+
+To look at the value inside an `Option` or `Result`, use `match`, `if let`,
+`?`, or `unwrap_or`. There is no `unwrap` or `expect`: a value that is
+absent is something to handle, not a reason to stop the program.
+
+A call that takes its value uses it up, as `?` does: a value made right
+there is used up, a name holding its own value is given away and cannot be
+used again (V0305), and a stored value (a parameter, a field, an element,
+or another name for one) is copied out when everything inside it, a
+`Result`'s error type included, is a number or `bool`. So `o.unwrap_or(0)`
+on a parameter `o: Option<i32>` is fine, while `r.unwrap_or(0)` on a
+parameter `r: Result<i32, string>` is an error (V0304): `match` on it
+instead.
+
+**`HashMap<K, V>`:**
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `HashMap::new()` | none | an empty `HashMap`; its types come from where it goes |
+| `m.insert(k, v)` | changes | `Option<V>`: the value `k` had before, or `None`; `k` and `v` are kept |
+| `m.contains_key(k)`; `k` read | reads | `bool` |
+| `m.len()` | reads | `usize`, the number of keys |
+| `m.get(k)`; `k` read | reads | `Option<V>`: the value of `k`, or `None`; looked into where it is made unless `V` is a number type or `bool` (see below) |
+| `m.keys()`, `m.values()` | reads; `m` must be stored | a chain of the keys, or of the values, in no fixed order (see [Chains](#chains)) |
+
+A `HashMap` has no `m[k]`, and a `for` cannot go over one directly. Its
+order is unspecified, as in Rust. `println!` does not work on one; `==`
+does when its values can be compared (see [Types](#types)).
+
+**Looked into where it is made.** `v.get(i)` and `m.get(k)` give an
+`Option` whose value is part of the `Vec` or `HashMap`, and so does `find`
+on a chain of borrowed items (see [Chains](#chains)). When that value is
+a number or `bool`, the result is a plain `Option` holding a copy, usable
+anywhere: `counts.get(word).unwrap_or(0)`. Otherwise it must be looked
+inside right where it is made, as the value of a `match`, an `if let`, or
+a `while let`:
+
+```varyk
+if let Some(line) = lines.get(1) {
+    println!("second: {}", line);
+}
+```
+
+`line` is another name for an element of `lines`, as after
+`let line = lines[1];`: it cannot be changed, and `lines` cannot be changed
+while `line` is still used (V0307). Stored in a `let`, passed, returned,
+used with `?`, or given any method, `is_some()` included, such a result is
+an error (V0208), and so is a pattern naming it whole. The `Vec` or
+`HashMap` it is called on must be stored, not made right there (V0001).
 
 ## Literals
 
@@ -405,10 +546,11 @@ user.name = "Bob";      // assignment to a field of a `let mut` name
 scores[0] = 10;         // assignment to an element of a `let mut` Vec
 return x;               // leave the function with a value
 while count < 10 { }    // repeat while the condition is true
+while let Some(t) = tasks.pop() { }  // repeat while the pattern fits
 for i in 0..n { }       // i takes 0, 1, ..., n - 1
 for item in items { }   // every element of a Vec, in order
-break;                  // leave the innermost `while` or `for`
-continue;               // go to the next round of the innermost `while` or `for`
+break;                  // leave the innermost `while`, `while let`, or `for`
+continue;               // go to the next round of the innermost loop
 print_user(user);       // any expression followed by `;`
 ```
 
@@ -422,8 +564,8 @@ calls, method calls (`counter.add(2)`), associated function calls
 (`Counter::new()`), field access (`user.name`), elements (`v[i]`), struct
 values (`User { .. }`, or `m::User { .. }` for a struct of module `m`), enum
 values, `Option`, `Result`, and `Vec` values, `format!`, parentheses, blocks,
-`if`/`else`, `match`, and `?` after a `Result` (see
-[Passing errors on](#passing-errors-on)).
+`if`/`else`, `match`, `?` after a `Result` or an `Option` (see
+[Passing errors on](#passing-errors-on)), and `as` after a number.
 
 A block `{ ... }` runs its statements, and if it ends with an expression and
 no `;`, that expression is the block's value. A function body works the same
@@ -445,20 +587,158 @@ Operators:
 - `+ - * / %` work on numbers only, and both sides must have the same type.
   `+` does not join strings: `format!("{}{}", a, b)` does.
 - `< <= > >=` compare numbers of the same type.
-- `==` and `!=` compare numbers, `bool`, and strings. Structs, enums,
-  `Option`, `Result`, and `Vec` cannot be compared.
+- `==` and `!=` compare two values of one type: numbers, `bool`, strings,
+  and a struct, an enum, an `Option`, a `Result`, a `Vec`, or a `HashMap`
+  whose contents can be compared (see [Types](#types)); anything else is
+  an error naming the field in the way (V0203).
 - `&&` is "and", `||` is "or".
+- `x as T` converts a number to another number type: any integer type,
+  `usize`, `f32`, or `f64`, with Rust's rules (a float is truncated toward
+  zero and saturates, an integer wraps to a narrower width: `300 as u8` is
+  `44`, `-1 as u8` is `255`). Both sides must be number types (V0200): not a
+  `bool`, a string, or a struct. It is how a `usize` becomes an `i32`:
+  `let count = v.len() as i32;`. A number written on its own before `as`
+  is an `i32` (or an `f64` with a decimal point).
 
-Precedence, from tightest to loosest: `-` and `!` first; then `*`, `/`, and
+Precedence, from tightest to loosest: `-` and `!` first; then `as`; then `*`, `/`, and
 `%`; then `+` and `-`; then the comparisons; then `&&`; then `||`. Operators
 of the same level group from left to right, so `10 - 3 - 2` is `5`.
+Because `as` binds tighter than `*`, `a as i32 * 2` is `(a as i32) * 2`.
 Comparisons cannot be chained: `a < b < c` is an error. Use parentheses when
 in doubt.
 
+## Closures
+
+A closure is a small piece of code handed to a call that runs it:
+`|x| expression`, or `|x| { block }` when it needs statements. It exists
+only as the argument of a call that takes one: `map` on an `Option`,
+`map_err` on a `Result`, and `map`, `filter`, `any`, `all`, and `find` on a
+chain (see [Chains](#chains)):
+
+```varyk
+let doubled = Some(4).map(|n| n * 2);
+let checked = parse_age(text).map_err(|e| format!("{}: {}", field, e));
+```
+
+A closure has exactly one parameter, the value the call hands it (V0201
+otherwise), with no type written: `n` is the `i32` inside the `Option`, `e`
+the error of the `Result`. It has no return type either; the call's result
+holds whatever the closure gives, so `Some(4).map(|n| n * 2)` is an
+`Option<i32>`. A closure anywhere else, in a `let`, as an argument to a
+Varyk function, or returned, is an error (V0001): a closure is never a
+value of its own. A type written on the parameter, `|x: i32|`, and `move`
+before the closure are errors too (V0001).
+
+The body is a value of its own, not a piece of the function around it:
+`return`, `break`, `continue`, and `?` inside it are errors (V0001), since
+they would leave the closure rather than the function. A loop inside the
+body is the closure's own, and can use `break` and `continue`. A `None`,
+`Vec::new()`, `Ok`, or `Err` the closure gives takes its type from where
+the call's result goes, as in
+`let found: Option<Option<i32>> = o.map(|n| None);` (V0207 with nothing to
+take it from).
+
+Inside the body the names of the function around it can be read, and
+nothing more: assigning to one, passing it to a `mut` parameter, or calling
+a changing method on it is an error (V0301, V0303), and so is keeping it
+anywhere that owns its value (V0304), such as `push`, a struct field, or
+the closure's own `let mut` given it; copy text with `.clone()`. A `let`
+of it inside the closure is another name for it, and it is still there
+after the closure. The parameter is read-only too, like a name a `match`
+pattern makes: to change it, first write `let mut n = n;`.
+
+The closure of `map` and `map_err` must give something new, because the
+`Option` or `Result` it makes owns what it holds: a number, a new string,
+a call's result, the parameter itself, or a string literal, which becomes
+new text (`o.map(|n| if n > 5 { "big" } else { "small" })` is an
+`Option<string>`). Giving a name from outside, or part of the parameter,
+is an error (V0304; `.clone()` for text), and giving parts of two
+different names is V0308.
+
+In the generated Rust a closure is written as it is, and a name from
+outside is borrowed by it without being changed: an owned `String` stays a
+`String` and is passed on as `&name`, as anywhere else.
+
+## Chains
+
+A chain goes over the elements of a stored value one by one, in one
+expression: it starts at a source, passes through any number of `map`s
+and `filter`s, and ends at a call that gives a value.
+
+```varyk
+let total = numbers.iter().sum();
+let evens = numbers.iter().filter(|n| n % 2 == 0).count();
+let names: Vec<string> = users.iter().map(|u| u.name.clone()).collect();
+```
+
+The sources are `v.iter()` on a `Vec`, `s.split(sep)` on a string, and
+`m.keys()` and `m.values()` on a `HashMap`, each on a stored value (or, for
+`split`, a string literal): on a value made right there it is an error
+(V0001), so store it with `let` first. The calls of a chain, `I` its item
+type:
+
+| Call | Result |
+|---|---|
+| `c.map(\|x\| ..)`; `x: I` | a chain of what the closure gives |
+| `c.filter(\|x\| ..)`; `x: I`, gives a `bool` | a chain of the items for which the closure gives `true` |
+| `c.collect()` | `Vec<I>`, the items in order; they must be owned or copies (see below) |
+| `c.count()` | `usize`, the number of items |
+| `c.sum()`; `I` a number type | `I`, the items added up |
+| `c.any(\|x\| ..)`, `c.all(\|x\| ..)`; give a `bool` | `bool`: whether the closure gives `true` for any item, or for every one |
+| `c.find(\|x\| ..)`; gives a `bool` | `Option<I>`: the first item for which the closure gives `true`, or `None`; looked into where it is made when the items are borrowed (see below) |
+
+A chain must be finished where it is written: stored in a `let`, passed,
+returned, used as a statement of its own, or put inside `Some` or a `vec!`,
+an unfinished chain is an error (V0208), because it has no type to write.
+`collect` needs no type written, and `sum` on items that are not numbers is
+an error (V0200). A chain can also end as the head of a `for` (see
+[Loops](#loops)).
+
+**Items.** Every item is borrowed, a copy, or owned:
+
+- **borrowed**: another name for an element of the stored value, read-only,
+  like a name a `match` pattern makes: the elements of `v.iter()`, the keys
+  or values of `m.keys()` and `m.values()`, unless they are numbers or
+  `bool`s, and the pieces of `s.split(sep)`, parts of `s`;
+- **copies**: numbers and `bool`s, copied as they are read;
+- **owned**: new values a `map` made.
+
+`filter` keeps the kind. `map` gives copies when its closure gives a number
+or `bool`, owned items when it gives something new (a call's result, a
+`.clone()`, a `format!`, a string literal), and borrowed items when it gives
+part of its item (`users.iter().map(|u| u.name)`), or part of a name from
+outside it (`|x| other.name`), which the items are then parts of. Giving
+part of an owned item is an error (V0304): it ends with the closure.
+Giving something new in one place and a part in another is V0304, and
+parts of two different things V0308.
+
+The closure of `map` gets the item itself. The closures of `filter`,
+`any`, `all`, and `find` only look at it, since it goes on down the chain or
+becomes the result: keeping it anywhere that owns its value is an error
+(V0304); `map` is where a closure makes something new from an item. All of
+them read names from outside as any closure does.
+
+`collect` makes a `Vec` that owns its items, so a chain of borrowed items
+must copy them first, `words.iter().map(|w| w.clone()).collect()`
+(V0304 otherwise). `find` on copies or owned items gives a plain `Option`;
+on borrowed items the `Option` holds part of the stored value and is looked
+into where it is made, as `get`'s is: its value is another name for that
+part, and the stored value cannot change while it is used (V0307).
+
+```varyk
+if let Some(word) = words.iter().find(|w| w.len() > 3) {
+    println!("{}", word);
+}
+```
+
+In the generated Rust a chain is written as it is, with `.copied()` after a
+source of numbers or `bool`s, `collect::<Vec<_>>()`, and `sum::<T>()`.
+
 ## Matching
 
-`match` looks at an enum, an `Option`, or a `Result` and runs the arm whose
-pattern fits. Like `if`, it is an expression:
+`match` looks at an enum, an `Option`, a `Result`, a number, a `bool`, or a
+string and runs the first arm whose pattern fits. Like `if`, it is an
+expression:
 
 ```varyk
 fn area(shape: Shape) -> f64 {
@@ -468,10 +748,19 @@ fn area(shape: Shape) -> f64 {
         Shape::Point => 0.0,
     }
 }
+
+fn grade(score: i32) -> string {
+    match score {
+        90..=100 => "A",
+        80..=89 => "B",
+        _ => "lower",
+    }
+}
 ```
 
 Each arm is `pattern => expression,`; the comma may be left out after a
-block. Every arm must have the same type, or no arm has a value (a
+block. An arm that starts with a block ends at its `}`, as in Rust, so
+`{ 1 } + 2` there is written `({ 1 }) + 2`. Every arm must have the same type, or no arm has a value (a
 `println!`, a call that returns nothing, or a block without a final
 expression). An arm that always `return`s fits anywhere; a `return`,
 `break`, `continue`, or assignment as an arm's body is written as a block,
@@ -485,17 +774,58 @@ A pattern is one of:
 - a name, which fits anything and names it;
 - a variant: `Shape::Point`, `Shape::Circle(r)`, `Shape::Rect(w, h)`,
   `geo::Shape::Point` for an enum of module `geo`, `Some(x)`, `None`,
-  `Ok(x)`, or `Err(e)`, with one name or `_` for each of the variant's
-  values. A name may appear only once in a pattern.
+  `Ok(x)`, or `Err(e)`, with a pattern for each of the variant's values;
+- a variant with named fields, naming every field once, each as `name`,
+  which names it, or `name: pattern`, with `name: _` for one not needed:
+  `Event::Click { x: 0, y }`. There is no `..`, so leaving a field out is
+  an error;
+- an integer, with an optional `-`, a string, `true`, or `false`, which
+  fits that one value;
+- a range of two integers, `1..=5`, which fits both ends and every number
+  between them; the first end must not be above the second.
 
-Patterns are one level deep: `Some(Shape::Point)` is an error (match on the
-inner value inside the arm), and so are literal patterns, guards
-(`pattern if condition`), `a | b`, `..`, and `if let`. To look at a number,
-a `bool`, or a string, use `if`.
+Patterns nest: `Some(Shape::Circle(r))`, `Ok(Some(x))`,
+`Event::Click { x: 0, y }`. A name may appear only once in a pattern. A
+literal or range end must have the value's type and fit it (`300` against a
+`u8` is an error). A number with a fractional part cannot be matched with a
+pattern (use `if`), and a string literal can only be the whole pattern of a
+`match` on a string, never inside another pattern: for `Some("yes")`, name
+the value and compare it with `==` in the arm. A struct cannot be taken
+apart by a pattern (name it and look at its fields with `if`). Not in
+Varyk: guards (`pattern if condition`), `a | b`, `..`, and `@`.
 
-Every variant must have an arm, or the last arm must be `_` or a name; the
-error names a variant that is missing. `_` or a name anywhere but last is an
-error, since the arms after it could never run.
+Every value must fit some arm: for an enum, `Option`, or `Result`, every
+variant at every depth; for a `bool`, both values; and for a number or a
+string, a last arm `_ => ...` or a name, because Varyk counts them as
+having more values than any list of arms can name: `0..=255` on a `u8`
+still needs one, which is never counted as unreachable. The error names a
+value no arm fits, such as `Some(Shape::Point)` or
+`Event::Click { x: _, y: _ }`. An arm that can never run, because the
+arms above it already fit everything it fits, is an error too: `4` after
+`1..=5`, a variant repeated after an identical arm, or anything after `_`
+or a name.
+
+`if let` runs its block when a pattern fits and its `else`, which may be
+another `if` or `if let`, when it does not; like `if`, it is an expression,
+and the `else` may be left out when the block has no value. `while let`
+repeats its block while the pattern fits, looking at the value anew each
+round; `break` and `continue` work in it as in `while`:
+
+```varyk
+if let Some(user) = users.get(0) {
+    println!("{}", user.name);
+} else {
+    println!("nobody");
+}
+
+while let Some(task) = queue.pop() {
+    run(task);
+}
+```
+
+The value an `if let` or `while let` looks at follows every rule of a
+`match`'s, below, and so do the names its pattern makes, which exist only
+in its block.
 
 The names a pattern makes exist only in their arm, like a `let` inside a
 block: one that has the same name as an outer name hides it in the arm, and
@@ -511,10 +841,18 @@ first.
   for a number or `bool` is a copy. A name for anything else is another
   name for part of the stored value, with the rules of a `let` made from a
   field: while it is still used, the stored value cannot be changed or
-  given away (V0307), and it cannot be stored or returned (use `.clone()`
-  for text). An arm that uses no such name may change the stored value.
+  given away (V0307), and it cannot be stored or returned except as part of a parameter the function returns (see "Returning part of a parameter") (use
+  `.clone()` for text). An arm that uses no such name may change the stored value.
 - Matching a value made right there owns it: the names hold their own
-  values and can be given away, pushed, or returned.
+  values and can be given away, pushed, or returned. The exceptions are a
+  value holding, anywhere inside it, an enum that runs code when it is
+  thrown away (see "Rust enums"), which is only looked at, as if stored;
+  and a string, below.
+- Matching a string, stored or made right there, with or without string
+  literal arms, only looks at it: a name the pattern makes is borrowed
+  text, which can be read but not stored or returned except as part of a parameter the function returns (see "Returning part of a parameter"), and for a string
+  made right there, not kept past the `match` either. Copy it with
+  `.clone()` to keep it: `other => other.clone()`.
 
 None of the names a pattern makes can be changed. To change a copy, first
 make a changeable one: `let mut n = n;`; to change the stored value, change
@@ -523,6 +861,8 @@ it by its own name.
 So an `Option<Task>` kept in a `let` cannot give its `Task` away: `match`
 only looks inside it. Match on the call that made it instead:
 `match tasks.pop() { Some(task) => done.push(task), None => {} }`.
+When the stored value was made by a `match`, `if`, or block, move that
+into a function that returns it and match on a call of the function.
 
 A `match` used as a value follows the rule of `if`: when every arm gives
 something stored, the result is another name for it; when every arm gives a
@@ -531,24 +871,30 @@ wherever the value is only read in place, such as in a call or a
 `println!`; store it with `let` first.
 
 In the generated Rust, a stored value is matched by reference (`match
-&shape`), and a copied name is copied at the start of its arm with
-`let n = *n;`.
+&shape`), a string as a `&str` (`match name.as_str()`), and a copied name
+is copied at the start of its arm with `let n = *n;`.
 
 ## Loops
 
 `while` repeats while its condition is true. `for` goes over a range of
-integers or the elements of a `Vec`:
+integers, the elements of a `Vec`, or the items of a chain (see
+[Chains](#chains)):
 
 ```varyk
 for i in 0..n { }        // i takes 0, 1, ..., n - 1
+for i in 1..=n { }       // i takes 1, 2, ..., n
 for task in tasks { }    // every element of tasks, in order
+for word in text.split(" ") { }            // every piece of text
+for n in numbers.iter().filter(|n| n > limit) { }
 ```
 
-A range `a..b` counts from `a` up to, but not including, `b`. Both ends are
+A range `a..b` counts from `a` up to, but not including, `b`; `a..=b`
+counts up to and including `b`. Both ends are
 integers of one type, and a written number takes the other end's type, so
 `0..tasks.len()` counts in `usize`. Ranges exist only in the head of a
-`for`; `..=` is an error. Nothing else can be looped over: not a string,
-not an `Option`, not a range of anything but integers (V0200). `break` and
+`for`. Nothing else can be looped over: not a string,
+not an `Option`, not a range of anything but integers (V0200), and not a
+`HashMap`, whose rounds would need a key and a value together (V0001). `break` and
 `continue` work in `for` as in `while`. The loop variable exists only in
 the loop body, and is a new name each round.
 
@@ -566,10 +912,20 @@ value made right there is an error: store it with `let` first.
   go, loop over the positions instead: `for i in 0..v.len() { v[i] = 0; }`.
 - The loop variable is a copy when the elements are numbers or `bool`;
   otherwise it is another name for one element, with the rules of a `let`
-  made from an element: it cannot be stored or returned (use `.clone()` for
-  text).
+  made from an element: it cannot be stored or returned except as part of a parameter the function returns (see "Returning part of a parameter") (use
+  `.clone()` for text).
 - Looping over a value made right there owns it: the variable holds each
   element in turn and can be given away, pushed, or returned.
+
+- Looping over a chain binds one item each round, with the rules of its
+  kind: a borrowed item is another name for part of what the chain goes
+  over, a copy is a copy, an owned item is owned. The body cannot change or
+  give away anything the head reads (V0307): what the chain goes over, the
+  argument of `split`, and every name a closure of the head reads, numbers
+  and `bool`s included, so `for n in numbers.iter().filter(|n| n < limit)
+  { limit = limit + 1; }` is an error. To change one of them, `collect` the
+  chain first and loop over the `Vec`. After the loop they can change again,
+  even while a name that took the loop variable's value is still used.
 
 The loop variable can never be changed. To change a copy, first make a
 changeable one: `let mut n = n;`; to change the stored `Vec`, change it by
@@ -577,7 +933,7 @@ its own name, after the loop.
 
 In the generated Rust, a stored `Vec` is looped over by reference (`for x
 in &v`), and a copied element is copied at the start of the body with
-`let x = *x;`.
+`let x = *x;`; a chain is written as it is.
 
 ## Passing errors on
 
@@ -592,11 +948,23 @@ fn load(id: i32) -> Result<User, string> {
 }
 ```
 
+`o?` does the same for an `Option`: when `o` is `Some(v)`, `o?` is `v`;
+when it is `None`, the function returns `None` at once. It works only in a
+function that returns an `Option`, on an `Option`.
+
 Anything else is V0206: `?` in a function that does not return a `Result`
-(`main` never does, so use `?` in a helper and `match` on its result there),
-on a value that is not a `Result`, or on a `Result` whose error type is
-different; an error is never converted into another type. `?` on an
-`Option` comes in a later milestone; use `match`.
+or an `Option` (`main` never does, so use `?` in a helper and `match` on its
+result there), on an `Option` in a function that returns a `Result` or a
+`Result` in a function that returns an `Option` (the message names both
+types), on a value that is neither, or on a `Result` whose error type is
+different; an error is never converted into another type.
+
+What a `?` is expected to produce flows into its operand, so
+`let n: i32 = Ok(x)?;` and `let n: i32 = Some(x)?;` type without more
+annotation, and `Ok(x)?` alone takes the function's error type. `Err(e)?;`
+as a statement has no value type to take and is V0207: write
+`return Err(e);`. In the generated Rust, the type of a bare `Ok`, `Err`, or
+`None` under `?` is written out (`Ok::<i32, String>(x)?`).
 
 `?` can be used anywhere a value can: in a `let`, in an argument, in a
 `match` arm, in a loop, or as a statement of its own (`check(text)?;`).
@@ -617,8 +985,9 @@ println!("{} is {} years old", name, age);
 
 The number of `{}` must match the number of arguments. Write `{{` and `}}`
 to print `{` and `}`. Nothing may go inside the braces. The arguments must be
-numbers, `bool`, or strings; a struct, an enum, an `Option`, a `Result`, or a
-`Vec` cannot be printed whole.
+numbers, `bool`, or strings; a struct, an enum, an `Option`, a `Result`, a
+`Vec`, or a `HashMap` cannot be printed whole, even one that can be copied
+and compared.
 
 `format!` follows the same rules and, instead of printing, makes new text:
 `let line = format!("{} is {}", name, age);`. It is the way to join strings.
@@ -682,12 +1051,58 @@ belongs to the struct around it, even when that struct is your own. The same
 goes for a `let` name made from one of these, and for an element of a `Vec`,
 which belongs to the `Vec`. Such a value cannot be stored into a struct
 field or an element, put inside an enum value, `Some`, `Ok`, `Err`, or a
-`vec!`, passed to `push`, or returned from the function; the error says what
-to do instead. For example, `fn name(user: User) -> string { user.name }` is
-an error; for text, the fix is a copy, `user.name.clone()`.
+`vec!`, or passed to `push`; the error says what to do instead. For text,
+the fix is a copy: `user.name.clone()`.
+
+**Returning part of a parameter.** A function may return part of one of its
+parameters without copying it: every value it returns (its last value, and
+every `return`, each branch of an `if` or `match` counting on its own) is
+part of the same parameter, `self` included, and the function does not
+change that parameter.
+
+```varyk
+impl User {
+    fn display_name(self) -> string {
+        if self.nickname.is_empty() { self.name } else { self.nickname }
+    }
+}
+
+fn first(users: Vec<User>) -> User {
+    users[0]
+}
+```
+
+Nothing is written for it: Varyk works it out. The result of such a call is
+another name for part of the value passed in that position (the value a
+method is called on, for `display_name`), as a field is: `let n =
+user.display_name();` cannot be changed, cannot be kept anywhere that owns
+it (copy it with `.clone()`), and `user` cannot be changed or given away
+while `n` is still used (V0307). It can be looked at by `match`, `if let`,
+`while let`, and `for`, and have calls made on it. The value passed in that
+position must be stored, or be a string literal: `make_user().display_name()`
+is an error (V0001), since the new `User` would be gone at the end of the
+line; store it with `let` first. `s.trim()` works the same way.
+
+These are errors, each fixed by returning a copy (`.clone()` for text)
+instead: returning part of a parameter in one place and something new in
+another, a string literal included, or beside a `?`, which returns a new
+`None` or `Err` early (V0304); parts of two different
+parameters (V0308); part of a `let` of the function, or of a number or
+`bool` parameter or `for` variable, which the function gets as its own
+copy, since either ends when it returns (V0304); part of a `mut` parameter (V0304), since the caller could
+not even read what it passed while the result is used; and part of a
+parameter in a function that calls itself, directly or through other
+functions (V0304). A number or `bool` is always copied, so returning one is
+never part of anything. Varyk decides a head of a `match`, `if let`, or
+`while let` by how it is written, before it knows which calls return parts,
+so a field of such a call there (`match user.info().kind`) is an error
+(V0001); store the call's result with `let` first.
 
 For Rust readers: `user: User` becomes `user: &User`, `mut user: User`
-becomes `user: &mut User`, and the call sites get `&` and `&mut`. In Rust,
+becomes `user: &mut User`, and the call sites get `&` and `&mut`. A
+function returning part of a parameter returns `&str` or `&User`, with one
+lifetime written on that parameter and the return when Rust's elision would
+not pick it. In Rust,
 `mut name: T` means an owned parameter that can be rebound; Varyk uses `mut`
 for the mutable borrow instead, and no Varyk-declared parameter takes
 ownership of a string or struct. Copy types are passed by value.
@@ -706,46 +1121,72 @@ a parameter marked `mut string`, passed to a Rust function that takes a
 `String`, or written as a branch of an `if` or `match` whose other branches
 make new text (`if c { make() } else { "none" }`) is copied once, at the
 line where the literal is written. `format!` and `s.clone()` make new text,
-which a name holding it owns; `clone` is the one copy you write yourself,
+which a name holding it owns, and so do `to_uppercase`, `replace`, `join`,
+and `remove` on a `Vec<string>`; a name that `push_str` changes owns its
+text too. A name holding `trim()`, a piece `split` gives, or the text a function
+returns part of a parameter as, borrows it as a `&str`; so does a chain
+item a `map` gives as part of something. `split` itself copies nothing:
+each piece is part of the text it is called on. `clone` is the one copy you write
+yourself,
 and in the generated Rust it is `.clone()`, or `.to_string()` when `s` is a
 `&str`. Passing a name to a Varyk function never copies it. Nothing else
 copies a string's text behind your back. A string that is already owned
 moves instead, with no copy.
 
-## Not in milestone 3
+## Not in milestone 4
 
 These do not exist yet; where one can be written, it is an error that names
-what is not supported. They are left out of this milestone (the
-[roadmap](roadmap.md) lists what is scheduled): modules declared inside a
-`.rs` file; importing Rust tuple and unit structs; using what an imported
-Rust struct derives (`Clone`, `PartialEq`, `Debug`); a `.rs` signature naming a type declared in
-Varyk; importing a published Varyk library straight into Varyk code (reach
-it through a `.rs` module, like any crate); `pub(crate)` and `pub(super)`;
-`use` with braces or globs; re-exports
-(`pub use`) in either direction; settings taken from a Cargo workspace;
-custom target paths; reading `[features]`; sharing cargo's `target/`
-between `varyk build` and `cargo build`; `varyk init` into an existing
-project; and `varyk` commands for `cargo test`, `cargo doc`, and
-`cargo add`, which work unchanged through cargo once `init` has run. Still
-missing from milestone 2: enum variants with named fields; patterns inside
-patterns and literal patterns; `match` on numbers, `bool`, and strings;
-`..=`; `?` on an `Option`; any call on `Option` or `Result`; `is_empty`,
-`remove`, and `clear` on a `Vec`; and any call on a string but `len` and
-`clone`.
+what is not supported. They are left out because no program has needed
+them so far (the [roadmap](roadmap.md) lists what is scheduled): on a
+`Vec`, `first`, `last`, `clear`, `extend`, `truncate`, `dedup`, `reverse`,
+`swap`, and `sort_by`; on a chain, `enumerate`, `zip`, `rev`, `take`,
+`skip`, `fold`, `min`, `max`, and `position`; on a string, `ends_with`,
+`to_lowercase`, `chars`, `bytes`, `lines`, `find`, `trim_start`,
+`trim_end`, and `split_once`, and `char` as a type; on `Option` and
+`Result`, `is_none`, `map` on a `Result`, `and_then`, `unwrap_or_else`,
+`ok_or_else`, `unwrap_or_default`, and `as_ref`; on a `HashMap`, `remove`,
+`is_empty`, and `clear`; `HashSet`, `BTreeMap`, and `VecDeque`; a `HashMap`
+in a `.rs` signature (a facade returns a `Vec` or a struct); `iter()`,
+`keys()`, `values()`, `split()`, and `trim()` on a value made right there;
+`Box`; struct patterns on plain structs; tuples and tuple patterns, so no
+`for (k, v) in map`; struct field shorthand; a `main` that returns a
+`Result`; a function returning part of two parameters, or of a `mut`
+parameter; a borrowed return from a Rust signature whose lifetimes Rust's
+elision would not settle; and `Debug` with `{:?}`.
 
-These are left out by design: returning part of a value the function only
-borrows; closures and function types; iterators; `if let`, `while let`, and
-`loop`; guards, `|`, `..`, ranges, and `@` in patterns; ranges anywhere but
-the head of a `for`; `+` on strings (use `format!`); `as` outside `use`;
-tuples; `Self`; traits; derives of any kind, so `==` and `println!` stay
-errors on structs, enums, `Option`, `Result`, and `Vec`; `clone` on
-anything but a string; `HashMap`; `Box`; a `main` that returns a `Result`;
-a method that takes `self` by value, or any other way to write "give this
-away"; `impl` blocks for built-in types; a `use` of an enum variant;
-naming a crate from Varyk code (write a `.rs` facade instead: a Rust file
-of the package that wraps what the program needs from the crate in plain
-functions, as "Calling Rust" shows); and everything planned for later milestones, such
-as `varyk fmt`, a language server, and `async`.
+Also not yet, from the Rust side and the package side: modules declared
+inside a `.rs` file; importing Rust tuple and unit structs; a `.rs`
+signature naming a type declared in Varyk; importing a published Varyk
+library straight into Varyk code (reach it through a `.rs` module, like any
+crate); `pub(crate)` and `pub(super)`; `use` with braces or globs;
+re-exports (`pub use`) in either direction; settings taken from a Cargo
+workspace; custom target paths; reading `[features]`; sharing cargo's
+`target/` between `varyk build` and `cargo build`; `varyk init` into an
+existing project; and `varyk` commands for `cargo test`, `cargo doc`, and
+`cargo add`, which work unchanged through cargo once `init` has run.
+
+These are left out by design: closures as values (function types, and a
+closure in a `let`, a parameter, a return, or a field), `move`, a type on a
+closure's parameter, and a closure that changes a name from outside it;
+`for_each` (write a `for`); iterators as values of their own (a chain is
+finished where it is written); an `Option` holding part of a stored value
+as a value of its own (look inside `get` and `find` where they are made);
+indexing a `HashMap`; `loop`; guards, `|`, `..`, and `@` in patterns, and
+`let else`; ranges anywhere but the head of a `for`; `+` on strings (use
+`format!`); `Self`; `Copy` structs; traits, generics, and attributes;
+derives beyond `Clone` and `PartialEq`, so `println!` stays an error on
+structs, enums, `Option`, `Result`, `Vec`, and `HashMap`; a method that
+takes `self` by value, or any other way to write "give this away"; `impl`
+blocks for built-in types; a `use` of an enum variant; naming a crate from
+Varyk code (write a `.rs` facade instead: a Rust file of the package that
+wraps what the program needs from the crate in plain functions, as
+"Calling Rust" shows); and everything planned for later milestones, such
+as the batteries for services, `async`, `varyk fmt`, and a language server.
+
+`unwrap` and `expect` are never added, in this or any later milestone: a
+call that stops the program when a value is absent defeats the purpose of a
+language for services, and `match`, `if let`, `?`, and `unwrap_or` cover
+every use.
 
 Names are ASCII only for now (letters, digits, and `_`); string text can be
 any Unicode.
@@ -799,6 +1240,7 @@ the return type is one of these:
 | `&mut String` | a `mut string` |
 | `String` parameter | an owned `string`: a literal is copied, an owned string moves |
 | `String` return | `string` |
+| `&str` or `&S` return, where lifetime elision names the parameter it borrows from (below) | a borrowed return of that argument: `string`, or the struct or enum |
 | `S`, a struct or enum imported from a `.rs` file of the package (below) | that struct or enum, given away (moved) |
 | `Vec<T>`, `Option<T>`, `Result<T, E>` where `T` and `E` are in this table | the same Varyk type, given away (moved) |
 | `&T` or `&mut T` where `T` is one of the value types above but `String` | borrowed, or `mut` |
@@ -806,7 +1248,8 @@ the return type is one of these:
 
 Any other signature cannot be called: `&String` (take `&str` instead),
 generics, lifetimes, trait objects, `HashMap` and other `std` types,
-references in the return type (return an owned value such as `String`),
+references in the return type other than the ones just above (return an
+owned value such as `String`),
 `()` inside another type (`Result<(), String>`; use `bool` or a struct
 instead), and unknown types. Calling such a function is an error that shows its Rust
 signature and what to change. `unsafe fn`, `async fn`, `const fn`, trait
@@ -893,11 +1336,26 @@ Its fields follow the struct field rules, with the Rust `pub`:
 The `pub fn` items of `impl Matcher` blocks in the same file (any number of
 them) are its methods and associated functions, and `Self` means the
 struct. `&self` is Varyk's `self`, and `&mut self` is `mut self`: calling
-one needs a `let mut`. Parameters and returns follow the table. A method
-that takes `self` by value, returns a borrow such as `&str`, or has type
+one needs a `let mut`. Parameters and returns follow the table. A `&self`
+method that returns `&str` or `&S`, for an imported struct or enum `S`
+(`&Self` too), returns part of `self`, whatever its other parameters, and
+the result is an alias of the receiver, as a Varyk function's borrowed return
+is: it cannot be kept in a struct or an element. A `pub fn` that returns `&str` or `&S` and has exactly
+one reference parameter, a `&T` and not a `&mut T`, returns part of that
+argument the same way. These are the shapes Rust's lifetime elision resolves
+to one parameter, so a lifetime written anywhere in the signature, such as
+`fn pick<'a>(&self, other: &'a str) -> &'a str`, is not imported. Any other
+borrowed return (`&mut S`, a `&mut self` method, `Option<&T>`, `&[T]`,
+`&String`, a function with two reference parameters) cannot be called.
+A method that takes `self` by value or has type
 parameters cannot be called, and methods of trait implementations are not
-imported. Derives are ignored: a Rust struct that derives `Copy` is still
-given away when passed by value.
+imported. Of a Rust struct's or enum's `#[derive(..)]` lists, Varyk reads
+`Clone` and `PartialEq`, written as bare names, and nothing else: they let
+`.clone()` and `==` work on the type and on the Varyk types that hold it
+(see [Types](#types)). A hand-written `impl Clone` or `impl PartialEq` is
+not seen; `.clone()` or `==` on such a type is an error saying to derive
+the trait instead. Other derives are ignored: a Rust struct that derives
+`Copy` is still given away when passed by value.
 
 A tuple struct, a unit struct, a struct with type or lifetime parameters,
 a `#[repr(packed)]` struct (whose fields cannot be borrowed), or a struct
@@ -952,9 +1410,10 @@ or lifetime-parameterized enum is not imported at all; naming it is an
 error that says why, like a tuple or unit struct. Derives are ignored.
 
 When an enum, Rust or Varyk, has an `impl Drop` in one of the package's
-`.rs` files, Rust cannot move a payload out of it, so a `match` on a call
-that returns one only looks inside it, as a `match` on a stored value
-does: its bindings belong to the enum and cannot be kept (V0304) or
+`.rs` files, Rust cannot move a payload out of it, so a `match`, `if let`,
+or `while let` on a call that returns one, or returns an `Option`, a
+`Result`, or an enum holding one at any depth, only looks inside it, as a
+`match` on a stored value does: its bindings belong to the enum and cannot be kept (V0304) or
 changed; copy a `string` one with `.clone()` to keep or change it. Varyk looks for the `impl Drop` anywhere in
 a `.rs` file, inside modules and functions too, and when it cannot tell
 which enum one is for (a type renamed with `as` or `type`, `Drop` itself
@@ -1146,40 +1605,42 @@ Every error has a code. A code is never reused for a different meaning.
 
 | Code | Meaning |
 |---|---|
-| V0001 | a construct Varyk does not support yet; the message names it. Also an `if`, a block, or a field or element of a value made right there as the value a `match` looks at or a `for` goes over |
+| V0001 | a construct Varyk does not support yet; the message names it. Also an `if`, a block, or a field or element of a value made right there as the value a `match`, `if let`, or `while let` looks at or a `for` goes over, and a pattern taking a struct apart; a `for` over a `HashMap` (use `keys()` or `values()`); a `get` looked into on a value made right there (store it with `let` first), and so the value `trim` is called on, or the argument a function returns part of, made right there; a field of a call as such a head; a closure anywhere but as the argument of a call that takes one (the message names those calls), a type on a closure's parameter or `move`, and `return`, `break`, `continue`, or `?` inside a closure; `iter()`, `split()`, `keys()`, or `values()` on a value made right there (store it with `let` first) |
 | V0002 | unexpected token or malformed syntax |
 | V0003 | a bad escape in a string, or a string with no closing `"` |
 | V0010 | `&x` or `&mut x` written at a call; Varyk works out references itself |
-| V0011 | `&T` or `&mut T` written in a parameter type; write `name: T` or `mut name: T` |
+| V0011 | `&T` or `&mut T` written in a parameter type or a return type; write `name: T` or `mut name: T`, and `-> T` (`-> string` for `-> &str`) |
 | V0012 | lifetime syntax such as `<'a>` or `&'a T`; lifetimes are worked out by the compiler |
-| V0100 | unknown name, or a variant, method, or associated function the type does not have; for `Vec` and `string` the message lists their calls; for an imported struct, a note says when the `.rs` file has the method but Varyk does not import it (a trait method, `unsafe`, `const`, `async`, behind `#[cfg]`, or `pub(crate)` or another `pub(..)`), and likewise for a function or `pub use` name of a `.rs` module and for any method of an imported enum, which Varyk does not import yet; a path into an inline `mod` of a `.rs` file, whose items Varyk does not read, says so; also naming a variant of an opaque imported enum, saying why it is opaque |
-| V0101 | unknown type, or `Option`, `Result`, or `Vec` with the wrong number of types, or a Rust struct or enum Varyk does not import (a tuple or unit struct, one with type or lifetime parameters, a `#[repr(packed)]` struct or one with no fixed size, one behind `#[cfg]`, or one marked `pub(crate)` or another `pub(..)`), or a type a `pub use` of the `.rs` file brings in, saying why |
-| V0102 | unknown field |
-| V0103 | a name defined more than once (a method included, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
+| V0100 | unknown name, or a variant, method, or associated function the type does not have; for `Vec`, `string`, `Option`, `Result`, `HashMap`, and a chain the message lists their calls; for an imported struct, a note says when the `.rs` file has the method but Varyk does not import it (a trait method, `unsafe`, `const`, `async`, behind `#[cfg]`, or `pub(crate)` or another `pub(..)`), and likewise for a function or `pub use` name of a `.rs` module and for any method of an imported enum, which Varyk does not import yet; a path into an inline `mod` of a `.rs` file, whose items Varyk does not read, says so; also naming a variant of an opaque imported enum, saying why it is opaque; `.clone()` on a number or `bool`, which is copied on use |
+| V0101 | unknown type, or `Option`, `Result`, `Vec`, or `HashMap` with the wrong number of types, a `HashMap` key type that is not an integer type, `bool`, or `string`, or a Rust struct or enum Varyk does not import (a tuple or unit struct, one with type or lifetime parameters, a `#[repr(packed)]` struct or one with no fixed size, one behind `#[cfg]`, or one marked `pub(crate)` or another `pub(..)`), or a type a `pub use` of the `.rs` file brings in, saying why |
+| V0102 | unknown field, of a struct or of a variant with named fields, in a value or a pattern |
+| V0103 | a name defined more than once (a method included, a field of a variant, a field named twice in a value or a pattern, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
 | V0104 | a module file that is missing, present as both `.vr` and `.rs` or as both `shop.vr` and `shop/mod.vr`, unreadable, a `.rs` file that cannot be parsed as Rust, or named `main` or `lib` (or `bin` in the entry file), in any capitalization; a `.rs` file that uses a crate not in `[dependencies]` (or only in `[dev-dependencies]`, or any crate in a single file) in a `use` or `extern crate` item (a crate named only in a path, `other::f()`, is rustc's to report, at build), declares a module of its own, or uses `include!`, shown at that line of the `.rs` file |
 | V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see; a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub` |
 | V0106 | a missing or malformed `fn main()`, or `main` defined in a library's `src/lib.vr` |
 | V0107 | `String` or `str` written where `string` is meant |
 | V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change. Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path, and a type in a `.rs` file with a glob `use` or a macro that could define names |
-| V0109 | a struct or enum that contains itself, directly or through other structs, enums, `Option`, or `Result` |
+| V0109 | a struct or enum that contains itself, directly or through other structs, enums, `Option`, or `Result`; a `Vec` or `HashMap` breaks the cycle |
 | V0110 | a `use` naming a crate this compiler recognizes by name (`std`, `core`, `alloc`, and in a package every crate in `[dependencies]`); call a crate from a `.rs` module in the package instead |
 | V0111 | a path Varyk cannot follow: `super` in the entry file, a `use` ending at an enum variant or at a type's method or associated function, a `use` whose leading name, or whose only name (`use shop;`), is a module declared elsewhere in the package (write it from `crate::` or `super::`), or a `use` whose leading name another `use` made |
-| V0200 | type mismatch, including `+` on strings (use `format!`), another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type |
-| V0201 | wrong number of arguments, or of values in an enum value |
+| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool` |
+| V0201 | wrong number of arguments, or of values in an enum value; a variant value with named fields that leaves one out, or with the wrong kind of brackets; a closure with more or fewer than one parameter |
 | V0202 | `println!` or `format!` with the wrong number of `{}`, or something other than `{}` in braces |
-| V0203 | `{}`, `==`, or `!=` used on a struct, an enum, `Option`, `Result`, or `Vec` |
-| V0204 | a `match` that does not handle every variant; the message names one it misses |
-| V0205 | a pattern that does not fit the value: a variant of another type, the wrong number of names in a variant, `_` or a name that is not the last arm, or a `match` on something that is not an enum, `Option`, or `Result` |
-| V0206 | `?` in a function that does not return a `Result`, or on a value that is not a `Result` with the function's error type |
-| V0207 | a `None`, `Vec::new()`, empty `vec![]`, `Ok`, or `Err` whose type cannot be worked out where it is written; write the type in a `let` |
+| V0203 | `{}` used on anything but a number, `bool`, or string; `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file |
+| V0204 | a `match` that does not handle every value: a variant at any depth, a `bool` value, or, on a number or a string, the catch-all it always needs; the message names a value shape it misses |
+| V0205 | a pattern that does not fit the value: a variant of another type, the wrong number of positions in a variant, a variant pattern leaving out a named field, a literal or range of another type or not fitting it, a range whose ends are reversed, a float literal, or a string literal inside another pattern; an arm that can never run, such as one after `_` or a name; or a `match`, `if let`, or `while let` on something that is not an enum, `Option`, `Result`, number, `bool`, or string |
+| V0206 | `?` in a function that does not return a `Result` or an `Option`, on a `Result` in a function returning an `Option` or the reverse, or on a value that is not a `Result` with the function's error type |
+| V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, or `parse()` whose type cannot be worked out where it is written, `Err(e)?;`, `text.parse().ok_or(e)?`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
+| V0208 | a value that must be used where it is made: an `Option` from `get`, or from `find` on a chain of borrowed items, holding part of a stored value, stored in a `let`, passed, returned, used with `?`, given any method, or named whole by a pattern (look inside it with `match` or `if let`); an unfinished chain anywhere but as the value the next call of the chain is made on or the head of a `for` (finish the chain there) |
 | V0300 | changing a parameter that was declared without `mut`, by assigning to it or calling `push` or `pop` on it |
-| V0301 | changing a `let` name that was declared without `mut`, or a name a `match` pattern or a `for` made, by assigning to it or calling `push` or `pop` on it |
+| V0301 | changing a `let` name that was declared without `mut`, or a name a `match` pattern or a `for` made, by assigning to it or calling `push` or `pop` on it; also changing, inside a closure, a name from outside it or the closure's parameter |
 | V0302 | a `let` name without `mut` passed to a `mut` parameter or used to call a `mut self` method |
-| V0303 | a parameter without `mut`, or a name a `match` pattern or a `for` made, passed to a `mut` parameter or used to call a `mut self` method |
-| V0304 | a value the function only borrows, stored in a struct, an element, an enum value, `Some`, `Ok`, `Err`, or a `vec!`, passed to `push`, used with `?`, or returned; also a binding of a `match` on an enum that runs code when it is thrown away (an `impl Drop`), kept or given away; for text the fix is `.clone()` |
+| V0303 | a parameter without `mut`, or a name a `match` pattern or a `for` made, passed to a `mut` parameter or used to call a `mut self` method; also, inside a closure, a name from outside it or the closure's parameter so passed |
+| V0304 | a value the function only borrows, stored in a struct, an element, an enum value, `Some`, `Ok`, `Err`, or a `vec!`, passed to `push`, used with `?`, or returned; a stored `Option` or `Result` with more than numbers and `bool`s inside, used up by `unwrap_or`, `ok_or`, or `ok`; returns that mix part of a parameter with something new, or that are part of a `let` of the function, of a number or `bool` parameter or `for` variable, of a `mut` parameter, or of a parameter of a function that calls itself; also a binding of a `match` on an enum that runs code when it is thrown away (an `impl Drop`), kept or given away; a name from outside a closure kept inside it, or given by a closure of `map` or `map_err`, as is part of its parameter; `collect` on a chain of borrowed items (copy them with `.map(\|w\| w.clone())`); the item a closure of `filter`, `any`, `all`, or `find` looks at, kept or given away; a chain's `map` closure giving part of an owned item, or something new beside a part; for text the fix is `.clone()` |
 | V0305 | a value used after it was given away |
 | V0306 | a later argument changes or gives away a value that an earlier argument of the same call still borrows, or uses the value a method is called on while the method may change it, as in `v.push(v.len())`, or an index changes the `Vec` it indexes, as in `v[g(v)]` with `g` taking `mut v` |
-| V0307 | a value changed or given away while another name for part of it is still used later, or inside a `for` that goes over it |
+| V0307 | a value changed or given away while another name for part of it is still used later (a name bound inside a looked-into `get` or `find`, or the result of a call returning part of it, included), or inside a `for` that goes over it or whose head reads it (the argument of `split`, or a name a closure of a chain in the head reads) |
+| V0308 | a function returning part of one parameter in one place and part of another in another, or a closure giving parts of two names (a chain's `map` closure giving part of its item and part of a name from outside included); return a copy in one of them (in both, for a chain's `map`), or make two functions |
 | V0400 | a package whose `Cargo.toml` does not say `edition = "2024"` |
 | V0401 | something in `Cargo.toml` Varyk does not support yet: a key outside the fixed set `check` reads, a `src/bin/`, `examples/`, `tests/`, or `benches/` directory or the root file of the other kind (`src/lib.rs` beside `src/main.vr`), which cargo would build as further targets, a setting taken from a Cargo workspace (`workspace = true`), dependencies for only some platforms (`[target.'cfg(..)'.dependencies]`), `links`, which needs a build script the published crate does not carry, a custom `build` script, `[lints]`, or `[patch]` or `[replace]`, in the package or in the root manifest of an enclosing workspace |
 | V0402 | a Cargo target table (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`), not supported yet: a package is one program from `src/main.vr` or one library from `src/lib.vr`, found by cargo's defaults |

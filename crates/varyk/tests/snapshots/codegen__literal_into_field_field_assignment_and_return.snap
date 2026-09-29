@@ -3,6 +3,7 @@ source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"struct Label {\\n    text: string,\\n}\\n\\nfn tail() -> string {\\n    \\\"tail\\\"\\n}\\n\\nfn early(flag: bool) -> string {\\n    if flag {\\n        return \\\"early\\\";\\n    }\\n    \\\"late\\\"\\n}\\n\\nfn relabel(mut label: Label) {\\n    label.text = \\\"b\\\";\\n}\\n\\nfn main() {\\n    let mut label = Label { text: \\\"a\\\" };\\n    relabel(label);\\n    label.text = \\\"c\\\";\\n    println!(\\\"{} {} {}\\\", label.text, tail(), early(true));\\n}\\n\")"
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Label {
     text: String,
 }

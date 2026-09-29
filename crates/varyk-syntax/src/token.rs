@@ -36,6 +36,9 @@ pub enum TokenKind {
     SuperKw,
     /// `use`, spec 3.3.
     UseKw,
+    /// `as`: a cast, `expr as T` (M4 spec 2.9), and the alias in
+    /// `use path as name;` (spec 3.3).
+    As,
 
     /// Any other Rust keyword or reserved word, carrying its text.
     ReservedKeyword(String),
@@ -69,6 +72,8 @@ pub enum TokenKind {
     Bang,
     AmpAmp,
     PipePipe,
+    /// A lone `|`, around a closure's parameters (M4 spec 2.2).
+    Pipe,
     Amp,
     ColonColon,
     Colon,
@@ -76,6 +81,8 @@ pub enum TokenKind {
     Comma,
     Dot,
     DotDot,
+    /// `..=`, an inclusive range (M4 spec 2.5, 2.11).
+    DotDotEq,
     LParen,
     RParen,
     LBrace,

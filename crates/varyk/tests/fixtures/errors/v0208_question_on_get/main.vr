@@ -1,0 +1,8 @@
+fn second(lines: Vec<string>) -> Option<string> {
+    let line = lines.get(1)?;
+    Some(line.clone())
+}
+
+fn main() {
+    println!("{}", second(vec!["a", "b"]).is_some());
+}

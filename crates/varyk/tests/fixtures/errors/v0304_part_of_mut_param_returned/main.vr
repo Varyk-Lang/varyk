@@ -1,0 +1,14 @@
+struct Counter {
+    label: string,
+    count: i32,
+}
+
+fn bump(mut counter: Counter) -> string {
+    counter.count = counter.count + 1;
+    counter.label
+}
+
+fn main() {
+    let mut counter = Counter { label: "clicks", count: 0 };
+    println!("{}", bump(counter));
+}

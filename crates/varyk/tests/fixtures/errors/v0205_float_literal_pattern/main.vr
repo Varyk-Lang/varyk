@@ -1,0 +1,10 @@
+fn half(x: f64) -> bool {
+    match x {
+        0.5 => true,
+        _ => false,
+    }
+}
+
+fn main() {
+    println!("{}", half(0.5));
+}

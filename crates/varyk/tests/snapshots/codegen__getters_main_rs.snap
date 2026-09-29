@@ -1,0 +1,58 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct User {
+    name: String,
+    nickname: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+impl User {
+    fn new(name: &str, nickname: &str) -> User {
+        User { name: name.to_string(), nickname: nickname.to_string() }
+    }
+
+    fn display_name(&self) -> &str {
+        if self.nickname.is_empty() {
+            &self.name
+        } else {
+            &self.nickname
+        }
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn trimmed(text: &str) -> &str {
+    text.trim()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn first(users: &Vec<User>) -> &User {
+    &users[0usize]
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn name_unless<'a>(user: &'a User, hidden: &str) -> &'a str {
+    if user.name == hidden {
+        &user.nickname
+    } else {
+        &user.name
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let user = User::new("Alice", "");
+    let friend = User::new("Robert", "Bob");
+    ::std::println!("{}", User::display_name(&user));
+    ::std::println!("{}", User::display_name(&friend));
+    let padded = "  hello  ";
+    ::std::println!("[{}]", trimmed(padded));
+    let users: Vec<User> = ::std::vec![user, friend];
+    let leader = first(&users);
+    ::std::println!("{}", leader.name);
+    ::std::println!("[{}]", name_unless(leader, "Alice"));
+}

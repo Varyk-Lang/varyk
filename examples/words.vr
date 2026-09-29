@@ -1,0 +1,25 @@
+// expected output:
+// and 1
+// cat 2
+// dog 1
+// ran 1
+// saw 1
+// the 3
+// 6 distinct words
+
+fn main() {
+    let text = "the cat saw the dog and the cat ran";
+    let mut counts: HashMap<string, i32> = HashMap::new();
+    for word in text.split(" ") {
+        let n = counts.get(word).unwrap_or(0) + 1;
+        counts.insert(word.clone(), n);
+    }
+    let mut words: Vec<string> = counts.keys().map(|w| w.clone()).collect();
+    words.sort();
+    for word in words {
+        if let Some(n) = counts.get(word) {
+            println!("{} {}", word, n);
+        }
+    }
+    println!("{} distinct words", counts.len());
+}

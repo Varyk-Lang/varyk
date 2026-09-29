@@ -1,0 +1,14 @@
+struct Task {
+    done: bool,
+}
+
+fn finished(task: Option<Task>) -> bool {
+    match task {
+        Some(Task { done }) => done,
+        None => false,
+    }
+}
+
+fn main() {
+    println!("{}", finished(None));
+}

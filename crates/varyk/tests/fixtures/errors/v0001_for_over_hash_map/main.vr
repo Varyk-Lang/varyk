@@ -1,0 +1,7 @@
+fn main() {
+    let mut ages: HashMap<string, i32> = HashMap::new();
+    ages.insert("ann", 31);
+    for name in ages {
+        println!("{}", name);
+    }
+}

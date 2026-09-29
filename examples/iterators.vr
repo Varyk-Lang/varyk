@@ -1,0 +1,22 @@
+// expected output:
+// 55
+// 3
+// true
+// 2 4 6
+// apple, banana, cherry
+// 3
+
+fn main() {
+    let numbers = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    println!("{}", numbers.iter().sum());
+    println!("{}", numbers.iter().filter(|n| n % 3 == 0).count());
+    println!("{}", numbers.iter().any(|n| n > 9));
+    let doubled: Vec<string> = numbers.iter().filter(|n| n < 4).map(|n| format!("{}", n * 2)).collect();
+    println!("{}", doubled.join(" "));
+    let names = vec!["cherry", "apple", "banana"];
+    let mut sorted: Vec<string> = names.iter().map(|n| n.clone()).collect();
+    sorted.sort();
+    println!("{}", sorted.join(", "));
+    let text = "one two three";
+    println!("{}", text.split(" ").count());
+}

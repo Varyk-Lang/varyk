@@ -1,0 +1,17 @@
+struct User {
+    name: string,
+}
+
+impl User {
+    fn name_ref(self) -> string {
+        self.name
+    }
+}
+
+fn make() -> User {
+    User { name: "Ann" }
+}
+
+fn main() {
+    println!("{}", make().name_ref());
+}

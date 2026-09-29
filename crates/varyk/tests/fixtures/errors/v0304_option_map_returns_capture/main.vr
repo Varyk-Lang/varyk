@@ -1,0 +1,6 @@
+fn main() {
+    let fallback = "guest".to_uppercase();
+    let id: Option<i32> = Some(7);
+    let name = id.map(|n| fallback);
+    println!("{}", name.unwrap_or("nobody"));
+}

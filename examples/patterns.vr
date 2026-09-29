@@ -1,0 +1,73 @@
+// expected output:
+// key a
+// click at the origin
+// click at 3, 4
+// quit
+// A B lower
+// true false
+// first click at x = 0
+// 3
+// 2
+// 1
+// quit
+
+enum Event {
+    Click { x: i32, y: i32 },
+    Key(string),
+    Quit,
+}
+
+fn describe(event: Event) -> string {
+    match event {
+        Event::Click { x: 0, y: 0 } => "click at the origin",
+        Event::Click { x, y } => format!("click at {}, {}", x, y),
+        Event::Key(key) => format!("key {}", key),
+        Event::Quit => "quit",
+    }
+}
+
+fn grade(score: i32) -> string {
+    match score {
+        90..=100 => "A",
+        80..=89 => "B",
+        _ => "lower",
+    }
+}
+
+fn is_yes(answer: string) -> bool {
+    match answer {
+        "y" => true,
+        "yes" => true,
+        _ => false,
+    }
+}
+
+fn first_click(events: Vec<Event>) -> Option<i32> {
+    for event in events {
+        if let Event::Click { x, y: _ } = event {
+            return Some(x);
+        }
+    }
+    None
+}
+
+fn main() {
+    let events = vec![Event::Key("a"), Event::Click { x: 0, y: 0 }, Event::Click { x: 3, y: 4 }, Event::Quit];
+    for event in events {
+        println!("{}", describe(event));
+    }
+    println!("{} {} {}", grade(95), grade(85), grade(12));
+    println!("{} {}", is_yes("yes"), is_yes("no"));
+    match first_click(events) {
+        Some(x) => println!("first click at x = {}", x),
+        None => println!("no clicks"),
+    }
+    let mut stack = vec![1, 2, 3];
+    while let Some(top) = stack.pop() {
+        println!("{}", top);
+    }
+    let last = Some(Event::Quit);
+    if let Some(Event::Quit) = last {
+        println!("quit");
+    }
+}

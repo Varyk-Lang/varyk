@@ -1,0 +1,46 @@
+// expected output:
+// Alice
+// Bob
+// [hello]
+// Alice
+// []
+
+struct User {
+    name: string,
+    nickname: string,
+}
+
+impl User {
+    fn new(name: string, nickname: string) -> User {
+        User { name: name.clone(), nickname: nickname.clone() }
+    }
+
+    fn display_name(self) -> string {
+        if self.nickname.is_empty() { self.name } else { self.nickname }
+    }
+}
+
+fn trimmed(text: string) -> string {
+    text.trim()
+}
+
+fn first(users: Vec<User>) -> User {
+    users[0]
+}
+
+fn name_unless(user: User, hidden: string) -> string {
+    if user.name == hidden { user.nickname } else { user.name }
+}
+
+fn main() {
+    let user = User::new("Alice", "");
+    let friend = User::new("Robert", "Bob");
+    println!("{}", user.display_name());
+    println!("{}", friend.display_name());
+    let padded = "  hello  ";
+    println!("[{}]", trimmed(padded));
+    let users = vec![user, friend];
+    let leader = first(users);
+    println!("{}", leader.name);
+    println!("[{}]", name_unless(leader, "Alice"));
+}

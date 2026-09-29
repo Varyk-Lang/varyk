@@ -3,12 +3,14 @@ source: crates/varyk/tests/codegen.rs
 expression: main
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Task {
     title: String,
     done: bool,
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Board {
     tasks: Vec<Task>,
 }

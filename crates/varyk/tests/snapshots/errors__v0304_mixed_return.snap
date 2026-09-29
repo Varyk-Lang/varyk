@@ -1,0 +1,16 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: this function returns part of `self` here and something new elsewhere, so this cannot be returned as it is
+ --> crates/varyk/tests/fixtures/errors/v0304_mixed_return/main.vr:8:40
+  |
+8 |         if self.done { "done" } else { self.title }
+  |                        ------          ^^^^^^^^^^ this function returns part of `self` here and something new elsewhere, so this cannot be returned as it is
+  |                        |
+  |                        this return is new
+  |
+  = note: a string literal a function returns is new text, as if copied
+  = note: every return must be new, or every return part of the same parameter; return a copy instead, with `.clone()`
+  = note: in Rust terms, a function returns either an owned value or a reference, not one or the other
+help: insert `.clone()` after `title`

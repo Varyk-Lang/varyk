@@ -1,0 +1,13 @@
+struct User {
+    name: string,
+}
+
+fn either(a: User, b: User, first: bool) -> string {
+    if first { a.name } else { b.name }
+}
+
+fn main() {
+    let a = User { name: "Ann" };
+    let b = User { name: "Bo" };
+    println!("{}", either(a, b, true));
+}

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: a range exists only in the head of a `for` loop
+ --> crates/varyk/tests/fixtures/errors/v0001_inclusive_range_outside_for/main.vr:2:18
+  |
+2 |     let digits = 0..=9;
+  |                  ^^^^ a range exists only in the head of a `for` loop

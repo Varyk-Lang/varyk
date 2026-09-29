@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0204]: this `match` does not handle every number; end it with a catch-all arm, `_ => ...`
+ --> crates/varyk/tests/fixtures/errors/v0204_number_without_catch_all/main.vr:2:5
+  |
+2 |     match n {
+  |     ^^^^^^^ this `match` does not handle every number; end it with a catch-all arm, `_ => ...`
+  |
+  = note: Varyk counts every number and every string as having more values than arms can list, so a `match` on one always ends with a catch-all; in Rust terms, the patterns are not exhaustive

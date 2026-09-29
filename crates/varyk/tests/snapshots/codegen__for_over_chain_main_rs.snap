@@ -1,0 +1,34 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn greet(name: &str) {
+    ::std::println!("hi {}", name);
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let text = "ann bo";
+    let sep = " ";
+    for w in text.split(sep) {
+        greet(w);
+    }
+    let numbers: Vec<i32> = ::std::vec![1, 5, 9];
+    let limit = 4;
+    for n in numbers.iter().copied().filter(|n| {
+        let n = *n;
+        n > limit
+    }) {
+        ::std::println!("{}", n);
+    }
+    let names: Vec<String> = ::std::vec!["ann".to_string(), "bo".to_string()];
+    let mut best = "";
+    for w in names.iter().filter(|w| {
+        let w = *w;
+        w.len() > 2usize
+    }) {
+        best = w.as_str();
+    }
+    greet(best);
+}

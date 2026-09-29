@@ -1,13 +1,13 @@
 //! Expression parsing: a Pratt parser using Rust's binary-operator
-//! precedence, plus the call/field/path postfix chain, struct literals,
-//! blocks, `if`, and the `println!` intrinsic.
+//! precedence and `as`, plus the call/field/path postfix chain, struct
+//! literals, blocks, `if` and `if let`, closures, and the `println!`
+//! intrinsic.
 
 use super::Parser;
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, Ident, MatchArm, Path, PathStart, Pattern, SubPattern,
-    UnaryOp, VariantPattern,
+    BinaryOp, Block, Expr, ExprKind, Ident, MatchArm, Path, PathStart, TypeExpr, UnaryOp,
 };
-use crate::error::{V0001, V0002};
+use crate::error::{FixIt, V0001, V0002};
 use crate::span::Span;
 use crate::token::TokenKind;
 
@@ -40,20 +40,25 @@ fn binary_op(kind: &TokenKind) -> Option<(BinaryOp, u8, u8)> {
 /// Varyk) does not allow.
 const COMPARISON_BP: u8 = 5;
 
+/// The binding power of `as` (M4 spec 2.9): tighter than `*`, looser than
+/// a unary operator, as in Rust, so `-x as i64 * 2` is
+/// `((-x) as i64) * 2`.
+const CAST_BP: u8 = 11;
+
 /// A dotted chain as written: its keyword prefix, its plain segments
 /// (at least one), the span of its first token (the keyword, or the first
 /// segment), and the span of the whole chain.
-struct DottedPath {
-    leading: PathStart,
-    segments: Vec<Ident>,
-    start: Span,
-    span: Span,
+pub(super) struct DottedPath {
+    pub(super) leading: PathStart,
+    pub(super) segments: Vec<Ident>,
+    pub(super) start: Span,
+    pub(super) span: Span,
 }
 
 impl<'a> Parser<'a> {
     /// Parses one expression, stopping at the first `V0002`. The error
     /// carries no data: every diagnostic, with its span and message, is
-    /// already recorded in [`Parser::errors`]. A `..`/`..=` immediately
+    /// already recorded in [`Parser::errors`]. A `..` or `..=` immediately
     /// following the expression is always `V0001` here: a range exists
     /// only in the head of a `for` loop
     /// (`parser::stmt::Parser::parse_for_head`, which calls
@@ -72,22 +77,11 @@ impl<'a> Parser<'a> {
     /// directly inside a `for` head's own parentheses, so the message
     /// names them instead of claiming the range is not in the head at all.
     fn reject_stray_range_in(&mut self, lhs: Expr, in_for_head_parens: bool) -> Result<Expr, ()> {
-        if self.peek() != Some(&TokenKind::DotDot) {
+        if !matches!(self.peek(), Some(TokenKind::DotDot | TokenKind::DotDotEq)) {
             return Ok(lhs);
         }
         let dotdot_span = self.current_span();
         self.bump();
-        if self.peek() == Some(&TokenKind::Eq) {
-            let eq_span = self.current_span();
-            self.bump();
-            let span = self.span_from(dotdot_span, eq_span);
-            self.push_error(
-                V0001,
-                span,
-                "`..=` is not supported in Varyk yet; milestone 4 adds inclusive ranges",
-            );
-            return Err(());
-        }
         let span = self.span_from(lhs.span, dotdot_span);
         let message = if in_for_head_parens {
             "a range exists only in the head of a `for` loop; drop the parentheses around it"
@@ -99,16 +93,26 @@ impl<'a> Parser<'a> {
     }
 
     /// Pratt-parses a binary expression: everything at binding power at
-    /// least `min_bp`. Comparisons are non-associative: once one has been
-    /// parsed at this level, seeing another comparison operator right
-    /// after is `V0002`, not left-associative chaining. Called directly
-    /// (bypassing [`Parser::parse_expr`]'s stray-range check) by
-    /// `parser::stmt::Parser::parse_for_head` to parse a range's
+    /// least `min_bp`, `as` included. Comparisons are non-associative: once
+    /// one has been parsed at this level, seeing another comparison
+    /// operator right after is `V0002`, not left-associative chaining.
+    /// Called directly (bypassing [`Parser::parse_expr`]'s stray-range
+    /// check) by `parser::stmt::Parser::parse_for_head` to parse a range's
     /// endpoints.
     pub(super) fn parse_binary(&mut self, min_bp: u8) -> Result<Expr, ()> {
         let mut lhs = self.parse_unary()?;
         let mut last_was_comparison = false;
-        while let Some((op, l_bp, r_bp)) = self.peek().and_then(binary_op) {
+        loop {
+            if self.peek() == Some(&TokenKind::As) {
+                if CAST_BP < min_bp {
+                    break;
+                }
+                lhs = self.parse_cast(lhs)?;
+                continue;
+            }
+            let Some((op, l_bp, r_bp)) = self.peek().and_then(binary_op) else {
+                break;
+            };
             if l_bp < min_bp {
                 break;
             }
@@ -138,6 +142,29 @@ impl<'a> Parser<'a> {
             last_was_comparison = l_bp == COMPARISON_BP;
         }
         Ok(lhs)
+    }
+
+    /// `operand as T` (M4 spec 2.9), at `as`. The type is a plain name, with
+    /// no path and no generic arguments, so a `<` after it stays a
+    /// comparison: `x as i32 < n`.
+    fn parse_cast(&mut self, operand: Expr) -> Result<Expr, ()> {
+        self.bump(); // `as`
+        let name = self.expect_identifier("a type name after `as`")?;
+        let span = self.span_from(operand.span, name.span);
+        let ty = TypeExpr {
+            path: None,
+            span: name.span,
+            name,
+            args: Vec::new(),
+        };
+        Ok(Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(operand),
+                ty,
+                span,
+            },
+            span,
+        })
     }
 
     /// At an arithmetic operator immediately followed by `=` (`x += 1`),
@@ -370,6 +397,8 @@ impl<'a> Parser<'a> {
 
             Some(TokenKind::If) => self.parse_if(),
 
+            Some(TokenKind::Pipe | TokenKind::PipePipe) => self.parse_closure(),
+
             Some(TokenKind::Match) => self.parse_match(),
 
             Some(TokenKind::LBracket) => {
@@ -390,24 +419,13 @@ impl<'a> Parser<'a> {
                 Err(())
             }
 
-            // A range with no start (`..5`): still a range, so it gets the
-            // same "only in a `for` head" diagnostic as a stray `a..b`
-            // (`Parser::reject_stray_range`), rather than falling through
-            // to the generic "expected an expression".
-            Some(TokenKind::DotDot) => {
+            // A range with no start (`..5`, `..=5`): still a range, so it
+            // gets the same "only in a `for` head" diagnostic as a stray
+            // `a..b` (`Parser::reject_stray_range`), rather than falling
+            // through to the generic "expected an expression".
+            Some(TokenKind::DotDot | TokenKind::DotDotEq) => {
                 let dotdot_span = self.current_span();
                 self.bump();
-                if self.peek() == Some(&TokenKind::Eq) {
-                    let eq_span = self.current_span();
-                    self.bump();
-                    let span = self.span_from(dotdot_span, eq_span);
-                    self.push_error(
-                        V0001,
-                        span,
-                        "`..=` is not supported in Varyk yet; milestone 4 adds inclusive ranges",
-                    );
-                    return Err(());
-                }
                 self.push_error(
                     V0001,
                     dotdot_span,
@@ -423,6 +441,20 @@ impl<'a> Parser<'a> {
                     kind: ExprKind::Block(block),
                     span,
                 })
+            }
+
+            Some(TokenKind::ReservedKeyword(word))
+                if word == "move"
+                    && matches!(self.peek_at(1), Some(TokenKind::Pipe | TokenKind::PipePipe)) =>
+            {
+                let span = self.current_span();
+                self.bump();
+                self.push_error(
+                    V0001,
+                    span,
+                    "`move` is not supported in Varyk; write the closure without it",
+                );
+                self.parse_closure()
             }
 
             Some(TokenKind::ReservedKeyword(word)) => {
@@ -454,6 +486,53 @@ impl<'a> Parser<'a> {
                 Err(())
             }
         }
+    }
+
+    /// `|params| body` or `|| body` (M4 spec 2.2), at the opening `|` or
+    /// `||`. Any number of untyped parameters parses; the checker allows
+    /// exactly one. A typed parameter (`|x: i32|`) is `V0001` with a
+    /// fix-it dropping the type, and parsing goes on. The body is one
+    /// expression, a block included.
+    fn parse_closure(&mut self) -> Result<Expr, ()> {
+        let open = self.bump().expect("caller confirmed `|` or `||`");
+        let mut params = Vec::new();
+        if open.kind == TokenKind::Pipe {
+            while self.peek() != Some(&TokenKind::Pipe) {
+                let param = self.expect_identifier("a closure parameter name")?;
+                if self.bump_if(&TokenKind::Colon) {
+                    let ty = self.parse_type()?;
+                    let span = self.span_from(param.span, ty.span);
+                    self.push_error_with_fix_it(
+                        V0001,
+                        span,
+                        format!(
+                            "a closure's parameter has no type in Varyk; write `|{}|`, and it \
+                             takes the type the call gives it",
+                            param.name
+                        ),
+                        FixIt {
+                            span,
+                            replacement: param.name.clone(),
+                        },
+                    );
+                }
+                params.push(param);
+                if !self.bump_if(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(TokenKind::Pipe, "`|` after the closure's parameters")?;
+        }
+        let body = self.parse_expr()?;
+        let span = self.span_from(open.span, body.span);
+        Ok(Expr {
+            kind: ExprKind::Closure {
+                params,
+                body: Box::new(body),
+                span,
+            },
+            span,
+        })
     }
 
     fn parse_literal(&mut self) -> Expr {
@@ -605,7 +684,7 @@ impl<'a> Parser<'a> {
     /// by expression paths (`parse_path_or_struct_lit`) and variant
     /// patterns (`parse_pattern`), which chase the same `name`,
     /// `module::name`, `module::Type::name`, ... shape (spec 2.5, 2.10).
-    fn parse_dotted_path(&mut self, what: &str) -> Result<DottedPath, ()> {
+    pub(super) fn parse_dotted_path(&mut self, what: &str) -> Result<DottedPath, ()> {
         let start = self.current_span();
         let leading = self.take_path_start();
         let mut segments = vec![self.expect_identifier(what)?];
@@ -628,7 +707,7 @@ impl<'a> Parser<'a> {
     /// 2.10, 3.1). Shared by expression paths, struct literals, and variant
     /// patterns, which all read a plain name (no `Path`) the same way and
     /// differ only in what the final name means.
-    fn path_and_name(&self, dotted: DottedPath) -> (Option<Path>, Ident) {
+    pub(super) fn path_and_name(&self, dotted: DottedPath) -> (Option<Path>, Ident) {
         let DottedPath {
             leading,
             mut segments,
@@ -696,23 +775,22 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `if cond { ... }` with an optional `else { ... }` or `else if ...`.
-    /// The condition is parsed in condition position so `if a == b { }`
-    /// parses as a comparison followed by an empty block, not a struct
-    /// literal named `b`.
+    /// `if cond { ... }` or `if let pattern = value { ... }` (M4 spec
+    /// 2.4), with an optional `else { ... }`, `else if ...`, or
+    /// `else if let ...`. The condition, or the value, is parsed in
+    /// condition position so `if a == b { }` parses as a comparison
+    /// followed by an empty block, not a struct literal named `b`.
     fn parse_if(&mut self) -> Result<Expr, ()> {
         let if_token = self.bump().expect("peek confirmed `if`");
 
-        if self.peek() == Some(&TokenKind::Let) {
-            let let_token = self.bump().expect("peek confirmed `let`");
-            let span = self.span_from(if_token.span, let_token.span);
-            self.push_error(
-                V0001,
-                span,
-                "`if let` is not supported in Varyk; use `match` instead",
-            );
-            return Err(());
-        }
+        let pattern = if self.bump_if(&TokenKind::Let) {
+            let pattern = self.parse_pattern()?;
+            self.reject_alternatives()?;
+            self.expect(TokenKind::Eq, "`=` after the pattern of `if let`")?;
+            Some(pattern)
+        } else {
+            None
+        };
 
         let was_in_condition = self.in_condition;
         self.in_condition = true;
@@ -732,8 +810,9 @@ impl<'a> Parser<'a> {
                     Some(block)
                 }
                 Some(TokenKind::If) => {
-                    // `else if ...` is represented as an `else` block
-                    // whose only content is the nested `if` as its tail.
+                    // `else if ...` and `else if let ...` are represented
+                    // as an `else` block whose only content is the nested
+                    // `if` as its tail.
                     let nested = self.parse_if()?;
                     let block_span = nested.span;
                     span = self.span_from(if_token.span, block_span);
@@ -753,14 +832,21 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(Expr {
-            kind: ExprKind::If {
+        let kind = match pattern {
+            Some(pattern) => ExprKind::IfLet {
+                pattern,
+                value: Box::new(cond),
+                then,
+                else_,
+                span,
+            },
+            None => ExprKind::If {
                 cond: Box::new(cond),
                 then,
                 else_,
             },
-            span,
-        })
+        };
+        Ok(Expr { kind, span })
     }
 
     /// `match scrutinee { arms... }` (spec 2.3). The scrutinee is parsed in
@@ -810,11 +896,18 @@ impl<'a> Parser<'a> {
 
     fn parse_match_arm(&mut self) -> Result<MatchArm, ()> {
         let pattern = self.parse_pattern()?;
-        if self.peek() == Some(&TokenKind::DotDot) {
+        self.reject_alternatives()?;
+        if matches!(self.peek(), Some(TokenKind::DotDot | TokenKind::DotDotEq)) {
+            // `n..5`: a range whose start is not a literal. A literal start
+            // (`0..=9`) is a range pattern, parsed by `parse_pattern`.
             let dotdot_span = self.current_span();
             self.bump();
             let span = self.span_from(pattern.span(), dotdot_span);
-            self.push_error(V0001, span, "range patterns are not supported in Varyk");
+            self.push_error(
+                V0001,
+                span,
+                "a range pattern is written with two number literals in Varyk, as in `0..=9`",
+            );
             return Err(());
         }
         if self.peek() == Some(&TokenKind::If) {
@@ -822,7 +915,8 @@ impl<'a> Parser<'a> {
             self.push_error(
                 V0001,
                 span,
-                "match guards (`pattern if condition`) are not supported in Varyk",
+                "match guards (`pattern if condition`) are not supported in Varyk; write the \
+                 condition as an `if` inside the arm",
             );
             return Err(());
         }
@@ -859,7 +953,13 @@ impl<'a> Parser<'a> {
             );
             return Err(());
         }
-        let body = self.parse_expr()?;
+        // A block body, which needs no comma after it, ends at its
+        // closing `}`, as in Rust: `{} -1 => ..` is two arms, not `{} - 1`.
+        let body = if self.peek() == Some(&TokenKind::LBrace) {
+            self.parse_postfix()?
+        } else {
+            self.parse_expr()?
+        };
         if self.peek() == Some(&TokenKind::Eq) {
             let span = self.current_span();
             let target = match &body.kind {
@@ -877,194 +977,6 @@ impl<'a> Parser<'a> {
         }
         Ok(body)
     }
-
-    /// A pattern, one level deep (spec 2.3): `_`, a name, or a variant
-    /// path with an optional parenthesized list of sub-patterns.
-    fn parse_pattern(&mut self) -> Result<Pattern, ()> {
-        match self.peek() {
-            Some(TokenKind::Identifier(name)) if name == "_" => {
-                let token = self.bump().expect("peek just confirmed a token is present");
-                Ok(Pattern::Wildcard(token.span))
-            }
-            Some(TokenKind::CrateKw | TokenKind::SelfKw | TokenKind::SuperKw)
-                if self.peek_at(1) == Some(&TokenKind::ColonColon) =>
-            {
-                self.parse_variant_pattern()
-            }
-            Some(TokenKind::Identifier(_)) => self.parse_variant_pattern(),
-            Some(TokenKind::DotDot) => {
-                let span = self.current_span();
-                self.bump();
-                self.push_error(
-                    V0001,
-                    span,
-                    "rest patterns (`..`) are not supported in Varyk",
-                );
-                Err(())
-            }
-            _ => {
-                let span = self.current_span();
-                self.bump();
-                // `0..5`: the literal alone would be a "literal pattern"
-                // error, but what follows it names this a range pattern
-                // instead, which is the more useful thing to say.
-                if self.peek() == Some(&TokenKind::DotDot) {
-                    let dotdot_span = self.current_span();
-                    self.bump();
-                    let range_span = self.span_from(span, dotdot_span);
-                    self.push_error(
-                        V0001,
-                        range_span,
-                        "range patterns are not supported in Varyk",
-                    );
-                    return Err(());
-                }
-                self.push_error(
-                    V0001,
-                    span,
-                    "only a name, `_`, or a variant is supported as a pattern in Varyk; literal patterns are not supported",
-                );
-                Err(())
-            }
-        }
-    }
-
-    /// A variant pattern, or a bare name when it is one plain segment
-    /// with no sub-patterns (spec 2.3): `Point`, `Some(p)`,
-    /// `geo::Shape::Point`, `crate::shop::Kind::Word`.
-    fn parse_variant_pattern(&mut self) -> Result<Pattern, ()> {
-        let dotted = self.parse_dotted_path("a pattern")?;
-        let path_span = dotted.span;
-        if self.peek() == Some(&TokenKind::LBrace) {
-            let group_span = self.skip_brace_group();
-            let span = self.span_from(path_span, group_span);
-            self.push_error(
-                V0001,
-                span,
-                "enum variants with named fields are not supported until milestone 4; \
-                 use a tuple variant instead",
-            );
-            return Err(());
-        }
-        let has_subpatterns = self.peek() == Some(&TokenKind::LParen);
-        if dotted.leading == PathStart::None && dotted.segments.len() == 1 && !has_subpatterns {
-            let mut segments = dotted.segments;
-            return Ok(Pattern::Name(segments.pop().expect("one segment")));
-        }
-        let (subpatterns, sub_span) = if has_subpatterns {
-            let (subpatterns, sub_span) = self.parse_subpatterns()?;
-            (subpatterns, Some(sub_span))
-        } else {
-            (Vec::new(), None)
-        };
-        // Unlike `ExprKind::Path`, a pattern's last remaining segment is
-        // unambiguously the type (`Shape::Point`), not a module: patterns
-        // never call anything, so there is no bare-module case to weigh
-        // against it.
-        let (path, name) = self.path_and_name(dotted);
-        let span = match sub_span {
-            Some(sub_span) => self.span_from(path_span, sub_span),
-            None => path_span,
-        };
-        Ok(Pattern::Variant(VariantPattern {
-            path,
-            name,
-            subpatterns,
-            span,
-        }))
-    }
-
-    /// `(sub, sub, ...)` right after a variant pattern's name, whose
-    /// opening `(` is already confirmed present. Returns the sub-patterns
-    /// plus the span of the whole group.
-    fn parse_subpatterns(&mut self) -> Result<(Vec<SubPattern>, Span), ()> {
-        let lparen = self.bump().expect("caller confirmed `(`");
-        let mut subpatterns = Vec::new();
-        if self.peek() != Some(&TokenKind::RParen) {
-            loop {
-                subpatterns.push(self.parse_subpattern()?);
-                if self.bump_if(&TokenKind::Comma) {
-                    if self.peek() == Some(&TokenKind::RParen) {
-                        break;
-                    }
-                    continue;
-                }
-                break;
-            }
-        }
-        let rparen = self.expect(TokenKind::RParen, "`)`")?;
-        Ok((subpatterns, self.span_from(lparen.span, rparen.span)))
-    }
-
-    /// A sub-pattern inside a variant pattern's parentheses (spec 2.3): a
-    /// name or `_`. Anything else, including a nested variant pattern
-    /// (`Some(Shape::Point)`) or a literal, is `V0001`.
-    fn parse_subpattern(&mut self) -> Result<SubPattern, ()> {
-        match self.peek() {
-            Some(TokenKind::Identifier(name)) if name == "_" => {
-                let token = self.bump().expect("peek just confirmed a token is present");
-                Ok(SubPattern::Wildcard(token.span))
-            }
-            Some(TokenKind::Identifier(_)) => {
-                let name = self.expect_identifier("a name")?;
-                if matches!(
-                    self.peek(),
-                    Some(TokenKind::LParen) | Some(TokenKind::ColonColon)
-                ) {
-                    self.push_error(
-                        V0001,
-                        name.span,
-                        "nested patterns are not supported in Varyk; match the inner value in the arm's body instead",
-                    );
-                    return Err(());
-                }
-                Ok(SubPattern::Name(name))
-            }
-            Some(TokenKind::DotDot) => {
-                let span = self.current_span();
-                self.bump();
-                self.push_error(
-                    V0001,
-                    span,
-                    "rest patterns (`..`) are not supported in Varyk",
-                );
-                Err(())
-            }
-            Some(TokenKind::Mut) => {
-                let span = self.current_span();
-                self.bump();
-                self.push_error(
-                    V0001,
-                    span,
-                    "`mut` is not supported in a pattern in Varyk; write `let mut x = x;` \
-                     inside the arm instead",
-                );
-                Err(())
-            }
-            Some(TokenKind::ReservedKeyword(word)) if word == "ref" => {
-                let span = self.current_span();
-                self.bump();
-                self.push_error(
-                    V0001,
-                    span,
-                    "`ref` is not supported in a pattern in Varyk; write `let mut x = x;` \
-                     inside the arm instead",
-                );
-                Err(())
-            }
-            _ => {
-                let span = self.current_span();
-                self.bump();
-                self.push_error(
-                    V0001,
-                    span,
-                    "only a name or `_` is supported inside a variant pattern in Varyk; literal patterns are not supported",
-                );
-                Err(())
-            }
-        }
-    }
-
     /// `{ stmts...; tail? }`. A block's own body is never in condition
     /// position, even when the block itself sits inside an `if`/`while`
     /// condition (`if { Point { x: 1 } } { }`): the braces already
@@ -1818,114 +1730,6 @@ mod tests {
     // --- `match` and patterns (spec 2.3) ------------------------------------
 
     #[test]
-    fn match_with_wildcard_and_name_pattern() {
-        let src = "match x { _ => 1, n => n, }";
-        let expr = parse_ok(src);
-        assert_eq!(expr.span.start, 0);
-        assert_eq!(expr.span.end, src.len() as u32);
-        match &expr.kind {
-            ExprKind::Match { scrutinee, arms } => {
-                assert_eq!(path_name(scrutinee), "x");
-                assert_eq!(arms.len(), 2);
-                assert!(matches!(arms[0].pattern, Pattern::Wildcard(_)));
-                match &arms[1].pattern {
-                    Pattern::Name(name) => assert_eq!(name.name, "n"),
-                    other => panic!("expected a name pattern, got {other:?}"),
-                }
-            }
-            other => panic!("expected a match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn match_variant_pattern_with_subpatterns() {
-        let expr = parse_ok("match shape { Shape::Circle(r) => 1, Shape::Point => 0 }");
-        match &expr.kind {
-            ExprKind::Match { arms, .. } => {
-                assert_eq!(arms.len(), 2);
-                match &arms[0].pattern {
-                    Pattern::Variant(variant) => {
-                        let path = variant.path.as_ref().expect("one segment: the type");
-                        assert_eq!(path.segments.len(), 1);
-                        assert_eq!(path.segments[0].name, "Shape");
-                        assert_eq!(variant.name.name, "Circle");
-                        assert_eq!(variant.subpatterns.len(), 1);
-                        match &variant.subpatterns[0] {
-                            SubPattern::Name(name) => assert_eq!(name.name, "r"),
-                            other => panic!("expected a name subpattern, got {other:?}"),
-                        }
-                    }
-                    other => panic!("expected a variant pattern, got {other:?}"),
-                }
-                match &arms[1].pattern {
-                    Pattern::Variant(variant) => {
-                        assert_eq!(variant.name.name, "Point");
-                        assert!(variant.subpatterns.is_empty());
-                    }
-                    other => panic!("expected a variant pattern, got {other:?}"),
-                }
-            }
-            other => panic!("expected a match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn match_unqualified_variant_pattern_with_wildcard_subpattern() {
-        // `Some(_)`: a single-segment variant pattern, told apart from a
-        // name pattern by the parentheses that follow it.
-        let expr = parse_ok("match x { Some(_) => 1, None => 0 }");
-        match &expr.kind {
-            ExprKind::Match { arms, .. } => match &arms[0].pattern {
-                Pattern::Variant(variant) => {
-                    assert!(variant.path.is_none());
-                    assert_eq!(variant.name.name, "Some");
-                    assert!(matches!(variant.subpatterns[0], SubPattern::Wildcard(_)));
-                }
-                other => panic!("expected a variant pattern, got {other:?}"),
-            },
-            other => panic!("expected a match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn match_module_qualified_variant_pattern() {
-        let expr = parse_ok("match shape { geo::Shape::Point => 0, _ => 1 }");
-        match &expr.kind {
-            ExprKind::Match { arms, .. } => match &arms[0].pattern {
-                Pattern::Variant(variant) => {
-                    let path = variant.path.as_ref().expect("two segments");
-                    let names: Vec<&str> = path.segments.iter().map(|s| s.name.as_str()).collect();
-                    assert_eq!(names, vec!["geo", "Shape"]);
-                    assert_eq!(variant.name.name, "Point");
-                }
-                other => panic!("expected a variant pattern, got {other:?}"),
-            },
-            other => panic!("expected a match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn keyword_prefixed_variant_pattern_parses() {
-        let expr = parse_ok("match k { crate::shop::Kind::Word => 0, super::Kind::Other(n) => n }");
-        let ExprKind::Match { arms, .. } = &expr.kind else {
-            panic!("expected a match, got {expr:?}");
-        };
-        let expected = [
-            ("crate", vec!["shop", "Kind"], "Word", 1..1),
-            ("super", vec!["Kind"], "Other", 1..2),
-        ];
-        for (arm, (leading, segments, name, subs)) in arms.iter().zip(expected) {
-            let Pattern::Variant(variant) = &arm.pattern else {
-                panic!("expected a variant pattern, got {:?}", arm.pattern);
-            };
-            let path = variant.path.as_ref().expect("a module path");
-            assert_eq!(prefix_and_segments(path), (leading, segments));
-            assert_eq!(variant.name.name, name);
-            assert_eq!(variant.subpatterns.len(), subs.len());
-        }
-    }
-
-    #[test]
     fn match_arm_with_block_body_needs_no_trailing_comma() {
         let expr = parse_ok("match x { _ => { 1 } n => 2 }");
         match &expr.kind {
@@ -1938,100 +1742,6 @@ mod tests {
     fn match_arm_without_comma_or_block_body_is_v0002() {
         let (_expr, errors) = parse("match x { _ => 1 n => 2 }");
         assert!(errors.iter().any(|e| e.code == V0002), "errors: {errors:?}");
-    }
-
-    #[test]
-    fn match_variant_pattern_wrong_kind_of_subpattern_is_v0001() {
-        let (_expr, errors) = parse("match x { Some(1) => 1, _ => 0 }");
-        assert!(errors.iter().any(|e| e.code == V0001), "errors: {errors:?}");
-    }
-
-    #[test]
-    fn match_named_field_variant_pattern_is_v0001_naming_milestone_4() {
-        let (_expr, errors) = parse("match s { Shape::Circle { r } => 1, _ => 0 }");
-        assert!(
-            errors.iter().any(|e| e.code == V0001
-                && e.message
-                    == "enum variants with named fields are not supported until milestone 4; \
-                        use a tuple variant instead"),
-            "errors: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn match_nested_variant_pattern_is_v0001() {
-        let (_expr, errors) = parse("match x { Some(Shape::Point) => 1, _ => 0 }");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("nested")),
-            "errors: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn match_literal_pattern_is_v0001() {
-        let (_expr, errors) = parse("match x { 1 => 1, _ => 0 }");
-        assert!(errors.iter().any(|e| e.code == V0001), "errors: {errors:?}");
-    }
-
-    #[test]
-    fn match_mut_subpattern_is_v0001_naming_mut() {
-        let (_expr, errors) = parse("match x { Some(mut x) => 1, _ => 0 }");
-        assert!(
-            errors.iter().any(|e| e.code == V0001
-                && e.message.contains("mut")
-                && e.message.contains("let mut x = x;")),
-            "errors: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn match_ref_subpattern_is_v0001_naming_ref() {
-        let (_expr, errors) = parse("match x { Some(ref x) => 1, _ => 0 }");
-        assert!(
-            errors.iter().any(|e| e.code == V0001
-                && e.message.contains("ref")
-                && e.message.contains("let mut x = x;")),
-            "errors: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn match_rest_pattern_is_v0001() {
-        let (_expr, errors) = parse("match x { .. => 1, _ => 0 }");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("rest")),
-            "errors: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn match_rest_subpattern_is_v0001() {
-        // `Some(..)`: a rest pattern inside a variant's parentheses is a
-        // distinct case from a bare `..` pattern, and must not be called a
-        // literal pattern either.
-        let (_expr, errors) = parse("match x { Some(..) => 1, _ => 0 }");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("rest")),
-            "errors: {errors:?}"
-        );
-    }
-
-    #[test]
-    fn match_range_pattern_from_a_literal_is_v0001() {
-        // `0..5`: must be named a range pattern, not a literal pattern.
-        let (_expr, errors) = parse("match x { 0..5 => 1, _ => 0 }");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("range")),
-            "errors: {errors:?}"
-        );
     }
 
     #[test]
@@ -2101,17 +1811,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn if_let_is_v0001() {
-        let (_expr, errors) = parse("if let Some(x) = y { }");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("if let")),
-            "errors: {errors:?}"
-        );
-    }
-
     // --- Ranges (spec 2.4), valid only in a `for` head ----------------------
 
     #[test]
@@ -2128,11 +1827,11 @@ mod tests {
     #[test]
     fn inclusive_range_is_v0001() {
         let (_expr, errors) = parse("0..=10");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("..=")),
-            "errors: {errors:?}"
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+        assert_eq!(errors[0].code, V0001);
+        assert_eq!(
+            errors[0].message,
+            "a range exists only in the head of a `for` loop"
         );
     }
 
@@ -2153,11 +1852,11 @@ mod tests {
     #[test]
     fn inclusive_range_with_no_start_is_v0001() {
         let (_expr, errors) = parse("..=5");
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.code == V0001 && e.message.contains("..=")),
-            "errors: {errors:?}"
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+        assert_eq!(errors[0].code, V0001);
+        assert_eq!(
+            errors[0].message,
+            "a range exists only in the head of a `for` loop"
         );
     }
 
@@ -2168,5 +1867,281 @@ mod tests {
         // shape rather than being accepted.
         let (_expr, errors) = parse("a.b()(c)");
         assert!(errors.iter().any(|e| e.code == V0002), "errors: {errors:?}");
+    }
+
+    // --- Milestone 4: closures, `as`, `if let`, variant values ------------
+
+    /// The single argument of the call `src` parses to.
+    fn only_argument(src: &str) -> Expr {
+        match parse_ok(src).kind {
+            ExprKind::Call { mut args, .. } => {
+                assert_eq!(args.len(), 1, "{src}");
+                args.remove(0)
+            }
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    fn closure_parts(expr: &Expr) -> (Vec<&str>, &Expr) {
+        match &expr.kind {
+            ExprKind::Closure { params, body, span } => {
+                assert_eq!(*span, expr.span);
+                (params.iter().map(|p| p.name.as_str()).collect(), body)
+            }
+            other => panic!("expected a closure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn closure_with_an_expression_body_as_a_call_argument() {
+        let arg = only_argument("f(|x| x + 1)");
+        let (params, body) = closure_parts(&arg);
+        assert_eq!(params, vec!["x"]);
+        assert!(matches!(
+            body.kind,
+            ExprKind::Binary {
+                op: BinaryOp::Add,
+                ..
+            }
+        ));
+        assert_eq!((arg.span.start, arg.span.end), (2, 11));
+    }
+
+    #[test]
+    fn closure_with_a_block_body_as_a_call_argument() {
+        let arg = only_argument("f(|x| { x })");
+        let (params, body) = closure_parts(&arg);
+        assert_eq!(params, vec!["x"]);
+        assert!(matches!(body.kind, ExprKind::Block(_)));
+    }
+
+    #[test]
+    fn closure_as_a_method_argument() {
+        let expr = parse_ok("v.iter().filter(|n| n % 2 == 0).count()");
+        let ExprKind::MethodCall { receiver, .. } = &expr.kind else {
+            panic!("expected a method call, got {expr:?}");
+        };
+        let ExprKind::MethodCall { args, .. } = &receiver.kind else {
+            panic!("expected a method call, got {receiver:?}");
+        };
+        assert_eq!(closure_parts(&args[0]).0, vec!["n"]);
+    }
+
+    #[test]
+    fn closures_with_no_or_several_parameters_parse() {
+        // Their parameter count is the checker's to reject (V0201).
+        assert!(closure_parts(&only_argument("f(|| 1)")).0.is_empty());
+        assert!(closure_parts(&only_argument("f(| | 1)")).0.is_empty());
+        assert_eq!(
+            closure_parts(&only_argument("f(|a, b| a + b)")).0,
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn typed_closure_parameter_is_v0001_with_a_fix_it() {
+        let (_expr, errors) = parse("f(|x: i32| x)");
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+        assert_eq!(errors[0].code, V0001);
+        assert_eq!(
+            errors[0].message,
+            "a closure's parameter has no type in Varyk; write `|x|`, and it takes the type \
+             the call gives it"
+        );
+        let fix_it = errors[0].fix_it.as_ref().expect("a fix-it");
+        assert_eq!((fix_it.span.start, fix_it.span.end), (3, 9));
+        assert_eq!(fix_it.replacement, "x");
+    }
+
+    #[test]
+    fn move_closure_is_v0001() {
+        let (_expr, errors) = parse("f(move |x| x)");
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+        assert_eq!(errors[0].code, V0001);
+        assert_eq!(
+            errors[0].message,
+            "`move` is not supported in Varyk; write the closure without it"
+        );
+    }
+
+    fn cast_parts(expr: &Expr) -> (&Expr, &str) {
+        match &expr.kind {
+            ExprKind::Cast {
+                expr: operand,
+                ty,
+                span,
+            } => {
+                assert_eq!(*span, expr.span);
+                assert!(ty.path.is_none() && ty.args.is_empty());
+                (operand, ty.name.name.as_str())
+            }
+            other => panic!("expected a cast, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cast_binds_tighter_than_multiplication() {
+        let expr = parse_ok("v.len() as i32 * 2");
+        let ExprKind::Binary {
+            op: BinaryOp::Mul,
+            lhs,
+            rhs,
+        } = &expr.kind
+        else {
+            panic!("expected (v.len() as i32) * 2, got {expr:?}");
+        };
+        let (operand, ty) = cast_parts(lhs);
+        assert!(matches!(operand.kind, ExprKind::MethodCall { .. }));
+        assert_eq!(ty, "i32");
+        assert!(matches!(rhs.kind, ExprKind::Integer(_)));
+
+        let expr = parse_ok("2 * x as i64");
+        let ExprKind::Binary {
+            op: BinaryOp::Mul,
+            rhs,
+            ..
+        } = &expr.kind
+        else {
+            panic!("expected 2 * (x as i64), got {expr:?}");
+        };
+        assert_eq!(path_name(cast_parts(rhs).0), "x");
+    }
+
+    #[test]
+    fn cast_before_less_than_is_a_comparison() {
+        let expr = parse_ok("x as i32 < n");
+        let ExprKind::Binary {
+            op: BinaryOp::Lt,
+            lhs,
+            rhs,
+        } = &expr.kind
+        else {
+            panic!("expected (x as i32) < n, got {expr:?}");
+        };
+        assert_eq!(cast_parts(lhs).1, "i32");
+        assert_eq!(path_name(rhs), "n");
+    }
+
+    #[test]
+    fn negation_binds_tighter_than_cast() {
+        let expr = parse_ok("-x as i64");
+        let (operand, ty) = cast_parts(&expr);
+        assert_eq!(ty, "i64");
+        assert!(matches!(
+            operand.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn casts_chain() {
+        let expr = parse_ok("x as i64 as f64");
+        let (operand, ty) = cast_parts(&expr);
+        assert_eq!(ty, "f64");
+        assert_eq!(cast_parts(operand).1, "i64");
+    }
+
+    #[test]
+    fn bitwise_or_is_v0002() {
+        let file = SourceFile::new(FileId(0), "test.vr", "{ a | b }");
+        let (tokens, _) = lex(&file);
+        let mut parser = Parser::new(&tokens, FileId(0));
+        assert!(parser.parse_block().is_err());
+        let errors = parser.errors();
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+        assert_eq!(errors[0].code, V0002);
+    }
+
+    #[test]
+    fn if_let_with_else_if_let_and_else() {
+        let src = "if let Some(x) = v { } else if let Ok(y) = r { } else { }";
+        let expr = parse_ok(src);
+        assert_eq!((expr.span.start, expr.span.end), (0, src.len() as u32));
+        let ExprKind::IfLet {
+            pattern,
+            value,
+            else_,
+            span,
+            ..
+        } = &expr.kind
+        else {
+            panic!("expected an if let, got {expr:?}");
+        };
+        assert_eq!(*span, expr.span);
+        assert!(
+            matches!(pattern, crate::ast::Pattern::Variant { name, .. } if name.name == "Some")
+        );
+        assert_eq!(path_name(value), "v");
+        let else_block = else_.as_ref().expect("an else");
+        assert!(else_block.stmts.is_empty());
+        let nested = else_block.tail.as_deref().expect("the nested if let");
+        let ExprKind::IfLet { pattern, else_, .. } = &nested.kind else {
+            panic!("expected a nested if let, got {nested:?}");
+        };
+        assert!(matches!(pattern, crate::ast::Pattern::Variant { name, .. } if name.name == "Ok"));
+        assert!(else_.as_ref().is_some_and(|b| b.tail.is_none()));
+    }
+
+    #[test]
+    fn if_let_value_is_in_condition_position() {
+        // `x { }` must not be read as a struct literal.
+        let expr = parse_ok("if let Some(n) = x { n } else { 0 }");
+        let ExprKind::IfLet { value, then, .. } = &expr.kind else {
+            panic!("expected an if let, got {expr:?}");
+        };
+        assert_eq!(path_name(value), "x");
+        assert!(then.tail.is_some());
+    }
+
+    #[test]
+    fn else_if_let_after_a_plain_if() {
+        let expr = parse_ok("if a { } else if let Some(x) = v { }");
+        let ExprKind::If { else_, .. } = &expr.kind else {
+            panic!("expected an if, got {expr:?}");
+        };
+        let tail = else_.as_ref().and_then(|b| b.tail.as_deref());
+        assert!(matches!(
+            tail,
+            Some(Expr {
+                kind: ExprKind::IfLet { else_: None, .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_block_arm_body_ends_at_its_brace() {
+        let expr = parse_ok("match x { 1 => {} -7 => {}.len(), -5..=-1 => {} _ => 0 }");
+        let ExprKind::Match { arms, .. } = &expr.kind else {
+            panic!("expected a match, got {expr:?}");
+        };
+        assert_eq!(arms.len(), 4, "{arms:?}");
+        assert!(matches!(arms[2].pattern, crate::ast::Pattern::Range { .. }));
+    }
+
+    #[test]
+    fn if_let_alternatives_are_v0001() {
+        let (expr, errors) = parse("if let Some(1) | Some(2) = x { }");
+        assert!(expr.is_err());
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, crate::error::V0001);
+        assert!(errors[0].message.starts_with("alternatives"), "{errors:?}");
+    }
+
+    #[test]
+    fn named_field_variant_value_is_a_struct_literal() {
+        let expr = parse_ok("Event::Click { x: 1, y: 2 }");
+        let ExprKind::StructLit { path, name, fields } = &expr.kind else {
+            panic!("expected a struct literal, got {expr:?}");
+        };
+        let path = path.as_ref().expect("the enum's name");
+        assert_eq!(path.segments.len(), 1);
+        assert_eq!(path.segments[0].name, "Event");
+        assert_eq!(name.name, "Click");
+        let names: Vec<&str> = fields.iter().map(|(n, _)| n.name.as_str()).collect();
+        assert_eq!(names, vec!["x", "y"]);
     }
 }

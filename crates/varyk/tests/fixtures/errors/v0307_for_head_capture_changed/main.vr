@@ -1,0 +1,8 @@
+fn main() {
+    let words = vec!["a", "b", "a"];
+    let mut seen: Vec<string> = vec![];
+    for w in words.iter().filter(|w| !seen.contains(w)) {
+        seen.push(w.clone());
+    }
+    println!("{}", seen.len());
+}

@@ -62,7 +62,10 @@ fn run_modules() {
 
 #[test]
 fn run_interop() {
-    assert_runs("examples/interop/main.vr", "Hello from Rust, Varyk!\n");
+    assert_runs(
+        "examples/interop/main.vr",
+        "Hello from Rust, Varyk!\nHello\n",
+    );
 }
 
 /// An imported Rust struct (M3 spec 4.1, 4.2) over `std` only: a private
@@ -109,6 +112,69 @@ fn run_todo() {
     assert_runs(
         "examples/todo/main.vr",
         "[ ] Buy milk\n[ ] Write spec\n[x] Buy milk\n[ ] Write spec\n1 of 2 done\n",
+    );
+}
+
+// --- The milestone-4 examples (M4 spec 4) -----------------------------------
+
+#[test]
+fn run_iterators() {
+    assert_runs(
+        "examples/iterators.vr",
+        "55\n3\ntrue\n2 4 6\napple, banana, cherry\n3\n",
+    );
+}
+
+#[test]
+fn run_words() {
+    assert_runs(
+        "examples/words.vr",
+        "and 1\ncat 2\ndog 1\nran 1\nsaw 1\nthe 3\n6 distinct words\n",
+    );
+}
+
+#[test]
+fn run_patterns() {
+    assert_runs(
+        "examples/patterns.vr",
+        "key a\nclick at the origin\nclick at 3, 4\nquit\nA B lower\ntrue false\n\
+         first click at x = 0\n3\n2\n1\nquit\n",
+    );
+}
+
+#[test]
+fn run_getters() {
+    assert_runs("examples/getters.vr", "Alice\nBob\n[hello]\nAlice\n[]\n");
+}
+
+#[test]
+fn run_readings() {
+    assert_runs(
+        "examples/readings.vr",
+        "25 -> 77\nnot a number: abc\n1\n10\n7\ntrue\ntrue\n0\n",
+    );
+}
+
+#[test]
+fn run_text() {
+    assert_runs(
+        "examples/text.vr",
+        "ERROR_disk_full, WARN_low_memory\n2 of 3 lines kept\ntrue\ntrue\nfalse\n\
+         second: DEBUG tick\nERROR DISK FULL\nfound WARN low memory\ntrue\n600\ntrue\n\
+         42\nbad code: x!\n8080\nhello world\n",
+    );
+}
+
+/// The table rows and `HashMap` (M4 spec 2.7) run as written: a `HashMap`
+/// of counts, `parse` in each expected-type position, and `contains` on a
+/// `Vec<string>` whose argument is a local named `e`, the name the
+/// generated closure uses, printing `false` (a shadowed `e` would compile
+/// and print `true`).
+#[test]
+fn run_table_rows() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/codegen/tables/main.vr",
+        "2 true\ntrue\n7\ntrue\nfalse\nfalse\n9 true false\nHELLO, YOU true\na+b\nfalse true\n",
     );
 }
 
@@ -554,7 +620,8 @@ fn matcher_runs_through_its_facade_and_shows_the_rust_warning() {
         "apple: word, 0 digit runs\n\
          42: the number 42, 1 digit runs\n\
          route 66 or 101: word, 2 digit runs\n\
-         2 of 3 contain digits\n"
+         2 of 3 contain digits\n\
+         true\n"
     );
 
     let stderr = stderr_of(&output).replace('\\', "/");

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0208]: this `Option` holds part of `lines` and must be used where it is made; look inside it here with `match` or `if let`
+ --> crates/varyk/tests/fixtures/errors/v0208_question_on_get/main.vr:2:16
+  |
+2 |     let line = lines.get(1)?;
+  |                ^^^^^^^^^^^^ this `Option` holds part of `lines` and must be used where it is made; look inside it here with `match` or `if let`
+  |
+  = note: in Rust terms, this is an `Option<&T>`, a reference inside an `Option`, which Varyk has no type for

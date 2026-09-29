@@ -1,24 +1,41 @@
-//! Borrow analysis of the names `match` patterns and `for` loops bind
-//! (spec 3.1, 3.2): their place info, and the wording of the diagnostics
-//! about changing or keeping them.
+//! Borrow analysis of the names patterns (of `match`, `if let`, and
+//! `while let`) and `for` loops bind (spec 3.1, 3.2): their place info,
+//! and the wording of the diagnostics about changing or keeping them.
 
 use varyk_syntax::{FixIt, SourceFile, Span};
 
+use super::chains::ItemKind;
 use super::{FnAnalyzer, place_root, roots};
 use crate::diagnostics::Diagnostic;
 use crate::hir::{
-    HirArm, HirBlock, HirExpr, HirExprKind, HirForHead, LocalId, Origin, PlaceInfo, is_place,
-    matched_in_place,
+    HirBlock, HirExpr, HirExprKind, HirForHead, HirPattern, LocalId, Origin, PlaceInfo,
+    dropping_enum, is_place_or_rooted, matched_in_place,
 };
 use crate::resolve::EnumId;
 use crate::types::Ty;
 
-/// What a `match` pattern binding or a `for` variable is bound to, for the
-/// wording of the diagnostics about it (spec 3.1, 3.4).
+/// Where the names of a pattern live: a `match` arm's body, or the block
+/// of an `if let` or `while let`.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Body<'a> {
+    Arm(&'a HirExpr),
+    Block(&'a HirBlock),
+}
+
+/// What binds a read-only name: a pattern (of `match`, `if let`, or
+/// `while let`), a `for`, or a closure's call (M4 spec 3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BoundBy {
+    Match,
+    For,
+    Closure,
+}
+
+/// What a pattern binding, a `for` variable, or a closure's parameter is
+/// bound to, for the wording of the diagnostics about it (spec 3.1, 3.4).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Bound {
-    /// Bound by a `for`, not a `match`.
-    looped: bool,
+    pub(super) by: BoundBy,
     /// The local the scrutinee or the `Vec` looped over is rooted at;
     /// `None` for a temporary or a range.
     pub(super) root: Option<LocalId>,
@@ -26,11 +43,11 @@ pub(super) struct Bound {
     whole: bool,
     /// The scrutinee is a `let` that owns its value, as a whole.
     owned_local: bool,
-    /// Just inside the arm's or loop's body when it is a block: where a
-    /// `let mut n = n;` can go.
+    /// Just inside the arm's, loop's, or closure's body when it is a
+    /// block: where a `let mut n = n;` can go.
     body_start: Option<Span>,
-    /// The arm's body when it is not a block: what a block holding a
-    /// `let mut n = n;` and then it can replace.
+    /// The arm's or closure's body when it is not a block: what a block
+    /// holding a `let mut n = n;` and then it can replace.
     arm_body: Option<Span>,
     /// The name of the enum a `match` on a temporary looks inside because
     /// it runs code when it is thrown away (spec 3.4): the binding is part
@@ -39,30 +56,60 @@ pub(super) struct Bound {
 }
 
 impl FnAnalyzer<'_> {
-    /// Computes the place info of the bindings of `arm`'s pattern (spec
-    /// 3.2). On a place, a binding of a non-Copy value is a read-only alias
-    /// rooted where the scrutinee is, and one of a Copy value is a copy; on
-    /// a temporary, every binding owns its value. None can be changed.
-    pub(super) fn pattern(&mut self, scrutinee: &HirExpr, arm: &HirArm) {
-        let place = matched_in_place(self.cx.enums, scrutinee);
-        let root = place_root(scrutinee);
-        let origin = self.head_origin(scrutinee);
+    /// Computes the place info of the bindings of `pattern`, looking at
+    /// `scrutinee`, whose names live in `body` (spec 3.2, M4 spec 3.5).
+    /// On a place, a binding of a non-Copy value is a read-only alias
+    /// rooted where the scrutinee is, and one of a Copy value is a copy;
+    /// on a temporary, every binding owns its value, unless an enum with a
+    /// destructor inside it keeps the temporary matched in place. On a
+    /// `string` (`head_is_str`), every `string` binding is a `&str`
+    /// borrowed from the head, whatever it is. None can be changed.
+    pub(super) fn pattern(
+        &mut self,
+        scrutinee: &HirExpr,
+        pattern: &HirPattern,
+        body: Body,
+        head_is_str: bool,
+    ) {
+        // A looked-into `find` holds one of its chain's items, with their
+        // roots (M4 spec 3.3).
+        let found = self.found_items(scrutinee);
+        let place = matched_in_place(self.cx.enums, scrutinee) || found.is_some();
+        let in_place = is_place_or_rooted(scrutinee) || found.is_some();
+        let (root, origin, head_roots) = match &found {
+            Some(items) => (
+                items.roots().first().copied(),
+                items.origin,
+                items.roots().to_vec(),
+            ),
+            None => (
+                place_root(scrutinee),
+                self.head_origin(scrutinee),
+                roots(scrutinee),
+            ),
+        };
         let owned_local = matches!(scrutinee.kind, HirExprKind::Local(id)
             if !self.is_param(id) && !self.local(id).place.borrowed);
-        let dropped = match scrutinee.ty {
-            Ty::Enum(id) if place && !is_place(scrutinee) => Some(id),
-            _ => None,
+        let dropped = if place && !in_place {
+            dropping_enum(self.cx.enums, &scrutinee.ty)
+        } else {
+            None
         };
-        let (body_start, arm_body) = match &arm.body.kind {
-            HirExprKind::Block(block) => {
+        let (body_start, arm_body) = match body {
+            Body::Arm(HirExpr {
+                kind: HirExprKind::Block(block),
+                ..
+            })
+            | Body::Block(block) => {
                 let at = block.span.start + 1;
                 (Some(Span::new(block.span.file, at, at)), None)
             }
-            _ => (None, Some(arm.body.span)),
+            Body::Arm(expr) => (None, Some(expr.span)),
         };
-        for (local, whole) in arm.pattern.bindings() {
+        for (local, whole) in pattern.bindings() {
             let index = local.0 as usize;
-            let alias = place && !self.local(local).ty.is_copy();
+            let ty = &self.local(local).ty;
+            let alias = (place && !ty.is_copy()) || (head_is_str && *ty == Ty::String);
             self.locals[index].place = PlaceInfo {
                 borrowed: alias,
                 mutable: false,
@@ -70,12 +117,11 @@ impl FnAnalyzer<'_> {
             };
             self.blame[index] = Some(local);
             if alias {
-                // An alias into a temporary (of an enum with a
-                // destructor) is gone once the `match` ends.
-                self.refers[index] = (!is_place(scrutinee), roots(scrutinee));
+                // An alias into a temporary is gone once the `match` ends.
+                self.refers[index] = (!in_place, head_roots.clone());
             }
             self.patterns[index] = Some(Bound {
-                looped: false,
+                by: BoundBy::Match,
                 root,
                 whole: whole && matches!(scrutinee.kind, HirExprKind::Local(_)),
                 owned_local,
@@ -90,16 +136,35 @@ impl FnAnalyzer<'_> {
     /// `head` with body `body` (spec 3.1, 3.2). Over a place, it is a
     /// read-only alias of one element rooted where the `Vec` is, or a copy
     /// of a Copy one, and the loop holds the `Vec` until it ends (`held`);
-    /// over a temporary, it owns each element; over a range, it is a copy.
-    /// It cannot be changed.
+    /// over a temporary, it owns each element; over a range, it is a copy;
+    /// over a chain, it is an item, of the item's kind, and the loop holds
+    /// what the head reads (M4 spec 3.3). It cannot be changed.
     pub(super) fn for_variable(&mut self, local: LocalId, head: &HirForHead, body: &HirBlock) {
         let index = local.0 as usize;
         let (root, alias, origin) = match head {
-            HirForHead::Vec(vec) if is_place(vec) => {
+            HirForHead::Vec(vec) if is_place_or_rooted(vec) => {
                 self.refers[index] = (false, roots(vec));
                 self.held[index] = true;
                 let alias = !self.local(local).ty.is_copy();
                 (place_root(vec), alias, self.head_origin(vec))
+            }
+            // One item per round, with the rules of its kind (M4 spec
+            // 3.3); the loop holds everything its head reads.
+            HirForHead::Chain(chain) => {
+                self.held[index] = true;
+                self.head_reads[index] = self.head_reads(chain);
+                let items = self.items_of(chain);
+                match &items.kind {
+                    ItemKind::Borrowed(roots) => {
+                        self.refers[index] = (false, roots.clone());
+                        let root = match roots.as_slice() {
+                            [root] => Some(*root),
+                            _ => None,
+                        };
+                        (root, true, items.origin)
+                    }
+                    ItemKind::Copy | ItemKind::Owned => (None, false, None),
+                }
             }
             HirForHead::Vec(_) | HirForHead::Range { .. } => (None, false, None),
         };
@@ -111,7 +176,7 @@ impl FnAnalyzer<'_> {
         self.blame[index] = Some(local);
         let at = body.span.start + 1;
         self.patterns[index] = Some(Bound {
-            looped: true,
+            by: BoundBy::For,
             root,
             whole: false,
             owned_local: false,
@@ -121,10 +186,43 @@ impl FnAnalyzer<'_> {
         });
     }
 
+    /// Computes the place info of `param`, the parameter of a closure with
+    /// body `body` (M4 spec 3.2): for `Option::map` and `map_err`, the
+    /// payload of the receiver taken, a local of the closure owning its
+    /// value (or a copy); a chain's item makes it another name for part
+    /// of `root` (see `chains`). It cannot be changed.
+    pub(super) fn closure_param(&mut self, param: LocalId, body: &HirBlock, root: Option<LocalId>) {
+        let index = param.0 as usize;
+        self.locals[index].place = PlaceInfo {
+            borrowed: false,
+            mutable: false,
+            origin: None,
+        };
+        self.blame[index] = Some(param);
+        // A body written as an expression is a block of just its tail,
+        // with the tail's span.
+        let written = body.tail.as_ref().is_none_or(|tail| tail.span != body.span);
+        let (body_start, arm_body) = if written {
+            let at = body.span.start + 1;
+            (Some(Span::new(body.span.file, at, at)), None)
+        } else {
+            (None, Some(body.span))
+        };
+        self.patterns[index] = Some(Bound {
+            by: BoundBy::Closure,
+            root,
+            whole: false,
+            owned_local: false,
+            body_start,
+            arm_body,
+            dropped: None,
+        });
+    }
+
     /// What an alias of a part of `head`, a value matched on or looped
     /// over, derives from; `None` for a temporary.
-    fn head_origin(&self, head: &HirExpr) -> Option<Origin> {
-        if !is_place(head) {
+    pub(super) fn head_origin(&self, head: &HirExpr) -> Option<Origin> {
+        if !is_place_or_rooted(head) {
             return None;
         }
         let info = self.info(head);
@@ -134,7 +232,8 @@ impl FnAnalyzer<'_> {
 
     /// V0301 (an assignment, `callee` empty) or V0303 (an argument to a
     /// `mut` parameter of `callee`) at `span`, changing `binding`, a name a
-    /// `match` pattern or a `for` bound, which is read-only (spec 3.1): an
+    /// pattern, a `for`, or a closure's call bound, which is read-only
+    /// (spec 3.1, M4 spec 3.2): an
     /// alias says to change the original; a copy or an owned value gets
     /// the fix-it `let mut n = n;` at the start of its arm's or loop's
     /// block. `written` is the name changed at `span`: `binding` itself,
@@ -158,14 +257,22 @@ impl FnAnalyzer<'_> {
         } else {
             format!("`{callee}` may change `{name}`, but ")
         };
-        let (by, what, looked_at) = if bound.looped {
-            ("for", "a `for` variable", "the `Vec` looped over")
-        } else {
-            (
-                "match",
-                "a name bound by a `match` pattern",
+        let (given, what, looked_at) = match bound.by {
+            BoundBy::For => (
+                "given by `for`",
+                "a `for` variable",
+                "the `Vec` looped over",
+            ),
+            BoundBy::Match => (
+                "given by a pattern",
+                "a name bound by a pattern",
                 "the value matched on",
-            )
+            ),
+            BoundBy::Closure => (
+                "handed to this closure",
+                "a closure's parameter",
+                "what the closure is called on",
+            ),
         };
         let diagnostic = match bound.root {
             Some(root_id) if info.place.borrowed => {
@@ -182,7 +289,7 @@ impl FnAnalyzer<'_> {
                 // A `for` variable, changed directly or passed to a `mut`
                 // parameter or a changing method: also point at the usual
                 // way around it, looping by index instead.
-                let index_hint = if bound.looped {
+                let index_hint = if bound.by == BoundBy::For {
                     format!(
                         ", for example by looping with `for i in 0..{root}.len()` and using \
                          `{root}[i]`"
@@ -194,8 +301,8 @@ impl FnAnalyzer<'_> {
                     code,
                     span,
                     format!(
-                        "{lead}`{name}` is another name for {part}`{root}`, given by `{by}`, \
-                         and cannot be changed; {first}change `{root}` itself instead{index_hint}"
+                        "{lead}`{name}` is another name for {part}`{root}`, {given}, and \
+                         cannot be changed; {first}change `{root}` itself instead{index_hint}"
                     ),
                 )
                 .with_note(format!(
@@ -345,7 +452,8 @@ impl FnAnalyzer<'_> {
                  thrown away, so nothing can take `{name}` out of it; {keep}{aside}"
             ));
         }
-        let root_info = self.local(bound.root?);
+        let root_id = bound.root?;
+        let root_info = self.local(root_id);
         let root = &root_info.name;
         let drops = match root_info.ty {
             Ty::Enum(e) => {
@@ -362,6 +470,15 @@ impl FnAnalyzer<'_> {
                     "`match` on a stored value only looks inside it, so `{name}` stays inside \
                      `{root}`, and the type of `{root}` {runs} code when it is thrown away, so \
                      nothing can take `{name}` out of it; {keep} ({aside})"
+                );
+            }
+            // `match` on a `match`, `if`, or block is V0001: move it into
+            // a function, and `match` on a call of that.
+            if let Some((article, kind)) = self.made_by[root_id.0 as usize] {
+                return format!(
+                    "`match` on a stored value only looks inside it, so `{name}` stays inside \
+                     `{root}`, which was made by {article} {kind}; to take the value out, move \
+                     that {kind} into a function that returns it and `match` on the call"
                 );
             }
             format!(

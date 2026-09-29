@@ -3,6 +3,7 @@ source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn make() -> string {\\n    \\\"Ann\\\"\\n}\\n\\nfn same(user: User, other: string) -> bool {\\n    user.name == make() && other != user.name && other == \\\"x\\\"\\n}\\n\\nfn main() {\\n    let user = User { name: \\\"Ann\\\" };\\n    println!(\\\"{}\\\", same(user, \\\"Ann\\\"));\\n}\\n\")"
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct User {
     name: String,
 }

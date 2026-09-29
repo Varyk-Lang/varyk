@@ -1,0 +1,93 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+enum Event {
+    Click { x: i32, y: i32 },
+    Key(String),
+    Quit,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+enum Shape {
+    Circle(f64),
+    Point,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn describe(events: &Vec<Option<Event>>) -> i32 {
+    match &events[0usize] {
+        Some(Event::Click { x: 0, y: y }) => {
+            let y = *y;
+            y
+        }
+        Some(Event::Click { x: x, y: _ }) => {
+            let x = *x;
+            x
+        }
+        Some(Event::Key(k)) => 1,
+        Some(Event::Quit) => 2,
+        None => -1,
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn grade(score: i32) -> String {
+    match &score {
+        90..=100 => "A".to_string(),
+        -5..=-1 => "negative".to_string(),
+        0 => "zero".to_string(),
+        _ => "lower".to_string(),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn make_role() -> String {
+    "admin".to_string()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn title() -> String {
+    let owned = make_role();
+    let shown = match owned.as_str() {
+        "admin" => "Administrator".to_string(),
+        other => other.to_string(),
+    };
+    shown
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn size(shape: &Option<Shape>) -> f64 {
+    if let Some(Shape::Circle(r)) = shape {
+        let r = *r;
+        r * r
+    } else if let None = shape {
+        0.0
+    } else {
+        1.0
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let events: Vec<Option<Event>> = ::std::vec![Some(Event::Click { y: 2, x: 0 }), Some(Event::Key("k".to_string())), Some(Event::Quit)];
+    ::std::println!("{}", describe(&events));
+    ::std::println!("{}", grade(95));
+    ::std::println!("{}", title());
+    ::std::println!("{}", size(&Some(Shape::Circle(2.0))));
+    let flag = true;
+    match &flag {
+        true => ::std::println!("yes"),
+        false => ::std::println!("no"),
+    }
+    let mut stack: Vec<i32> = ::std::vec![1, 2, 3];
+    while let Some(top) = stack.pop() {
+        if top == 2 {
+            continue;
+        }
+        ::std::println!("{}", top);
+    }
+}

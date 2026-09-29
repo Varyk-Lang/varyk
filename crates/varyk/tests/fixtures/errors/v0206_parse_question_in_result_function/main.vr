@@ -1,0 +1,11 @@
+fn read_age(text: string) -> Result<i32, string> {
+    let age: i32 = text.parse()?;
+    Ok(age)
+}
+
+fn main() {
+    match read_age("42") {
+        Ok(age) => println!("{}", age),
+        Err(e) => println!("{}", e),
+    }
+}

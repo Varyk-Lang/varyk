@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: a pattern cannot take apart the struct `Task`; bind it to a name, then look at its fields with `if`
+ --> crates/varyk/tests/fixtures/errors/v0001_struct_pattern_on_struct/main.vr:7:14
+  |
+7 |         Some(Task { done }) => done,
+  |              ^^^^^^^^^^^^^ a pattern cannot take apart the struct `Task`; bind it to a name, then look at its fields with `if`

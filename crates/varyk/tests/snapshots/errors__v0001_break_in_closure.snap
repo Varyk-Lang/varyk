@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `break` cannot be used inside a closure, which is a value of its own: it would leave the closure, not the function around it
+ --> crates/varyk/tests/fixtures/errors/v0001_break_in_closure/main.vr:6:17
+  |
+6 |                 break;
+  |                 ^^^^^ `break` cannot be used inside a closure, which is a value of its own: it would leave the closure, not the function around it
+  |
+  = note: give the closure's value as its last expression instead, and use `match` on an `Option` or `Result` inside it

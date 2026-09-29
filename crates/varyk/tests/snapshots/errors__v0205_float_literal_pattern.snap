@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0205]: a number with a fractional part cannot be matched with a pattern; compare it with `if` instead
+ --> crates/varyk/tests/fixtures/errors/v0205_float_literal_pattern/main.vr:3:9
+  |
+3 |         0.5 => true,
+  |         ^^^ a number with a fractional part cannot be matched with a pattern; compare it with `if` instead
+  |
+  = note: in Rust terms, floating-point literal patterns are not allowed

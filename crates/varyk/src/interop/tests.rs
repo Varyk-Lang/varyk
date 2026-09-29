@@ -132,6 +132,84 @@ fn return_reference_is_opaque() {
     assert!(matches!(f.ret, RustTy::Opaque(_)));
 }
 
+// --- Borrowed returns (M4 spec 2.12) ---------------------------------
+
+fn method_of(text: &str) -> ImportedFn {
+    let mut imported = import_rust_module(text).expect("should parse").structs;
+    assert_eq!(imported.len(), 1, "expected one struct from: {text}");
+    let mut methods = imported.remove(0).methods;
+    assert_eq!(methods.len(), 1, "expected one method from: {text}");
+    methods.remove(0)
+}
+
+fn method_sig(sig: &str) -> ImportedFn {
+    method_of(&format!(
+        "pub struct S {{ pub n: i32 }}\nimpl S {{ pub {sig} {{ todo!() }} }}"
+    ))
+}
+
+#[test]
+fn a_shared_self_method_returning_str_is_rooted_at_self() {
+    let f = method_sig("fn name(&self, sep: &str) -> &str");
+    assert_eq!(f.ret, RustTy::Str);
+    assert_eq!(f.ret_root, Some(0));
+}
+
+#[test]
+fn a_shared_self_method_returning_a_struct_reference_is_rooted_at_self() {
+    let f = method_sig("fn me(&self) -> &Self");
+    assert_eq!(f.ret, RustTy::Ref(Box::new(local("S"))));
+    assert_eq!(f.ret_root, Some(0));
+    let f = method_sig("fn me(&self, n: i32) -> &S");
+    assert_eq!(f.ret, RustTy::Ref(Box::new(local("S"))));
+    assert_eq!(f.ret_root, Some(0));
+}
+
+#[test]
+fn a_free_fn_with_one_shared_reference_parameter_is_rooted_at_it() {
+    let f = one("pub fn first_word(s: &str) -> &str { s }");
+    assert_eq!(f.ret, RustTy::Str);
+    assert_eq!(f.ret_root, Some(0));
+    let f = one("pub fn after(n: i32, s: &str) -> &str { s }");
+    assert_eq!(f.ret_root, Some(1));
+}
+
+#[test]
+fn other_reference_returns_stay_opaque() {
+    for text in [
+        "pub fn f(a: &str, b: &str) -> &str { a }",
+        "pub fn f(v: &mut Vec<String>) -> &str { \"\" }",
+        "pub fn f(s: &mut String) -> &str { s }",
+        "pub fn f(n: i32) -> &str { \"\" }",
+        "pub fn f(s: &str) -> &mut String { todo!() }",
+        "pub fn f(s: &str) -> Option<&str> { None }",
+        "pub fn f(s: &str) -> &[i32] { &[] }",
+        "pub fn f(s: &str) -> &String { todo!() }",
+        "pub fn f(s: &str) -> impl Fn(i32) -> i32 { |x| x }",
+        "pub fn f(s: &str) -> fn(i32) -> i32 { todo!() }",
+        "pub fn f(s: &'static str) -> &str { s }",
+        "pub fn f<'a>(s: &'a str) -> &'a str { s }",
+    ] {
+        let f = one(text);
+        assert!(matches!(f.ret, RustTy::Opaque(_)), "{text}: {:?}", f.ret);
+        assert_eq!(f.ret_root, None, "{text}");
+    }
+    for sig in [
+        "fn pick<'a>(&self, other: &'a str) -> &'a str",
+        "fn get(&mut self) -> &S",
+        "fn get(&mut self) -> &str",
+        "fn get(&'static self) -> &str",
+        "fn get(&self) -> Option<&S>",
+        "fn get(&self) -> &[i32]",
+        "fn get(&self) -> &String",
+        "fn get(&self) -> &mut S",
+    ] {
+        let f = method_sig(sig);
+        assert!(matches!(f.ret, RustTy::Opaque(_)), "{sig}: {:?}", f.ret);
+        assert_eq!(f.ret_root, None, "{sig}");
+    }
+}
+
 // --- Opaque parameter cases, signature text preserved -------------------
 
 #[test]
@@ -821,10 +899,16 @@ fn imports_greet_rs() {
         "/../../examples/interop/greet.rs"
     );
     let text = std::fs::read_to_string(path).expect("examples/interop/greet.rs should exist");
-    let f = one(&text);
-    assert_eq!(f.name, "hello");
-    assert_eq!(f.params, vec![RustTy::Str]);
-    assert_eq!(f.ret, RustTy::String);
+    let fns = import_rust_module(&text).expect("should parse").fns;
+    assert_eq!(fns.len(), 2, "{fns:?}");
+    assert_eq!(fns[0].name, "hello");
+    assert_eq!(fns[0].params, vec![RustTy::Str]);
+    assert_eq!(fns[0].ret, RustTy::String);
+    // `first_word`, the imported borrowed return of M4 spec 4.
+    assert_eq!(fns[1].name, "first_word");
+    assert_eq!(fns[1].params, vec![RustTy::Str]);
+    assert_eq!(fns[1].ret, RustTy::Str);
+    assert_eq!(fns[1].ret_root, Some(0));
 }
 
 // --- Structs and methods (M3 spec 4.1, 4.2, 4.4) ----------------------
@@ -834,6 +918,60 @@ fn one_struct(text: &str) -> ImportedStruct {
     let mut module = import_rust_module(text).expect("should parse");
     assert_eq!(module.structs.len(), 1, "{module:?}");
     module.structs.remove(0)
+}
+
+/// `#[derive(..)]` lists are read for `Clone` and `PartialEq` and nothing
+/// else, across several attributes; a hand-written `impl` is not seen
+/// (M4 spec 2.12).
+#[test]
+fn derive_lists_are_read_for_clone_and_partial_eq() {
+    let both = Derives {
+        clone: true,
+        eq: true,
+    };
+    let clone = Derives {
+        clone: true,
+        eq: false,
+    };
+    let eq = Derives {
+        clone: false,
+        eq: true,
+    };
+    for (text, derives) in [
+        (
+            "#[derive(Clone, PartialEq)] pub struct S { pub a: i32 }",
+            both,
+        ),
+        ("#[derive(Debug, Clone)] pub struct S { pub a: i32 }", clone),
+        (
+            "#[derive(Debug)]\n#[derive(PartialEq, Eq, Hash)] pub struct S { pub a: i32 }",
+            eq,
+        ),
+        (
+            "#[derive(Debug, Default)] pub struct S { pub a: i32 }",
+            Derives::default(),
+        ),
+        (
+            "#[derive(other::Clone, PartialEq)] pub struct S { pub a: i32 }",
+            eq,
+        ),
+        (
+            "pub struct S { pub a: i32 }\nimpl Clone for S { fn clone(&self) -> S { S { a: self.a } } }",
+            Derives::default(),
+        ),
+    ] {
+        assert_eq!(one_struct(text).derives, derives, "{text}");
+    }
+    for (text, derives) in [
+        (
+            "#[derive(Clone, Copy, PartialEq)] pub enum K { A, B(i32) }",
+            both,
+        ),
+        ("#[derive(PartialEq)] pub enum K { A }", eq),
+        ("pub enum K { A }", Derives::default()),
+    ] {
+        assert_eq!(one_enum(text).derives, derives, "{text}");
+    }
 }
 
 /// A `#[repr(packed)]` struct, whose fields cannot be borrowed, and one
@@ -971,7 +1109,7 @@ impl Matcher {
     pub fn into_inner(self) -> String {
         self.label
     }
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &String {
         &self.label
     }
     pub fn pick<T>(&self, value: T) -> T {

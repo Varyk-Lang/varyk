@@ -1,0 +1,7 @@
+fn main() {
+    let found = Some(4);
+    match found {
+        Some(1) | Some(2) => println!("small"),
+        _ => println!("something else"),
+    }
+}

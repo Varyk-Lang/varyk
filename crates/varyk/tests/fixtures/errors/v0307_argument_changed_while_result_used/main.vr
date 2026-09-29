@@ -1,0 +1,20 @@
+struct User {
+    name: string,
+}
+
+impl User {
+    fn name_ref(self) -> string {
+        self.name
+    }
+
+    fn rename(mut self, name: string) {
+        self.name = name.clone();
+    }
+}
+
+fn main() {
+    let mut user = User { name: "Ann" };
+    let name = user.name_ref();
+    user.rename("Bo");
+    println!("{}", name);
+}

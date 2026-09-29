@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0103]: the name `x` is defined more than once
+ --> crates/varyk/tests/fixtures/errors/v0103_duplicate_variant_field/main.vr:2:21
+  |
+2 |     Click { x: i32, x: i32 },
+  |             -       ^ the name `x` is defined more than once
+  |             |
+  |             `x` first defined here

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: alternatives (`a | b`) in a pattern are not supported in Varyk; write one arm for each
+ --> crates/varyk/tests/fixtures/errors/v0001_pattern_alternatives/main.vr:4:17
+  |
+4 |         Some(1) | Some(2) => println!("small"),
+  |                 ^ alternatives (`a | b`) in a pattern are not supported in Varyk; write one arm for each

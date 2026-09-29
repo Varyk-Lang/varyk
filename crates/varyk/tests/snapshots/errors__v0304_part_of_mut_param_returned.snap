@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: this is part of `counter`, which this function may change, so it cannot be returned; make `counter` read-only, or return a copy instead, with `.clone()`
+ --> crates/varyk/tests/fixtures/errors/v0304_part_of_mut_param_returned/main.vr:8:5
+  |
+8 |     counter.label
+  |     ^^^^^^^^^^^^^ this is part of `counter`, which this function may change, so it cannot be returned; make `counter` read-only, or return a copy instead, with `.clone()`
+  |
+  = note: the caller could not even read what it passed as `counter` while the result is used
+  = note: in Rust terms, the result would keep the mutable borrow of `counter` alive for as long as it is used
+help: insert `.clone()` after `label`

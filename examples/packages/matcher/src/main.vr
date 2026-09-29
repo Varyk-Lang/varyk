@@ -3,6 +3,7 @@
 // 42: the number 42, 1 digit runs
 // route 66 or 101: word, 2 digit runs
 // 2 of 3 contain digits
+// true
 
 mod text;
 
@@ -28,4 +29,5 @@ fn main() {
         println!("{}: {}, {} digit runs", s, describe(text::classify(s)), digits.count(s));
     }
     println!("{} of {} contain digits", with_digits, inputs.len());
+    println!("{}", text::classify("apple") == text::Kind::Word);
 }

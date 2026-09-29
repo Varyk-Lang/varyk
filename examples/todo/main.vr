@@ -8,13 +8,7 @@
 mod task;
 
 fn count_done(tasks: Vec<task::Task>) -> usize {
-    let mut done: usize = 0;
-    for t in tasks {
-        if t.is_done() {
-            done = done + 1;
-        }
-    }
-    done
+    tasks.iter().filter(|t| t.is_done()).count()
 }
 
 fn print_all(tasks: Vec<task::Task>) {

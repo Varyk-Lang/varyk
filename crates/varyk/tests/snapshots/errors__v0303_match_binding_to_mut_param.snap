@@ -2,11 +2,11 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0303]: `change` may change `s`, but `s` is a name bound by a `match` pattern, so it cannot be changed; to change it, first make a changeable copy with `let mut s = s;`
+error[V0303]: `change` may change `s`, but `s` is a name bound by a pattern, so it cannot be changed; to change it, first make a changeable copy with `let mut s = s;`
   --> crates/varyk/tests/fixtures/errors/v0303_match_binding_to_mut_param/main.vr:12:27
    |
 12 |         Some(s) => change(s),
-   |              -            ^ `change` may change `s`, but `s` is a name bound by a `match` pattern, so it cannot be changed; to change it, first make a changeable copy with `let mut s = s;`
+   |              -            ^ `change` may change `s`, but `s` is a name bound by a pattern, so it cannot be changed; to change it, first make a changeable copy with `let mut s = s;`
    |              |
    |              `s` is bound here
    |

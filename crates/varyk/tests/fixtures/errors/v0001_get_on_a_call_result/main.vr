@@ -1,0 +1,9 @@
+fn lines() -> Vec<string> {
+    vec!["first", "second"]
+}
+
+fn main() {
+    if let Some(line) = lines().get(1) {
+        println!("{}", line);
+    }
+}

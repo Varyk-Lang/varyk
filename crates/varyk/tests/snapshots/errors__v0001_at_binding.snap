@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `@` bindings in patterns are not supported in Varyk; bind the whole value with a name and match on that name inside the arm
+ --> crates/varyk/tests/fixtures/errors/v0001_at_binding/main.vr:4:11
+  |
+4 |         n @ Some(_) => println!("found"),
+  |           ^ `@` bindings in patterns are not supported in Varyk; bind the whole value with a name and match on that name inside the arm

@@ -13,21 +13,24 @@ use std::collections::HashMap;
 
 use varyk_syntax::{
     BinaryOp, Block, Expr, ExprKind, FixIt, ForHead, Function, Ident, Item, Path, SourceFile, Span,
-    Stmt, UnaryOp, UseDecl,
+    Stmt, TypeExpr, UnaryOp, UseDecl,
 };
 
+use crate::builtins::Owner;
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
     HirBlock, HirEnum, HirExpr, HirExprKind, HirForHead, HirFunction, HirModule, HirModuleKind,
-    HirParam, HirProgram, HirStmt, HirStruct, HirUse, LocalId, LocalInfo, PlaceInfo, is_place,
+    HirParam, HirProgram, HirStmt, HirStruct, HirUse, LocalId, LocalInfo, LocalKind, MethodRef,
+    PlaceInfo, is_place,
 };
 use crate::interop::tidy_signature;
 use crate::package::Kind;
 use crate::resolve::{
     Callee, FnId, FnSig, ImportedSig, LookupError, ModuleId, ModuleKind, Resolved, StructDef,
     StructId, Symbols, Unusable, UserType, display_path, is_visible, no_parent, not_visible,
-    reserved_value_name, split_last,
+    path_text, reserved_value_name, split_last,
 };
+use crate::types::derives::{self, Blocker, Judged};
 use crate::types::{FloatKind, IntKind, ParamMode, Ty};
 
 /// Type-checks every Varyk function and lowers the program to HIR, or
@@ -40,12 +43,14 @@ pub fn typecheck(
     let symbols = &resolved.symbols;
     let mut diagnostics = Vec::new();
     let mut functions = Vec::new();
+    let derives = derives::compute(&symbols.structs, &symbols.enums);
 
     for (index, sig) in symbols.fns.iter().enumerate() {
         let id = FnId(index as u32);
         let decl = resolved.fn_decl(id);
         let mut checker = FnChecker {
             symbols,
+            derives: &derives,
             sources,
             module: sig.module,
             name: &sig.name,
@@ -53,7 +58,9 @@ pub fn typecheck(
             locals: Vec::new(),
             scopes: Vec::new(),
             loop_depth: 0,
+            closures: Vec::new(),
             range_vars: Vec::new(),
+            result_try_operand: None,
             diagnostics: &mut diagnostics,
         };
         if let Some(function) = checker.function(id, sig, decl) {
@@ -72,25 +79,29 @@ pub fn typecheck(
     let structs = symbols
         .structs
         .iter()
-        .map(|def| HirStruct {
+        .enumerate()
+        .map(|(id, def)| HirStruct {
             name: def.name.clone(),
             module: def.module,
             is_pub: def.is_pub,
             imported: def.imported,
             fields: def.fields.clone(),
+            derives: derives.of_struct(id),
             span: def.span,
         })
         .collect();
     let enums = symbols
         .enums
         .iter()
-        .map(|def| HirEnum {
+        .enumerate()
+        .map(|(id, def)| HirEnum {
             name: def.name.clone(),
             module: def.module,
             is_pub: def.is_pub,
             imported: def.imported,
             variants: def.variants.clone(),
             drops: def.drops.clone(),
+            derives: derives.of_enum(id),
             span: def.span,
         })
         .collect();
@@ -214,6 +225,8 @@ type Scope = HashMap<String, Option<LocalId>>;
 /// reported a diagnostic when it returns `None`.
 struct FnChecker<'a> {
     symbols: &'a Symbols,
+    /// Which types can be cloned and compared (M4 spec 2.10).
+    derives: &'a Judged<'a>,
     sources: &'a [SourceFile],
     module: ModuleId,
     /// The function's name, for the message of a misused `?`.
@@ -221,11 +234,19 @@ struct FnChecker<'a> {
     ret: Ty,
     locals: Vec<LocalInfo>,
     scopes: Vec<Scope>,
-    /// How many `while` and `for` loops enclose the current statement.
+    /// How many `while` and `for` loops enclose the current statement,
+    /// within the innermost closure.
     loop_depth: u32,
+    /// The closures whose bodies enclose the current expression,
+    /// outermost first.
+    closures: Vec<closures::Frame>,
     /// The variables of `for` loops over a range, for the note of a V0200
     /// on one (its type is its range's).
     range_vars: Vec<LocalId>,
+    /// The span of the operand of a `?` being checked in a function
+    /// returning `Result`, so that `parse()?` there is V0206 rather than a
+    /// mismatch (M4 spec 2.6, 2.7).
+    result_try_operand: Option<Span>,
     diagnostics: &'a mut Vec<Diagnostic>,
 }
 
@@ -263,6 +284,11 @@ impl FnChecker<'_> {
         let body = self.block(&decl.body, Some(sig.ret.clone()));
         self.scopes.pop();
         let body = body?;
+        let before = self.diagnostics.len();
+        unfinished_chains_in_block(&body, self.diagnostics);
+        if self.diagnostics.len() > before {
+            return None;
+        }
 
         if body.ty != sig.ret {
             match &body.tail {
@@ -300,6 +326,7 @@ impl FnChecker<'_> {
             body,
             locals: std::mem::take(&mut self.locals),
             span: decl.span,
+            ret_root: None,
         })
     }
 
@@ -316,7 +343,7 @@ impl FnChecker<'_> {
             if def
                 .variants
                 .iter()
-                .any(|(variant, payload)| *variant == name.name && payload.is_empty())
+                .any(|variant| variant.name == name.name && variant.is_unit())
             {
                 let (n, e) = (&name.name, &def.name);
                 self.diagnostics.push(
@@ -339,6 +366,7 @@ impl FnChecker<'_> {
             span: name.span,
             place: PlaceInfo::default(),
             repr: None,
+            kind: LocalKind::Plain,
         });
         // `_` binds nothing: a later `_` used as a value is V0100.
         if name.name != "_" {
@@ -472,6 +500,8 @@ impl FnChecker<'_> {
                 Some(HirStmt::Expr { expr, span: *span })
             }
             Stmt::Return { value, span } => {
+                let keyword = Span::new(span.file, span.start, span.start + "return".len() as u32);
+                self.leaves_closure("`return`", keyword)?;
                 let value = match value {
                     Some(value) => {
                         let ret = self.ret.clone();
@@ -508,6 +538,12 @@ impl FnChecker<'_> {
                     span: *span,
                 })
             }
+            Stmt::WhileLet {
+                pattern,
+                value,
+                body,
+                span,
+            } => self.while_let(pattern, value, body, *span),
             Stmt::For {
                 var,
                 head,
@@ -560,13 +596,34 @@ impl FnChecker<'_> {
     }
 
     /// What a `for` goes over (spec 2.4), with the type of its variable: a
-    /// range, or a `Vec` that is a place or a temporary (V0001 otherwise,
-    /// as for `match`); anything else is V0200.
+    /// range, a chain, whose variable is its item (M4 spec 2.3), or a `Vec`
+    /// that is a place or a temporary (V0001 otherwise, as for `match`); a
+    /// `HashMap` is V0001 naming `keys()` and `values()` (M4 spec 2.7),
+    /// anything else V0200.
     fn for_head(&mut self, head: &ForHead) -> Option<(HirForHead, Ty)> {
         let head = match head {
-            ForHead::Range { start, end } => return self.range(start, end),
+            ForHead::Range {
+                start,
+                end,
+                inclusive,
+            } => return self.range(start, end, *inclusive),
             ForHead::Expr(head) => self.expr(head, None)?,
         };
+        if let Ty::HashMap(..) = head.ty {
+            let message = format!(
+                "`for` cannot go over a whole `{}`, since each round would need a key and a \
+                 value together; use `keys()` or `values()`",
+                self.ty_name(&head.ty)
+            );
+            self.diagnostics
+                .push(Diagnostic::new(codes::V0001, head.span, message));
+            return None;
+        }
+        if let Ty::Chain(item) = &head.ty {
+            // Anything but a call of a chain is left to the V0208 walk.
+            let item = (**item).clone();
+            return Some((HirForHead::Chain(head), item));
+        }
         self.check_head(&head, "the `Vec` looped over", "loop over")?;
         let Ty::Vec(item) = &head.ty else {
             let message = format!(
@@ -581,9 +638,9 @@ impl FnChecker<'_> {
         Some((HirForHead::Vec(head), item))
     }
 
-    /// `start..end` in a `for` head: two integers of one type, a literal
+    /// `start..end` or `start..=end` in a `for` head: two integers of one type, a literal
     /// end taking the other end's type, as the operands of `+` do.
-    fn range(&mut self, start: &Expr, end: &Expr) -> Option<(HirForHead, Ty)> {
+    fn range(&mut self, start: &Expr, end: &Expr, inclusive: bool) -> Option<(HirForHead, Ty)> {
         // The end that is not a literal is checked first and types the other.
         let start_first = !(is_literal(start) && !is_literal(end));
         let (first, second) = if start_first {
@@ -613,7 +670,15 @@ impl FnChecker<'_> {
             return None;
         }
         let ty = start.ty.clone();
-        Some((HirForHead::Range { start, end }, ty))
+        let (start, end) = (Box::new(start), Box::new(end));
+        Some((
+            HirForHead::Range {
+                start,
+                end,
+                inclusive,
+            },
+            ty,
+        ))
     }
 
     /// V0002 unless a `while` or `for` loop encloses the `keyword`
@@ -624,6 +689,7 @@ impl FnChecker<'_> {
             return Some(());
         }
         let span = Span::new(stmt.file, stmt.start, stmt.start + keyword.len() as u32);
+        self.leaves_closure(&format!("`{keyword}`"), span)?;
         let message = format!("`{keyword}` is only allowed inside a `while` or `for` loop");
         self.diagnostics
             .push(Diagnostic::new(codes::V0002, span, message));
@@ -721,15 +787,65 @@ impl FnChecker<'_> {
                 receiver,
                 method,
                 args,
-            } => return self.method_call(receiver, method, args, span),
+            } => return self.method_call(receiver, method, args, expected, span),
             ExprKind::Index { base, index } => return self.index(base, index, span),
-            ExprKind::Try { operand } => return self.try_(operand, span),
+            ExprKind::Try { operand } => return self.try_(operand, expected, span),
             ExprKind::Match { scrutinee, arms } => {
                 return self.match_expr(scrutinee, arms, expected, span);
             }
             ExprKind::VecLit(elements) => return self.vec_lit(elements, expected, span),
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then,
+                else_,
+                span: _,
+            } => {
+                return self.if_let(pattern, value, then, else_.as_ref(), expected, span);
+            }
+            ExprKind::Closure { .. } => {
+                self.diagnostics.push(closures::misplaced(span));
+                return None;
+            }
+            ExprKind::Cast { expr, ty, .. } => return self.cast(expr, ty, span),
         };
         Some(HirExpr { kind, ty, span })
+    }
+
+    /// `expr as T` (M4 spec 2.9): both the operand and the named type are
+    /// number types (V0200 otherwise). The operand is typed on its own, so
+    /// a literal is an `i32` or an `f64`.
+    fn cast(&mut self, operand: &Expr, target: &TypeExpr, span: Span) -> Option<HirExpr> {
+        let operand = self.expr(operand, None);
+        let target = match self.symbols.resolve_type(target, self.module) {
+            Ok(ty) => ty,
+            Err(diagnostic) => {
+                self.diagnostics.push(diagnostic);
+                return None;
+            }
+        };
+        let operand = operand?;
+        let number = |ty: &Ty| matches!(ty, Ty::Int(_) | Ty::Float(_));
+        if !number(&operand.ty) || !number(&target) {
+            let message = format!(
+                "`as` converts between number types, and this is `{}` as `{}`",
+                self.ty_name(&operand.ty),
+                self.ty_name(&target)
+            );
+            self.diagnostics.push(
+                Diagnostic::new(codes::V0200, span, message)
+                    .with_note("both sides of `as` must be integers, `usize`, `f32`, or `f64`"),
+            );
+            return None;
+        }
+        Some(HirExpr {
+            kind: HirExprKind::Cast {
+                expr: Box::new(operand),
+                ty: target.clone(),
+            },
+            ty: target,
+            span,
+        })
     }
 
     /// An integer literal takes the expected integer type, `i32` without
@@ -815,7 +931,13 @@ impl FnChecker<'_> {
             .rev()
             .find_map(|scope| scope.get(&name.name));
         match found {
-            Some(local) => *local,
+            Some(local) => {
+                let local = *local;
+                if let Some(local) = local {
+                    self.capture(local);
+                }
+                local
+            }
             None => {
                 let message = if name.name == "self" {
                     "`self` is only available inside a method".to_string()
@@ -938,24 +1060,14 @@ impl FnChecker<'_> {
 
         let symbol = op.as_str();
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-            if let Ty::Struct(_) = ty {
-                let message = format!(
-                    "`{symbol}` cannot be applied to struct `{}`",
-                    self.ty_name(&ty)
-                );
-                let diagnostic = Diagnostic::new(codes::V0203, span, message)
-                    .with_note("`==` and `!=` work only on numbers, `bool`, and `string`");
-                self.diagnostics.push(diagnostic);
-                return None;
-            }
-            if matches!(
-                ty,
-                Ty::Enum(_) | Ty::Option(_) | Ty::Result(..) | Ty::Vec(_)
-            ) {
-                let message = format!("`{symbol}` cannot be applied to `{}`", self.ty_name(&ty));
-                let diagnostic = Diagnostic::new(codes::V0203, span, message)
-                    .with_note("`==` and `!=` work only on numbers, `bool`, and `string`");
-                self.diagnostics.push(diagnostic);
+            if let Err(blocker) = self.derives.can_compare(&ty) {
+                let headline =
+                    format!("`{}` cannot be compared with `{symbol}`", self.ty_name(&ty));
+                let rust = "in Rust terms, `==` and `!=` need the type to implement \
+                            `PartialEq`, which Varyk derives for a struct or enum whose every \
+                            field and payload has it, and reads from `#[derive(..)]` on a Rust \
+                            type";
+                self.blocked(span, headline, blocker, rust);
                 return None;
             }
             if ty == Ty::Unit {
@@ -1138,6 +1250,7 @@ impl FnChecker<'_> {
             kind: HirExprKind::Call {
                 callee: found,
                 args,
+                rooted: None,
             },
             ty: ret,
             span,
@@ -1214,13 +1327,8 @@ impl FnChecker<'_> {
                     {
                         let def = &self.symbols.enums[enum_id.0 as usize];
                         if def.variant(&name.name).is_some() {
-                            self.diagnostics.push(Diagnostic::new(
-                                codes::V0001,
-                                span,
-                                "enum variants with named fields are not supported until \
-                                 milestone 4; use a tuple variant instead",
-                            ));
-                            return None;
+                            let owner = module.map(path_text).unwrap_or_default();
+                            return self.named_variant(enum_id, &owner, name, fields, span);
                         }
                     }
                 }
@@ -1365,60 +1473,17 @@ impl FnChecker<'_> {
         span: Span,
     ) -> Option<HirExpr> {
         let cond = self.condition(cond);
-        let Some(else_) = else_ else {
-            let then = self.block(then, Some(Ty::Unit));
-            let (cond, then) = (cond?, then?);
-            if then.ty != Ty::Unit {
-                let tail = then.tail.as_deref().expect("a non-unit block has a tail");
-                let message = format!(
-                    "`if` without `else` must have type `()`, found `{}`",
-                    self.ty_name(&tail.ty)
-                );
-                self.diagnostics
-                    .push(Diagnostic::new(codes::V0200, tail.span, message));
-                return None;
-            }
-            return Some(HirExpr {
-                kind: HirExprKind::If {
-                    cond: Box::new(cond),
-                    then,
-                    else_: None,
-                },
-                ty: Ty::Unit,
-                span,
-            });
-        };
-
-        let then = self.block(then, expected.clone());
-        // The then-branch types the else-branch's literals, unless it
-        // always leaves early and so says nothing about the value.
-        let then_diverges = then.as_ref().is_some_and(block_diverges);
-        let else_expected = match &then {
-            Some(then) if !then_diverges => expected.clone().or(Some(then.ty.clone())),
-            _ => expected,
-        };
-        let else_block = self.block(else_, else_expected);
-        let (cond, then, else_block) = (cond?, then?, else_block?);
-
-        let ty = if then_diverges {
-            else_block.ty.clone()
-        } else if block_diverges(&else_block) || else_block.ty == then.ty {
-            then.ty.clone()
-        } else {
-            let message = format!(
-                "`if` and `else` have incompatible types: expected `{}`, found `{}`",
-                self.ty_name(&then.ty),
-                self.ty_name(&else_block.ty)
-            );
-            self.diagnostics
-                .push(Diagnostic::new(codes::V0200, else_block.span, message));
-            return None;
-        };
+        let branches = self.branches(
+            |checker, expected| checker.block(then, expected),
+            else_,
+            expected,
+        );
+        let (cond, (then, else_, ty)) = (cond?, branches?);
         Some(HirExpr {
             kind: HirExprKind::If {
                 cond: Box::new(cond),
                 then,
-                else_: Some(else_block),
+                else_,
             },
             ty,
             span,
@@ -1512,7 +1577,7 @@ impl FnChecker<'_> {
                     );
                     failed = true;
                 }
-                Ty::Enum(_) | Ty::Option(_) | Ty::Result(..) | Ty::Vec(_) => {
+                Ty::Enum(_) | Ty::Option(_) | Ty::Result(..) | Ty::Vec(_) | Ty::HashMap(..) => {
                     let message = format!(
                         "a whole `{}` cannot be printed with `{{}}`",
                         self.ty_name(&arg.ty)
@@ -1565,6 +1630,10 @@ impl FnChecker<'_> {
     }
 
     fn mismatch(&mut self, span: Span, expected: &Ty, found: &Ty) {
+        if found.has_chain() {
+            self.diagnostics.push(unfinished_chain(span));
+            return;
+        }
         let message = format!(
             "mismatched types: expected `{}`, found `{}`",
             self.ty_name(expected),
@@ -1612,6 +1681,22 @@ impl FnChecker<'_> {
         self.diagnostics.push(diagnostic);
     }
 
+    /// V0203 at `span` for `.clone()` or `==` on a type that cannot have
+    /// it (M4 spec 2.10): `headline`, naming the field in the way when the
+    /// value's own struct or enum has one, why as a note, and `rust`, the
+    /// Rust terms, as another.
+    fn blocked(&mut self, span: Span, headline: String, blocker: Blocker, rust: &str) {
+        let message = match &blocker.field {
+            Some(field) => format!("{headline}, because of {field}"),
+            None => headline,
+        };
+        let mut diagnostic = Diagnostic::new(codes::V0203, span, message);
+        if !blocker.reason.is_empty() {
+            diagnostic = diagnostic.with_note(blocker.reason);
+        }
+        self.diagnostics.push(diagnostic.with_note(rust));
+    }
+
     fn ty_name(&self, ty: &Ty) -> String {
         match ty {
             Ty::Bool => "bool".to_string(),
@@ -1625,6 +1710,10 @@ impl FnChecker<'_> {
                 format!("Result<{}, {}>", self.ty_name(ok), self.ty_name(err))
             }
             Ty::Vec(inner) => format!("Vec<{}>", self.ty_name(inner)),
+            Ty::HashMap(key, value) => {
+                format!("HashMap<{}, {}>", self.ty_name(key), self.ty_name(value))
+            }
+            Ty::Chain(item) => format!("chain of {}", self.ty_name(item)),
             Ty::Unit => "()".to_string(),
         }
     }
@@ -1667,6 +1756,151 @@ fn unusable_field(def: &StructDef, field: usize, unusable: &Unusable, span: Span
 fn field_visible(symbols: &Symbols, from: ModuleId, id: StructId, field: usize) -> bool {
     let def = &symbols.structs[id.0 as usize];
     is_visible(symbols, from, def.module, def.fields[field].is_pub)
+}
+
+/// V0208 at `span`, an unfinished chain where a value is needed (M4 spec
+/// 2.3).
+fn unfinished_chain(span: Span) -> Diagnostic {
+    Diagnostic::new(
+        codes::V0208,
+        span,
+        "this chain is not finished, and an unfinished chain cannot be kept or passed on; \
+         finish the chain here with `collect()`, `count()`, `sum()`, `any`, `all`, or `find`",
+    )
+    .with_note(
+        "in Rust terms, an unfinished chain is an iterator, whose type Varyk has no way to write",
+    )
+}
+
+/// V0208 for every unfinished chain in `block` anywhere but as the
+/// receiver of the next call of its chain or as a `for` head: where
+/// nothing expected a type, as in an unannotated `let`, an expression
+/// statement, or `Some(..)` and `vec![..]` with no expectation (M4 spec
+/// 2.3). The outermost such expression is reported, and nothing inside it.
+fn unfinished_chains_in_block(block: &HirBlock, out: &mut Vec<Diagnostic>) {
+    for stmt in &block.stmts {
+        match stmt {
+            HirStmt::Let { value: expr, .. } | HirStmt::Expr { expr, .. } => {
+                unfinished_chains(expr, false, out);
+            }
+            HirStmt::Assign { target, value, .. } => {
+                unfinished_chains(target, false, out);
+                unfinished_chains(value, false, out);
+            }
+            HirStmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    unfinished_chains(value, false, out);
+                }
+            }
+            HirStmt::While { cond, body, .. }
+            | HirStmt::WhileLet {
+                value: cond, body, ..
+            } => {
+                unfinished_chains(cond, false, out);
+                unfinished_chains_in_block(body, out);
+            }
+            HirStmt::For { head, body, .. } => {
+                match head {
+                    HirForHead::Range { start, end, .. } => {
+                        unfinished_chains(start, false, out);
+                        unfinished_chains(end, false, out);
+                    }
+                    HirForHead::Vec(vec) => unfinished_chains(vec, false, out),
+                    // A chain call is where a chain may end.
+                    HirForHead::Chain(chain) => unfinished_chains(chain, true, out),
+                }
+                unfinished_chains_in_block(body, out);
+            }
+            HirStmt::Break { .. } | HirStmt::Continue { .. } => {}
+        }
+    }
+    if let Some(tail) = &block.tail {
+        unfinished_chains(tail, false, out);
+    }
+}
+
+/// [`unfinished_chains_in_block`] for `expr`; `next` when it is the
+/// receiver of a call of a chain, where a chain call may be.
+fn unfinished_chains(expr: &HirExpr, next: bool, out: &mut Vec<Diagnostic>) {
+    let chain_call = matches!(expr.kind, HirExprKind::MethodCall { .. });
+    // A closure's type is what its body gives, which the body answers for.
+    let closure = matches!(expr.kind, HirExprKind::Closure { .. });
+    if matches!(expr.ty, Ty::Chain(_)) && !(next && chain_call) && !closure {
+        out.push(unfinished_chain(expr.span));
+        return;
+    }
+    let each = |exprs: &[HirExpr], out: &mut Vec<Diagnostic>| {
+        for expr in exprs {
+            unfinished_chains(expr, false, out);
+        }
+    };
+    match &expr.kind {
+        HirExprKind::Int(_)
+        | HirExprKind::Float(_)
+        | HirExprKind::Bool(_)
+        | HirExprKind::String(_)
+        | HirExprKind::Local(_) => {}
+        HirExprKind::Call { args, .. }
+        | HirExprKind::Println { args, .. }
+        | HirExprKind::Format { args, .. }
+        | HirExprKind::EnumLit { args, .. }
+        | HirExprKind::VecLit(args) => each(args, out),
+        HirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let on_chain =
+                matches!(method, MethodRef::Builtin(id) if id.get().owner == Owner::Chain);
+            unfinished_chains(receiver, on_chain, out);
+            each(args, out);
+        }
+        HirExprKind::Field { base, .. } => unfinished_chains(base, false, out),
+        HirExprKind::Index { base, index } => {
+            unfinished_chains(base, false, out);
+            unfinished_chains(index, false, out);
+        }
+        HirExprKind::StructLit { fields, .. } => {
+            for (_, value) in fields {
+                unfinished_chains(value, false, out);
+            }
+        }
+        HirExprKind::Unary { operand, .. }
+        | HirExprKind::Cast { expr: operand, .. }
+        | HirExprKind::Try { operand, .. } => unfinished_chains(operand, false, out),
+        HirExprKind::Binary { lhs, rhs, .. } => {
+            unfinished_chains(lhs, false, out);
+            unfinished_chains(rhs, false, out);
+        }
+        HirExprKind::Block(block) | HirExprKind::Closure { body: block, .. } => {
+            unfinished_chains_in_block(block, out);
+        }
+        HirExprKind::If { cond, then, else_ } => {
+            unfinished_chains(cond, false, out);
+            unfinished_chains_in_block(then, out);
+            if let Some(else_) = else_ {
+                unfinished_chains_in_block(else_, out);
+            }
+        }
+        HirExprKind::IfLet {
+            value, then, else_, ..
+        } => {
+            unfinished_chains(value, false, out);
+            unfinished_chains_in_block(then, out);
+            if let Some(else_) = else_ {
+                unfinished_chains_in_block(else_, out);
+            }
+        }
+        HirExprKind::Match {
+            scrutinee, arms, ..
+        } => {
+            unfinished_chains(scrutinee, false, out);
+            for arm in arms {
+                unfinished_chains(&arm.body, false, out);
+            }
+        }
+    }
 }
 
 fn binary_expr(op: BinaryOp, lhs: HirExpr, rhs: HirExpr, ty: Ty, span: Span) -> HirExpr {
@@ -1755,6 +1989,11 @@ fn expr_diverges(expr: &HirExpr) -> bool {
             else_: Some(else_),
             ..
         } => block_diverges(then) && block_diverges(else_),
+        HirExprKind::IfLet {
+            then,
+            else_: Some(else_),
+            ..
+        } => block_diverges(then) && block_diverges(else_),
         HirExprKind::Match { arms, .. } => {
             !arms.is_empty() && arms.iter().all(|arm| expr_diverges(&arm.body))
         }
@@ -1823,6 +2062,8 @@ fn opaque_variant(full: &str, name: &str, reason: &str, span: Span) -> Diagnosti
     ))
 }
 
+mod closures;
+mod exhaustive;
 mod methods;
 mod patterns;
 mod values;

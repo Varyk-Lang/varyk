@@ -14,15 +14,15 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use varyk_syntax::{
-    FileId, FixIt, Function, ImplBlock, Item, Path, Program, SelfMode, SourceFile, Span, TypeExpr,
-    parse_source,
+    FileId, FixIt, Function, Ident, ImplBlock, Item, Path, Program, SelfMode, SourceFile, Span,
+    TypeExpr, VariantFields, parse_source,
 };
 
 use crate::builtins::BuiltinId;
 use crate::diagnostics::{Diagnostic, codes};
 use crate::interop::ImportedModule;
 use crate::package::Kind;
-use crate::types::{ParamMode, Ty};
+use crate::types::{Derives, ParamMode, Ty};
 
 mod imports;
 mod modules;
@@ -158,6 +158,10 @@ pub struct ImportedSig {
     pub params: Vec<(Ty, ParamMode)>,
     /// [`Ty::Unit`] when not `callable`.
     pub ret: Ty,
+    /// The parameter position (0 for `self`, as in [`ImportedSig::modes`])
+    /// a borrowed `ret` is part of, when lifetime elision roots it there
+    /// (M4 spec 2.12); `None` for an owned return.
+    pub ret_root: Option<usize>,
     /// The original Rust signature text, for the V0108 diagnostic.
     pub signature: String,
     pub callable: bool,
@@ -197,6 +201,10 @@ pub struct StructDef {
     /// Imported from a `.rs` module (M3 spec 4.1): checked like any
     /// struct, never emitted.
     pub imported: bool,
+    /// For an imported struct, what its `#[derive(..)]` lists (M4 spec
+    /// 2.12); `None` for a Varyk one, whose derives follow from its fields
+    /// (see `types::derives`).
+    pub derives: Option<Derives>,
     /// The whole declaration, starting at `struct` (or `pub`); for an
     /// imported struct, its name in the `.rs` file.
     pub span: Span,
@@ -239,13 +247,16 @@ pub struct EnumDef {
     pub name: String,
     pub module: ModuleId,
     pub is_pub: bool,
-    /// Each variant's name and payload types, in declaration order; a
-    /// unit variant has no payload. Empty (a placeholder) for an
-    /// `opaque` variant, whose real shape is never used.
-    pub variants: Vec<(String, Vec<Ty>)>,
+    /// Each variant, in declaration order. Empty (a placeholder) for an
+    /// `opaque` enum, whose real shape is never used.
+    pub variants: Vec<VariantDef>,
     /// Imported from a `.rs` module (M3 spec 4.3): checked like any enum,
     /// never emitted.
     pub imported: bool,
+    /// For an imported enum, what its `#[derive(..)]` lists (M4 spec
+    /// 2.12); `None` for a Varyk one, whose derives follow from its
+    /// payloads (see `types::derives`).
+    pub derives: Option<Derives>,
     /// An enum with an `impl Drop` in some `.rs` module, or one Varyk
     /// cannot rule out: a `match` on a temporary of it only looks inside
     /// it, as on a stored value, since Rust cannot move a payload out of
@@ -315,7 +326,39 @@ impl EnumDef {
     pub fn variant(&self, name: &str) -> Option<usize> {
         self.variants
             .iter()
-            .position(|(variant, _)| variant == name)
+            .position(|variant| variant.name == name)
+    }
+}
+
+/// A variant of an enum (spec 2.2, M4 spec 2.5): its name and what it
+/// holds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantDef {
+    pub name: String,
+    pub fields: VariantFieldsDef,
+}
+
+/// What a variant holds: values by position, none for a unit variant
+/// (`Point` is a `Tuple` of no types, written without `()`), or named
+/// fields in declaration order.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VariantFieldsDef {
+    Tuple(Vec<Ty>),
+    Named(Vec<(String, Ty)>),
+}
+
+impl VariantDef {
+    /// The types the variant holds, in declaration order.
+    pub fn types(&self) -> Vec<&Ty> {
+        match &self.fields {
+            VariantFieldsDef::Tuple(types) => types.iter().collect(),
+            VariantFieldsDef::Named(fields) => fields.iter().map(|(_, ty)| ty).collect(),
+        }
+    }
+
+    /// A unit variant: no values, no fields.
+    pub fn is_unit(&self) -> bool {
+        matches!(&self.fields, VariantFieldsDef::Tuple(types) if types.is_empty())
     }
 }
 
@@ -718,11 +761,26 @@ impl Symbols {
             for arg in &ty.args {
                 args.push(self.resolve_type(arg, from)?);
             }
+            if let (Some(key), true) = (args.first(), name == "HashMap") {
+                if !key.is_map_key() {
+                    return Err(Diagnostic::new(
+                        codes::V0101,
+                        ty.args[0].span,
+                        "a `HashMap` key must be of an integer type, `bool`, or `string`",
+                    )
+                    .with_note(
+                        "a key is compared and hashed to find its value; in Rust terms, the key \
+                         type must implement `Eq` and `Hash`, which floats and Varyk's own \
+                         types do not",
+                    ));
+                }
+            }
             let mut args = args.into_iter().map(Box::new);
-            let mut next = || args.next().expect("the argument count was checked");
+            let mut next = || args.next().unwrap_or_else(|| Box::new(Ty::Unit));
             return Ok(match name {
                 "Option" => Ty::Option(next()),
                 "Vec" => Ty::Vec(next()),
+                "HashMap" => Ty::HashMap(next(), next()),
                 _ => Ty::Result(next(), next()),
             });
         }
@@ -730,7 +788,10 @@ impl Symbols {
             return Err(Diagnostic::new(
                 codes::V0001,
                 ty.span,
-                format!("`{name}` takes no type arguments; only `Option`, `Result`, and `Vec` do"),
+                format!(
+                    "`{name}` takes no type arguments; only `Option`, `Result`, `Vec`, and \
+                     `HashMap` do"
+                ),
             ));
         }
         if let Some(path) = &ty.path {
@@ -832,13 +893,14 @@ impl Symbols {
     }
 }
 
-/// The argument count and written shape of `Option`, `Result`, and `Vec`;
-/// `None` for any other name.
+/// The argument count and written shape of `Option`, `Result`, `Vec`, and
+/// `HashMap`; `None` for any other name.
 fn generic_shape(name: &str) -> Option<(usize, &'static str)> {
     match name {
         "Option" => Some((1, "Option<T>")),
         "Vec" => Some((1, "Vec<T>")),
         "Result" => Some((2, "Result<T, E>")),
+        "HashMap" => Some((2, "HashMap<K, V>")),
         _ => None,
     }
 }
@@ -972,14 +1034,15 @@ pub(crate) fn reserved_type_name(name: &str, span: Span) -> Option<Diagnostic> {
 
 /// V0103 at `span` for a function, method, variant, field, parameter, or
 /// `let` named with one of the reserved names of spec 2.1 (`Some`, `None`,
-/// `Ok`, `Err`, `Option`, `Result`, `Vec`, `String`): the generated Rust
-/// would hide Rust's own (`let None = x;` is a pattern). The primitive
-/// names stay usable here; Rust keeps values and types apart.
+/// `Ok`, `Err`, `Option`, `Result`, `Vec`, `String`, and M4's `HashMap`):
+/// the generated Rust would hide Rust's own (`let None = x;` is a
+/// pattern). The primitive names stay usable here; Rust keeps values and
+/// types apart.
 pub(crate) fn reserved_value_name(name: &str, span: Span) -> Option<Diagnostic> {
     let owner = match name {
         "Some" | "None" => "`Option`",
         "Ok" | "Err" => "`Result`",
-        "Option" | "Result" | "Vec" | "String" => "a built-in type",
+        "Option" | "Result" | "Vec" | "HashMap" | "String" => "a built-in type",
         _ => return None,
     };
     Some(taken(name, owner, span))
@@ -1098,6 +1161,7 @@ fn collect_symbols(
                         module: module.id,
                         is_pub: decl.is_pub,
                         imported: false,
+                        derives: None,
                         fields: Vec::new(),
                         span: decl.span,
                     });
@@ -1120,7 +1184,10 @@ fn collect_symbols(
                     let variants = decl
                         .variants
                         .iter()
-                        .map(|variant| (variant.name.name.clone(), Vec::new()))
+                        .map(|variant| VariantDef {
+                            name: variant.name.name.clone(),
+                            fields: VariantFieldsDef::Tuple(Vec::new()),
+                        })
                         .collect();
                     symbols.enums.push(EnumDef {
                         name: name.name.clone(),
@@ -1128,6 +1195,7 @@ fn collect_symbols(
                         is_pub: decl.is_pub,
                         variants,
                         imported: false,
+                        derives: None,
                         drops: None,
                         opaque: None,
                         span: decl.span,
@@ -1298,8 +1366,27 @@ fn collect_symbols(
                             diagnostics.push(duplicate(&name.name, name.span, first));
                         }
                         seen.entry(&name.name).or_insert(name.span);
-                        let mut payload = Vec::new();
-                        for written in &variant.fields {
+                        // Each field name, where one is written.
+                        let written: Vec<(Option<&Ident>, &TypeExpr)> = match &variant.fields {
+                            VariantFields::Unit => Vec::new(),
+                            VariantFields::Tuple(types) => {
+                                types.iter().map(|ty| (None, ty)).collect()
+                            }
+                            VariantFields::Named(fields) => fields
+                                .iter()
+                                .map(|field| (Some(&field.name), &field.ty))
+                                .collect(),
+                        };
+                        let mut field_seen: HashMap<&str, Span> = HashMap::new();
+                        let mut resolved = Vec::new();
+                        for (field, written) in written {
+                            if let Some(field) = field {
+                                diagnostics.extend(reserved_value_name(&field.name, field.span));
+                                if let Some(&first) = field_seen.get(field.name.as_str()) {
+                                    diagnostics.push(duplicate(&field.name, field.span, first));
+                                }
+                                field_seen.entry(&field.name).or_insert(field.span);
+                            }
                             match symbols.resolve_type(written, module.id) {
                                 Ok(ty) => {
                                     if decl.is_pub {
@@ -1311,12 +1398,28 @@ fn collect_symbols(
                                         ));
                                     }
                                     parts.push((ty.clone(), written.span));
-                                    payload.push(ty);
+                                    resolved.push((field, ty));
                                 }
                                 Err(diagnostic) => diagnostics.push(diagnostic),
                             }
                         }
-                        variants.push((name.name.clone(), payload));
+                        let fields = match &variant.fields {
+                            VariantFields::Named(_) => VariantFieldsDef::Named(
+                                resolved
+                                    .into_iter()
+                                    .filter_map(|(field, ty)| Some((field?.name.clone(), ty)))
+                                    .collect(),
+                            ),
+                            VariantFields::Unit | VariantFields::Tuple(_) => {
+                                VariantFieldsDef::Tuple(
+                                    resolved.into_iter().map(|(_, ty)| ty).collect(),
+                                )
+                            }
+                        };
+                        variants.push(VariantDef {
+                            name: name.name.clone(),
+                            fields,
+                        });
                     }
                     symbols.enums[next_enum].variants = variants;
                     enum_parts.push(parts);
@@ -1381,10 +1484,10 @@ fn push_fn(
 /// V0109 for every struct or enum that contains itself, directly or
 /// through other structs' fields and enums' payloads, `Option` and
 /// `Result` arguments included, since Rust lays all of them out inline
-/// (rustc E0072); a `Vec` holds its elements elsewhere and breaks the
-/// cycle (spec 2.2). `parts[node]` lists a node's field or payload types
-/// with their spans, structs first (node `id`) and then enums (node
-/// `structs.len() + id`). A depth-first walk reports each cycle once, at
+/// (rustc E0072); a `Vec` or a `HashMap` holds its elements elsewhere and
+/// breaks the cycle (spec 2.2, M4 spec 2.7). `parts[node]` lists a node's
+/// field or payload types with their spans, structs first (node `id`) and
+/// then enums (node `structs.len() + id`). A depth-first walk reports each cycle once, at
 /// the part that closes it.
 fn check_recursive_types(
     symbols: &Symbols,
@@ -1467,7 +1570,11 @@ fn check_recursive_types(
                 "an enum cannot contain itself"
             };
             let diagnostic = Diagnostic::new(codes::V0109, span, message)
-                .with_note(format!("the cycle is {}", cycle.join(" -> ")));
+                .with_note(format!("the cycle is {}", cycle.join(" -> ")))
+                .with_note(
+                    "a `Vec` or `HashMap` holds its elements elsewhere, so holding the value \
+                     in one breaks the cycle",
+                );
             self.diagnostics.push(diagnostic);
         }
     }

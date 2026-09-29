@@ -6,6 +6,7 @@ pub mod cart;
 mod util;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 pub enum Size {
     Small,
     Large(i32),

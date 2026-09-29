@@ -12,12 +12,12 @@ use std::path::PathBuf;
 
 use varyk_syntax::{BinaryOp, Span, UnaryOp};
 
-use crate::builtins::BuiltinId;
+use crate::builtins::{BuiltinId, ResultKind};
 use crate::resolve::{
     Callee, DropCause, EnumId, FieldDef, FnId, ImportedFnId, ImportedSig, ModuleId, StructId,
-    UserType,
+    UserType, VariantDef,
 };
-use crate::types::{ParamMode, Ty};
+use crate::types::{Derives, ParamMode, Ty};
 
 /// Index into [`HirFunction::locals`]. Parameters come first: parameter
 /// `i` is always `LocalId(i)`, so a local is a parameter exactly when its
@@ -121,6 +121,8 @@ pub struct HirStruct {
     pub imported: bool,
     /// In declaration order; a field index is a position in this list.
     pub fields: Vec<FieldDef>,
+    /// Which traits it derives (M4 spec 2.10), or, imported, lists.
+    pub derives: Derives,
     pub span: Span,
 }
 
@@ -132,11 +134,13 @@ pub struct HirEnum {
     /// Imported from a `.rs` module (M3 spec 4.3): the backend emits no
     /// definition for it.
     pub imported: bool,
-    /// Each variant's name and payload types, in declaration order.
-    pub variants: Vec<(String, Vec<Ty>)>,
+    /// Each variant, in declaration order.
+    pub variants: Vec<VariantDef>,
     /// Has, or may have, an `impl Drop` in a `.rs` module (see
     /// `EnumDef::drops`).
     pub drops: Option<DropCause>,
+    /// Which traits it derives (M4 spec 2.10), or, imported, lists.
+    pub derives: Derives,
     pub span: Span,
 }
 
@@ -161,6 +165,14 @@ pub struct HirFunction {
     pub locals: Vec<LocalInfo>,
     /// The whole declaration, starting at `fn` (or `pub`).
     pub span: Span,
+    /// The parameter (`self` included) a borrowed return is part of (M4
+    /// spec 3.1): the backend writes `-> &str` or `-> &T`. The type checker
+    /// leaves `None`; `borrow::analyze` fills it in. For a function whose
+    /// returns borrow analysis rejects (V0304, V0308) it names the
+    /// parameter a rejected return is part of, so the Rust written for the
+    /// rejected program is the borrowed return rustc refuses; callers see
+    /// such a function as returning something new.
+    pub ret_root: Option<LocalId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,10 +214,25 @@ pub struct LocalInfo {
     ///   refers to a non-`mut` parameter or its initializer may evaluate to
     ///   a `&str` (a literal or a `Str` local), so every branch agrees on
     ///   one type; else `RefOwned`;
-    /// - a `match` pattern binding or a `for` variable: `RefOwned` on a
-    ///   place (the `String` inside what is matched on or looped over),
-    ///   `Owned` on a temporary.
+    /// - a pattern binding or a `for` variable: `RefOwned` on a place (the
+    ///   `String` inside what is matched on or looped over), `Owned` on a
+    ///   temporary; `Str` for one a pattern on a string binds, whatever the
+    ///   head (M4 spec 3.5).
     pub repr: Option<StringRepr>,
+    /// What bound it: a plain local, or a closure's parameter.
+    pub kind: LocalKind,
+}
+
+/// What bound a local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalKind {
+    /// A parameter, `let`, pattern binding, or `for` variable.
+    Plain,
+    /// The parameter of a closure (M4 spec 2.2, 3.2). `deref` says the
+    /// generated Rust hands it one reference deeper than its Varyk kind,
+    /// so the closure starts with `let x = *x;`: written by borrow
+    /// analysis, as `repr` is, and read by the backend.
+    ClosureParam { deref: bool },
 }
 
 /// How a `string` local is represented in the generated Rust.
@@ -247,6 +274,9 @@ pub enum Origin {
     /// is not a borrowed place): the root of an alias made from it (spec
     /// 3.1).
     Local(LocalId),
+    /// A name of the function around a closure, used inside it (M4 spec
+    /// 3.2): the closure only borrows it.
+    Captured(LocalId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -295,6 +325,17 @@ pub enum HirStmt {
         body: HirBlock,
         span: Span,
     },
+    /// `while let pattern = value { body }` (M4 spec 2.4): `value` is
+    /// evaluated anew each round, as `match`'s head, and the pattern's
+    /// bindings live only in `body`. `head_is_str` as on
+    /// [`HirExprKind::Match`].
+    WhileLet {
+        pattern: HirPattern,
+        value: HirExpr,
+        body: HirBlock,
+        head_is_str: bool,
+        span: Span,
+    },
     Break {
         span: Span,
     },
@@ -306,11 +347,19 @@ pub enum HirStmt {
 /// What a `for` goes over (spec 2.4, 3.2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirForHead {
-    /// `start..end`: two integers of one type, `end` excluded.
-    Range { start: HirExpr, end: HirExpr },
+    /// `start..end` (`end` excluded) or `start..=end` (`inclusive`): two
+    /// integers of one type.
+    Range {
+        start: Box<HirExpr>,
+        end: Box<HirExpr>,
+        inclusive: bool,
+    },
     /// A `Vec`: a place, which the loop only looks at, for the whole loop;
     /// or a temporary, which the loop owns and uses up.
     Vec(HirExpr),
+    /// A chain, one item per round (M4 spec 2.3, 3.3); the body may not
+    /// change or give away anything the head reads.
+    Chain(HirExpr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,9 +380,12 @@ pub enum HirExprKind {
     String(String),
     /// A parameter or `let` binding.
     Local(LocalId),
+    /// `rooted` as on [`HirExprKind::MethodCall`], set by borrow analysis
+    /// for a call of a function with a borrowed return (M4 spec 3.1).
     Call {
         callee: Callee,
         args: Vec<HirExpr>,
+        rooted: Option<usize>,
     },
     Field {
         base: Box<HirExpr>,
@@ -373,20 +425,45 @@ pub enum HirExprKind {
     },
     /// A variant value (`Shape::Circle(r)`, `Shape::Point`) or a built-in
     /// constructor (`Some(x)`, `None`, `Ok(x)`, `Err(e)`), with its
-    /// payload in order; every payload is an owned slot (spec 3.4).
+    /// payload in order; every payload is an owned slot (spec 3.4). A
+    /// variant with named fields (`Event::Click { x: 1, y: 2 }`, M4 spec
+    /// 2.5) has its values in source order, which is evaluation order, and
+    /// `fields` gives each one's position in the declaration; `fields` is
+    /// `None` for a variant with values by position.
+    ///
+    /// `write_full_type` is set for `Ok`, `Err`, and `None` that are the
+    /// direct operand of `?`: the backend writes their type arguments
+    /// (`Ok::<T, E>(x)?`), since rustc cannot infer them there.
     EnumLit {
         variant: VariantRef,
         args: Vec<HirExpr>,
+        fields: Option<Vec<usize>>,
+        write_full_type: bool,
     },
     /// `vec![..]`: its elements, each an owned slot (spec 2.9).
     VecLit(Vec<HirExpr>),
     /// `receiver.method(args)` (spec 2.5, 2.6): the receiver is an argument
     /// passed the way the method's `self` (or the table's receiver mode)
     /// says. A Varyk associated function or `Vec::new()` is a `Call`.
+    ///
+    /// `rooted` is the argument position (0 for the receiver) whose roots
+    /// the result borrows (M4 spec 2.8, 3.1, 5): the call is then a place
+    /// of that argument, as a field is of its base. The checker sets it on
+    /// a looked-into row whose payload is not Copy and on a `Borrowed` row;
+    /// borrow analysis sets it on a call of a method with a borrowed
+    /// return.
+    ///
+    /// `looked_into` is set by borrow analysis on a `find` whose chain's
+    /// items are borrowed (M4 spec 2.8, 3.3): its result holds part of
+    /// what the chain's source reads, and must be looked inside where it
+    /// is made, as a looked-into row with `rooted` must; the checker
+    /// leaves it unset.
     MethodCall {
         receiver: Box<HirExpr>,
         method: MethodRef,
         args: Vec<HirExpr>,
+        rooted: Option<usize>,
+        looked_into: bool,
     },
     /// `base[index]`: an element of the `Vec` `base`, a place derived from
     /// `base` like a field (spec 2.6).
@@ -397,14 +474,63 @@ pub enum HirExprKind {
     /// `match scrutinee { arms }` (spec 2.3). The scrutinee is a place (a
     /// local, or a field or element of one), which the `match` only looks
     /// at, or a temporary, which it owns (spec 3.2).
+    ///
+    /// `head_is_str` is set for every head of type `string` (M4 spec 3.5,
+    /// 5): the backend writes it as exactly a `&str`, and every name its
+    /// patterns bind to a `string` is a `&str` borrowed from it.
     Match {
         scrutinee: Box<HirExpr>,
         arms: Vec<HirArm>,
+        head_is_str: bool,
     },
-    /// `operand?` (spec 2.8): `operand` is a `Result` with the function's
-    /// error type, an owned slot (spec 3.4); the value is its `Ok` payload,
-    /// and on `Err` the function returns that error at once.
-    Try(Box<HirExpr>),
+    /// `if let pattern = value { then } else { else_ }` (M4 spec 2.4): an
+    /// expression typed like `if`, its `value` a head following the rules
+    /// of `match`'s, and the pattern's bindings living only in `then`.
+    IfLet {
+        pattern: Box<HirPattern>,
+        value: Box<HirExpr>,
+        then: HirBlock,
+        else_: Option<HirBlock>,
+        head_is_str: bool,
+    },
+    /// `operand?` (spec 2.8, M4 spec 2.6): `operand` is a `Result` with the
+    /// function's error type or an `Option` in a function returning
+    /// `Option` (`kind`), an owned slot (spec 3.4); the value is its `Ok` or
+    /// `Some` payload, and otherwise the function returns at once.
+    Try {
+        operand: Box<HirExpr>,
+        kind: TryKind,
+    },
+    /// `expr as T` (M4 spec 2.9): a conversion between number types; the
+    /// target is the expression's type.
+    Cast {
+        expr: Box<HirExpr>,
+        ty: Ty,
+    },
+    /// `|param| body` (M4 spec 2.2), only ever the argument of a table row
+    /// whose parameter is a closure; its type is what the body gives.
+    /// `captures` are the locals of the function around it that the body
+    /// uses, in order of first use: a local declared outside the closure's
+    /// span, which the closure borrows (M4 spec 3.2). A body written as an
+    /// expression is a block with that expression as its tail.
+    ///
+    /// `returns_part` is set by borrow analysis on the closure of a chain's
+    /// `map` whose value is part of its parameter or of a captured name
+    /// (M4 spec 3.2, 3.3): the backend writes that value as a reference,
+    /// as it writes a borrowed return. The checker leaves it unset.
+    Closure {
+        param: LocalId,
+        captures: Vec<LocalId>,
+        body: HirBlock,
+        returns_part: bool,
+    },
+}
+
+/// Which type a `?` works on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryKind {
+    Option,
+    Result,
 }
 
 /// One arm of a `match`: its pattern's bindings live only in its body.
@@ -415,33 +541,64 @@ pub struct HirArm {
     pub span: Span,
 }
 
-/// A pattern, one level deep (spec 2.3), typed against the scrutinee.
+/// A pattern (spec 2.3, M4 spec 2.5), typed against the value it looks
+/// at and nested to any depth.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirPattern {
     /// `_`: matches anything, binds nothing.
     Wildcard,
-    /// A name: matches anything and binds the whole value.
+    /// A name: matches anything and binds it.
     Binding(LocalId),
-    /// A variant, with each position's binding, or `None` for `_`.
+    /// A variant with values by position, or none: each position's own
+    /// pattern.
     Variant {
         variant: VariantRef,
-        bindings: Vec<Option<LocalId>>,
+        fields: Vec<HirPattern>,
     },
+    /// A variant with named fields: every field once, in declaration
+    /// order, with its pattern.
+    Struct {
+        variant: VariantRef,
+        fields: Vec<(String, HirPattern)>,
+    },
+    /// An integer, a string (only as the whole pattern), or a `bool`.
+    Literal(HirLiteral),
+    /// `lo..=hi`, both ends included, `lo <= hi`.
+    Range { lo: i128, hi: i128 },
+}
+
+/// The value of a literal pattern.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirLiteral {
+    Int(i128),
+    /// Raw text between the quotes, escapes not yet resolved.
+    Str(String),
+    Bool(bool),
 }
 
 impl HirPattern {
-    /// The locals the pattern binds, each with whether it names the whole
-    /// value (a catch-all name) rather than a part of it.
+    /// The locals the pattern binds at any depth, each with whether it
+    /// names the whole value (a catch-all name) rather than a part of it.
     pub fn bindings(&self) -> Vec<(LocalId, bool)> {
-        match self {
-            HirPattern::Wildcard => Vec::new(),
-            HirPattern::Binding(local) => vec![(*local, true)],
-            HirPattern::Variant { bindings, .. } => bindings
-                .iter()
-                .flatten()
-                .map(|local| (*local, false))
-                .collect(),
+        fn collect(pattern: &HirPattern, whole: bool, out: &mut Vec<(LocalId, bool)>) {
+            match pattern {
+                HirPattern::Wildcard | HirPattern::Literal(_) | HirPattern::Range { .. } => {}
+                HirPattern::Binding(local) => out.push((*local, whole)),
+                HirPattern::Variant { fields, .. } => {
+                    for field in fields {
+                        collect(field, false, out);
+                    }
+                }
+                HirPattern::Struct { fields, .. } => {
+                    for (_, field) in fields {
+                        collect(field, false, out);
+                    }
+                }
+            }
         }
+        let mut out = Vec::new();
+        collect(self, true, &mut out);
+        out
     }
 }
 
@@ -469,7 +626,8 @@ pub enum VariantRef {
 }
 
 /// The expressions whose value `expr` evaluates to: `expr` itself, or,
-/// through blocks, `if` branches, and `match` arms, their tails. A block
+/// through blocks, `if` and `if let` branches, and `match` arms, their
+/// tails. A block
 /// without a tail contributes nothing.
 pub(crate) fn leaves(expr: &HirExpr) -> Vec<&HirExpr> {
     fn block_leaves<'a>(block: &'a HirBlock, out: &mut Vec<&'a HirExpr>) {
@@ -481,6 +639,12 @@ pub(crate) fn leaves(expr: &HirExpr) -> Vec<&HirExpr> {
         match &expr.kind {
             HirExprKind::Block(block) => block_leaves(block, out),
             HirExprKind::If { then, else_, .. } => {
+                block_leaves(then, out);
+                if let Some(else_) = else_ {
+                    block_leaves(else_, out);
+                }
+            }
+            HirExprKind::IfLet { then, else_, .. } => {
                 block_leaves(then, out);
                 if let Some(else_) = else_ {
                     block_leaves(else_, out);
@@ -500,20 +664,67 @@ pub(crate) fn leaves(expr: &HirExpr) -> Vec<&HirExpr> {
 }
 
 /// The innermost base of a chain of fields and elements (`a` in `a.b[i].c`,
-/// spec 3.1); `expr` itself for anything but a field access or an index.
+/// spec 3.1), through a call with `rooted` to the argument it borrows
+/// from (`v` in `v.get(0)`, M4 spec 2.8); `expr` itself for anything else.
 pub(crate) fn field_root(expr: &HirExpr) -> &HirExpr {
     match &expr.kind {
         HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } => field_root(base),
-        _ => expr,
+        _ => match rooted_argument(expr) {
+            Some(argument) => field_root(argument),
+            None => expr,
+        },
     }
 }
 
-/// Whether `expr` is an `if`, a block, or a `match`: a value made of the
-/// values of its branches (see [`leaves`]).
+/// The argument a call with `rooted` borrows its result from: its
+/// receiver, or one of its arguments; `None` for anything else.
+pub(crate) fn rooted_argument(expr: &HirExpr) -> Option<&HirExpr> {
+    match &expr.kind {
+        HirExprKind::MethodCall {
+            rooted: Some(0),
+            receiver,
+            ..
+        } => Some(receiver),
+        HirExprKind::MethodCall {
+            rooted: Some(index),
+            args,
+            ..
+        } => args.get(index - 1),
+        HirExprKind::Call {
+            rooted: Some(index),
+            args,
+            ..
+        } => args.get(*index),
+        _ => None,
+    }
+}
+
+/// Whether `expr` is a call of a looked-into row whose result holds part
+/// of its receiver (M4 spec 2.8): an `Option` Varyk has no spelling for,
+/// which must be looked inside right where it is made.
+pub(crate) fn is_looked_into(expr: &HirExpr) -> bool {
+    match &expr.kind {
+        HirExprKind::MethodCall {
+            looked_into: true, ..
+        } => true,
+        HirExprKind::MethodCall {
+            method: MethodRef::Builtin(id),
+            rooted: Some(_),
+            ..
+        } => id.get().result_kind == ResultKind::LookInside,
+        _ => false,
+    }
+}
+
+/// Whether `expr` is an `if`, an `if let`, a block, or a `match`: a
+/// value made of the values of its branches (see [`leaves`]).
 pub(crate) fn is_block_like(expr: &HirExpr) -> bool {
     matches!(
         expr.kind,
-        HirExprKind::If { .. } | HirExprKind::Block(_) | HirExprKind::Match { .. }
+        HirExprKind::If { .. }
+            | HirExprKind::IfLet { .. }
+            | HirExprKind::Block(_)
+            | HirExprKind::Match { .. }
     )
 }
 
@@ -526,12 +737,57 @@ pub(crate) fn is_place(expr: &HirExpr) -> bool {
     }
 }
 
-/// Whether a `match` on `head` only looks inside it, its bindings
-/// aliases of its parts, rather than owning it: `head` is a place, or a
-/// temporary of an enum with a destructor, whose payload Rust cannot
-/// move out (E0509).
+/// [`is_place`], or a call with `rooted` whose argument is one: the
+/// result is part of that argument (M4 spec 2.8); or a looked-into `find`,
+/// part of what its chain's source reads (M4 spec 3.3). Borrow analysis
+/// and the backend decide place against temporary with this; the checker
+/// keeps [`is_place`].
+pub(crate) fn is_place_or_rooted(expr: &HirExpr) -> bool {
+    match &expr.kind {
+        HirExprKind::Local(_)
+        | HirExprKind::MethodCall {
+            looked_into: true, ..
+        } => true,
+        HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } => {
+            is_place_or_rooted(base)
+        }
+        _ => rooted_argument(expr).is_some_and(is_place_or_rooted),
+    }
+}
+
+/// Whether a `match`, `if let`, or `while let` on `head` only looks
+/// inside it, its bindings aliases of its parts, rather than owning it:
+/// `head` is a place (or a call rooted at one), or a temporary with an
+/// enum that has a destructor anywhere inside its type (at the top, or
+/// inside an `Option`, a `Result`, or an enum's payloads), whose payload
+/// Rust cannot move out at any depth (E0509).
 pub(crate) fn matched_in_place(enums: &[HirEnum], head: &HirExpr) -> bool {
-    is_place(head) || matches!(head.ty, Ty::Enum(id) if enums[id.0 as usize].drops.is_some())
+    is_place_or_rooted(head) || dropping_enum(enums, &head.ty).is_some()
+}
+
+/// The first enum with a destructor in `ty`, looking through `Option`,
+/// `Result`, and enum payloads (M4 spec 5).
+pub(crate) fn dropping_enum(enums: &[HirEnum], ty: &Ty) -> Option<EnumId> {
+    fn find(enums: &[HirEnum], ty: &Ty, seen: &mut Vec<EnumId>) -> Option<EnumId> {
+        match ty {
+            Ty::Option(inner) => find(enums, inner, seen),
+            Ty::Result(ok, err) => find(enums, ok, seen).or_else(|| find(enums, err, seen)),
+            // An enum holding itself is looked into once.
+            Ty::Enum(id) if !seen.contains(id) => {
+                seen.push(*id);
+                let def = &enums[id.0 as usize];
+                if def.drops.is_some() {
+                    return Some(*id);
+                }
+                def.variants
+                    .iter()
+                    .flat_map(VariantDef::types)
+                    .find_map(|ty| find(enums, ty, seen))
+            }
+            _ => None,
+        }
+    }
+    find(enums, ty, &mut Vec::new())
 }
 
 /// Whether `local` is declared inside `within` (an expression or a

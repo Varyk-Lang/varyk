@@ -16,7 +16,7 @@
 //! checker, "maybe moved"): both `if` branches may run, so the set after an
 //! `if` is the union of both, and likewise for the arms of a `match`;
 //! `return`, `break`, and `continue` make the rest of their block
-//! unreachable; a `while` or `for` body is walked twice, so a mark made in
+//! unreachable; a `while`, `while let`, or `for` body is walked twice, so a mark made in
 //! one iteration is seen by the next: a loop body counts as following
 //! itself. Assigning to a moved local (or re-running its `let`, or its
 //! `for` binding it again) makes it usable again.
@@ -25,11 +25,13 @@ use std::collections::{HashMap, HashSet};
 
 use varyk_syntax::Span;
 
-use super::{Context, roots};
+use super::chains::source_receiver;
+use super::slots::clone_fix_it;
+use super::{Context, captured_in, roots};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
-    HirBlock, HirExpr, HirExprKind, HirForHead, HirFunction, HirStmt, LocalId, LocalInfo,
-    field_root, is_block_like, is_place, leaves, matched_in_place,
+    HirBlock, HirExpr, HirExprKind, HirForHead, HirFunction, HirPattern, HirStmt, LocalId,
+    LocalInfo, field_root, is_block_like, is_place_or_rooted, leaves, matched_in_place,
 };
 use crate::types::{ParamMode, Ty};
 
@@ -103,6 +105,8 @@ pub(super) trait Rule {
 pub(super) fn walk<R: Rule>(cx: &Context, function: &HirFunction, rule: &mut R) {
     let mut walker = Walker {
         cx,
+        locals: &function.locals,
+        closures: Vec::new(),
         ret: function.ret.clone(),
         rule,
         marks: Some(HashMap::new()),
@@ -117,10 +121,18 @@ pub(super) fn walk<R: Rule>(cx: &Context, function: &HirFunction, rule: &mut R) 
     walker.block(&function.body, access);
 }
 
-/// Reports every use after move in `function`.
-pub(super) fn check(cx: &Context, function: &HirFunction, diagnostics: &mut Vec<Diagnostic>) {
+/// Reports every use after move in `function`, and every move of a local
+/// of `never_given_away` (V0304): the parameter of an `any` or `all`
+/// closure over owned items, which only looks at the item (M4 spec 3.3).
+pub(super) fn check(
+    cx: &Context,
+    function: &HirFunction,
+    never_given_away: &HashSet<LocalId>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let mut moves = Moves {
         locals: &function.locals,
+        never_given_away,
         reported: HashSet::new(),
         diagnostics,
     };
@@ -131,6 +143,7 @@ pub(super) fn check(cx: &Context, function: &HirFunction, diagnostics: &mut Vec<
 /// with the span of a move.
 struct Moves<'a> {
     locals: &'a [LocalInfo],
+    never_given_away: &'a HashSet<LocalId>,
     /// Start and end of the use spans already reported (one function is
     /// one file): a loop body is walked twice.
     reported: HashSet<(u32, u32)>,
@@ -169,7 +182,28 @@ impl Rule for Moves<'_> {
                 self.diagnostics.push(diagnostic);
             }
         }
-        if access == Access::Move && movable(&self.locals[local.0 as usize]) {
+        let info = &self.locals[local.0 as usize];
+        if access == Access::Move && movable(info) && self.never_given_away.contains(&local) {
+            if self.reported.insert((span.start, span.end)) {
+                let name = &info.name;
+                let diagnostic = Diagnostic::new(
+                    codes::V0304,
+                    span,
+                    format!(
+                        "`{name}` is the item this closure is handed to look at, so it cannot be \
+                         kept or given away here"
+                    ),
+                )
+                .with_note(
+                    "`any` and `all` only look at each item, as `filter` and `find` do; `map` \
+                     is where a closure makes something new from an item",
+                );
+                self.diagnostics
+                    .push(clone_fix_it(diagnostic, span, &info.ty));
+            }
+            return;
+        }
+        if access == Access::Move && movable(info) {
             // Keep the first move's span: a further consuming use after the
             // one already reported must still point back at that original
             // move, not at itself.
@@ -221,6 +255,12 @@ fn union<M>(a: Option<Marks<M>>, b: Option<Marks<M>>) -> Option<Marks<M>> {
 
 struct Walker<'a, R: Rule> {
     cx: &'a Context<'a>,
+    locals: &'a [LocalInfo],
+    /// The closures whose bodies enclose the expression being walked,
+    /// outermost first, by the span of the whole closure: a local
+    /// declared outside the innermost one is only borrowed there, so
+    /// moving it is a read (M4 spec 3.2).
+    closures: Vec<Span>,
     ret: Ty,
     rule: &'a mut R,
     /// `None` for unreachable code.
@@ -268,7 +308,13 @@ impl<R: Rule> Walker<'_, R> {
                 }
                 self.marks = None;
             }
-            HirStmt::While { cond, body, .. } => self.while_(cond, body),
+            HirStmt::While { cond, body, .. } => self.while_(cond, None, body),
+            HirStmt::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => self.while_(value, Some(pattern), body),
             HirStmt::For {
                 local, head, body, ..
             } => self.for_(*local, head, body),
@@ -289,15 +335,18 @@ impl<R: Rule> Walker<'_, R> {
 
     /// Walks the loop twice: the second walk starts from every state that
     /// can reach the loop head, so it sees the first iteration's marks.
-    fn while_(&mut self, cond: &HirExpr, body: &HirBlock) {
+    /// For a `while let`, `cond` is the head, evaluated anew each round
+    /// as a `match`'s, and `pattern` binds at the start of each round.
+    fn while_(&mut self, cond: &HirExpr, pattern: Option<&HirPattern>, body: &HirBlock) {
         let entry = self.marks.clone();
         self.loops.push(Loop {
             breaks: None,
             continues: None,
             hold: None,
         });
-        self.expr(cond, Access::Read);
+        self.head(cond, pattern);
         let mut exit = self.marks.clone();
+        self.bind_pattern(cond, pattern);
         self.block(body, Access::Read);
         let continues = self
             .loops
@@ -308,8 +357,9 @@ impl<R: Rule> Walker<'_, R> {
         self.marks = union(union(entry, self.marks.take()), continues);
 
         self.repeating += 1;
-        self.expr(cond, Access::Read);
+        self.head(cond, pattern);
         exit = union(exit, self.marks.clone());
+        self.bind_pattern(cond, pattern);
         self.block(body, Access::Read);
         self.repeating -= 1;
 
@@ -317,18 +367,52 @@ impl<R: Rule> Walker<'_, R> {
         self.marks = union(exit, frame.breaks);
     }
 
+    /// Walks a loop's condition, or, with its `pattern`, the head of a
+    /// `while let`.
+    fn head(&mut self, head: &HirExpr, pattern: Option<&HirPattern>) {
+        let access = match pattern {
+            None => Access::Read,
+            Some(_) => self.head_access(head),
+        };
+        self.expr(head, access);
+    }
+
+    /// How a `match`, `if let`, or `while let` accesses its head: a place
+    /// is only looked at, and so is a temporary with an enum that has a
+    /// destructor inside it (the backend matches it by reference to avoid
+    /// E0509); any other temporary is owned (spec 3.2).
+    fn head_access(&self, head: &HirExpr) -> Access {
+        if matched_in_place(self.cx.enums, head) {
+            Access::Read
+        } else {
+            Access::Move
+        }
+    }
+
+    /// Tells the rule about every name `pattern` binds to parts of
+    /// `head` (walked just before).
+    fn bind_pattern(&mut self, head: &HirExpr, pattern: Option<&HirPattern>) {
+        let (Some(pattern), Some(marks)) = (pattern, &mut self.marks) else {
+            return;
+        };
+        for (local, whole) in pattern.bindings() {
+            self.rule.bind_pattern(marks, local, head, whole);
+        }
+    }
+
     /// Walks the head, then the body twice, as [`Walker::while_`] does:
     /// the loop ends where the next round would start, so every state
     /// that can reach that point can leave the loop. A place looped over
-    /// is only looked at; a temporary is owned by the loop (spec 3.2).
+    /// is only looked at, as is a chain's source; a temporary is owned by
+    /// the loop (spec 3.2, M4 spec 3.3).
     fn for_(&mut self, local: LocalId, head: &HirForHead, body: &HirBlock) {
         let hold = match head {
-            HirForHead::Range { start, end } => {
+            HirForHead::Range { start, end, .. } => {
                 self.expr(start, Access::Read);
                 self.expr(end, Access::Read);
                 None
             }
-            HirForHead::Vec(vec) if is_place(vec) => {
+            HirForHead::Vec(vec) if is_place_or_rooted(vec) => {
                 self.expr(vec, Access::Read);
                 let whole = match vec.kind {
                     HirExprKind::Local(id) => Some(id),
@@ -345,6 +429,22 @@ impl<R: Rule> Walker<'_, R> {
             HirForHead::Vec(vec) => {
                 self.expr(vec, Access::Move);
                 None
+            }
+            // A chain only looks at its source, and the loop holds what
+            // its head reads (M4 spec 3.3).
+            HirForHead::Chain(chain) => {
+                self.expr(chain, Access::Read);
+                let whole = match source_receiver(chain).map(|receiver| &receiver.kind) {
+                    Some(HirExprKind::Local(id)) => Some(*id),
+                    _ => None,
+                };
+                Some((
+                    local,
+                    Head {
+                        span: chain.span,
+                        local: whole,
+                    },
+                ))
             }
         };
         let entry = self.marks.clone();
@@ -403,7 +503,7 @@ impl<R: Rule> Walker<'_, R> {
             | HirExprKind::Bool(_)
             | HirExprKind::String(_) => {}
             HirExprKind::Local(id) => self.access(*id, expr.span, access),
-            HirExprKind::Call { callee, args } => {
+            HirExprKind::Call { callee, args, .. } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
                 self.call(args.iter(), &modes, keeps);
             }
@@ -412,6 +512,7 @@ impl<R: Rule> Walker<'_, R> {
                 receiver,
                 method,
                 args,
+                ..
             } => {
                 let (_, modes, keeps) = self.cx.method(*method);
                 self.call(std::iter::once(&**receiver).chain(args), &modes, keeps);
@@ -433,7 +534,9 @@ impl<R: Rule> Walker<'_, R> {
                     self.expr(value, Access::Move);
                 }
             }
-            HirExprKind::Unary { operand, .. } => self.expr(operand, Access::Read),
+            HirExprKind::Unary { operand, .. } | HirExprKind::Cast { expr: operand, .. } => {
+                self.expr(operand, Access::Read);
+            }
             HirExprKind::Binary { lhs, rhs, .. } => {
                 self.expr(lhs, Access::Read);
                 self.expr(rhs, Access::Read);
@@ -453,37 +556,58 @@ impl<R: Rule> Walker<'_, R> {
                 }
                 self.marks = union(after_then, self.marks.take());
             }
+            // The head as a `match`'s; the pattern binds in `then` only.
+            HirExprKind::IfLet {
+                pattern,
+                value,
+                then,
+                else_,
+                ..
+            } => {
+                self.expr(value, self.head_access(value));
+                let before = self.marks.clone();
+                self.bind_pattern(value, Some(pattern));
+                self.block(then, access);
+                let after_then = std::mem::replace(&mut self.marks, before);
+                if let Some(else_) = else_ {
+                    self.block(else_, access);
+                }
+                self.marks = union(after_then, self.marks.take());
+            }
             // A place is only looked at, and so is a temporary whose enum
             // has a destructor (the backend matches it by reference to
             // avoid E0509); any other temporary is owned by the `match`
             // (spec 3.2). Each arm starts where the scrutinee leaves off,
             // and any may be the one that runs.
-            HirExprKind::Match { scrutinee, arms } => {
-                let head = if matched_in_place(self.cx.enums, scrutinee) {
-                    Access::Read
-                } else {
-                    Access::Move
-                };
-                self.expr(scrutinee, head);
+            HirExprKind::Match {
+                scrutinee, arms, ..
+            } => {
+                self.expr(scrutinee, self.head_access(scrutinee));
                 let before = self.marks.clone();
                 let mut after = None;
                 for arm in arms {
                     self.marks = before.clone();
-                    if let Some(marks) = &mut self.marks {
-                        for (local, whole) in arm.pattern.bindings() {
-                            self.rule.bind_pattern(marks, local, scrutinee, whole);
-                        }
-                    }
+                    self.bind_pattern(scrutinee, Some(&arm.pattern));
                     self.expr(&arm.body, access);
                     after = union(after, self.marks.take());
                 }
                 self.marks = after;
             }
-            HirExprKind::Try(operand) => self.expr(operand, Access::Move),
+            HirExprKind::Try { operand, .. } => self.expr(operand, Access::Move),
             HirExprKind::EnumLit { args, .. } | HirExprKind::VecLit(args) => {
                 for arg in args {
                     self.expr(arg, Access::Move);
                 }
+            }
+            // The parameter is bound afresh each call, and the value the
+            // body gives is the closure's result.
+            HirExprKind::Closure { param, body, .. } => {
+                self.closures.push(expr.span);
+                if let Some(marks) = &mut self.marks {
+                    self.rule.bind(marks, *param, expr);
+                }
+                self.block(body, Access::Move);
+                self.closures.pop();
             }
             HirExprKind::Println { args, .. } | HirExprKind::Format { args, .. } => {
                 for arg in args {
@@ -525,6 +649,14 @@ impl<R: Rule> Walker<'_, R> {
     }
 
     fn access(&mut self, local: LocalId, span: Span, access: Access) {
+        // A closure only borrows a name from outside it: it never gives
+        // one away (M4 spec 3.2).
+        let captured = captured_in(self.locals, &self.closures, local);
+        let access = if captured && access == Access::Move {
+            Access::Read
+        } else {
+            access
+        };
         if let Some(marks) = &mut self.marks {
             self.rule
                 .access(marks, local, span, access, self.repeating > 0);

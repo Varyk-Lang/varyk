@@ -24,8 +24,12 @@ impl Task {
         }
     }
 
+    pub fn title(self) -> string {
+        self.title
+    }
+
     pub fn label(self) -> string {
         let mark = if self.is_done() { "x" } else { " " };
-        format!("[{}] {}", mark, self.title)
+        format!("[{}] {}", mark, self.title())
     }
 }

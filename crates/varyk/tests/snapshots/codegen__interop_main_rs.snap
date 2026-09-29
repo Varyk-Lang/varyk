@@ -8,4 +8,5 @@ mod greet;
 fn main() {
     let name = "Varyk";
     ::std::println!("{}", crate::greet::hello(name));
+    ::std::println!("{}", crate::greet::first_word("Hello from Rust"));
 }

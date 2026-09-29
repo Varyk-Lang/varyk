@@ -1,0 +1,4 @@
+fn main() {
+    let lines = vec!["first", "second"];
+    let second = lines.get(1);
+}

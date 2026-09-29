@@ -1,0 +1,56 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+enum Unit {
+    Celsius,
+    Fahrenheit,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct Reading {
+    value: f64,
+    unit: Unit,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn parse_reading(text: &str) -> Result<Reading, String> {
+    let parsed: Option<f64> = text.trim().parse::<f64>().ok();
+    let value = parsed.ok_or(::std::format!("not a number: {}", text.trim()))?;
+    Ok(Reading { value: value, unit: Unit::Celsius })
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn to_fahrenheit(reading: &Reading) -> Reading {
+    if reading.unit == Unit::Fahrenheit {
+        reading.clone()
+    } else {
+        Reading { value: reading.value * 9.0 / 5.0 + 32.0, unit: Unit::Fahrenheit }
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let inputs: Vec<String> = ::std::vec![" 25 ".to_string(), "abc".to_string()];
+    for input in &inputs {
+        match parse_reading(input) {
+            Ok(reading) => {
+                let converted = to_fahrenheit(&reading);
+                ::std::println!("{} -> {}", reading.value, converted.value);
+            }
+            Err(message) => ::std::println!("{}", message),
+        }
+    }
+    let lengths: Vec<i32> = ::std::vec![3, 10];
+    ::std::println!("{}", (lengths.len() as i32) - 1);
+    ::std::println!("{}", lengths.get(1usize).copied().unwrap_or(0));
+    let missing: Option<i32> = None;
+    ::std::println!("{}", missing.unwrap_or(7));
+    ::std::println!("{}", (Some(4)).map(|n| n * 2).is_some());
+    let failed: Result<i32, String> = Err("bad".to_string());
+    ::std::println!("{}", failed.is_err());
+    ::std::println!("{}", failed.unwrap_or(0));
+}

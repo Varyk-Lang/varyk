@@ -5,10 +5,11 @@ use varyk_syntax::{FileId, SourceFile, Span};
 use super::typecheck;
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
-    HirExpr, HirExprKind, HirForHead, HirFunction, HirProgram, HirStmt, MethodRef, VariantRef,
+    HirExpr, HirExprKind, HirForHead, HirFunction, HirProgram, HirStmt, MethodRef, TryKind,
+    VariantRef,
 };
 use crate::resolve::{Callee, resolve};
-use crate::types::{FloatKind, IntKind, ParamMode, Ty};
+use crate::types::{BUILTIN_TYPE_NAMES, Derives, FloatKind, IntKind, ParamMode, Ty};
 
 const I32: Ty = Ty::Int(IntKind::I32);
 const I64: Ty = Ty::Int(IntKind::I64);
@@ -123,6 +124,19 @@ fn call_args(expr: &HirExpr) -> &[HirExpr] {
     match &expr.kind {
         HirExprKind::Call { args, .. } => args,
         other => panic!("expected a call, got {other:?}"),
+    }
+}
+
+/// Each of `BUILTIN_TYPE_NAMES` resolves as a type with no declaration.
+#[test]
+fn every_builtin_type_name_resolves_as_a_type() {
+    for name in BUILTIN_TYPE_NAMES {
+        let written = match *name {
+            "Option" | "Vec" => format!("{name}<i32>"),
+            "Result" | "HashMap" => format!("{name}<i32, i32>"),
+            _ => name.to_string(),
+        };
+        ok(&format!("fn f(x: {written}) {{}}\n\nfn main() {{}}\n"));
     }
 }
 
@@ -379,12 +393,112 @@ fn non_bool_if_and_while_conditions_are_v0200() {
 }
 
 #[test]
-fn struct_equality_is_v0203() {
-    let text =
-        "struct P {\n    x: i32,\n}\nfn f(a: P, b: P) -> bool {\n    a == b\n}\nfn main() {}\n";
-    let (d, sources) = one_error(text);
-    assert_eq!(d.code, codes::V0203);
+fn struct_equality_is_accepted_when_every_field_compares() {
+    let program = ok(
+        "struct P {\n    x: i32,\n    s: string,\n}\nfn f(a: P, b: P) -> bool {\n    a == b\n}\nfn main() {}\n",
+    );
+    assert_eq!(
+        program.structs[0].derives,
+        Derives {
+            clone: true,
+            eq: true
+        }
+    );
+}
+
+#[test]
+fn clone_of_a_struct_is_an_owned_value_of_its_type() {
+    let program = ok(
+        "struct P {\n    x: i32,\n    s: string,\n}\nfn f(a: P) -> P {\n    a.clone()\n}\nfn main() {}\n",
+    );
+    let Some(tail) = function(&program, "f").body.tail.as_deref() else {
+        panic!("expected a tail");
+    };
+    let HirExprKind::MethodCall { method, rooted, .. } = &tail.kind else {
+        panic!("expected a method call, got {tail:?}");
+    };
+    assert!(
+        matches!(method, MethodRef::Builtin(id) if id.get().name == "clone"),
+        "{method:?}"
+    );
+    assert_eq!(*rooted, None);
+    assert!(matches!(tail.ty, Ty::Struct(_)), "{tail:?}");
+}
+
+#[test]
+fn clone_of_containers_and_enums_is_accepted() {
+    for (ty, value) in [
+        ("Vec<P>", "Vec::new()"),
+        ("Option<P>", "None"),
+        ("Result<P, string>", "Err(\"e\")"),
+        ("HashMap<string, P>", "HashMap::new()"),
+        ("E", "E::A"),
+    ] {
+        let text = format!(
+            "struct P {{\n    x: i32,\n}}\nenum E {{\n    A,\n    B(Vec<E>),\n}}\nfn main() {{\n    let v: {ty} = {value};\n    let w = v.clone();\n    let same = v == w;\n}}\n"
+        );
+        ok(&text);
+    }
+}
+
+#[test]
+fn clone_of_a_number_or_bool_is_v0100() {
+    for (stmt, name) in [
+        ("let c = n.clone();", "clone"),
+        ("let b = true.clone();", "clone"),
+    ] {
+        let (d, sources) = one_error(&format!("fn main() {{\n    let n = 3;\n    {stmt}\n}}\n"));
+        assert_eq!(d.code, codes::V0100, "{stmt}: {d:#?}");
+        assert_eq!(d.span, part_of(&sources, stmt, name), "{stmt}");
+        assert!(
+            d.message.contains("copied on use; drop `.clone()`"),
+            "{d:#?}"
+        );
+    }
+}
+
+#[test]
+fn clone_of_a_struct_with_a_rust_field_is_v0203_naming_it() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/errors/v0203_clone_rust_field/main.vr");
+    let Err(diagnostics) = result else {
+        panic!("expected diagnostics");
+    };
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0203, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "session.clone()"));
+    assert!(d.message.contains("`Session`"), "{d:#?}");
+    assert!(d.message.contains("its field `handle`"), "{d:#?}");
+    assert!(
+        d.notes
+            .iter()
+            .any(|n| n.contains("add `Clone` to its `#[derive(..)]` list")),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn equality_of_a_struct_with_a_rust_field_is_v0203_naming_it() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/errors/v0203_compare_blocked/main.vr");
+    let Err(diagnostics) = result else {
+        panic!("expected diagnostics");
+    };
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0203, "{d:#?}");
     assert_eq!(d.span, span_of(&sources, "a == b"));
+    assert!(d.message.contains("its field `handle`"), "{d:#?}");
+    assert!(
+        d.notes.iter().any(|n| n.contains("add `PartialEq`")),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn equality_of_enums_and_containers_of_comparable_types_is_accepted() {
+    ok(
+        "struct User {\n    name: string,\n}\nenum E {\n    A,\n    B(string),\n}\nfn f(a: E, b: E, u: Vec<User>, v: Vec<User>, m: HashMap<string, i32>, n: HashMap<string, i32>, o: Option<User>, p: Option<User>) -> bool {\n    a == b && u != v && m == n && o == p\n}\nfn main() {}\n",
+    );
 }
 
 #[test]
@@ -502,12 +616,189 @@ fn unknown_struct_in_literal_is_v0101() {
 }
 
 #[test]
-fn struct_literal_naming_an_enum_variant_is_v0001() {
+fn braces_on_a_variant_with_values_by_position_are_v0201() {
     let text = "enum Shape {\n    Circle(f64),\n}\nfn main() {\n    let s = Shape::Circle { r: 1.0 };\n}\n";
     let (d, sources) = one_error(text);
-    assert_eq!(d.code, codes::V0001);
-    assert!(d.message.contains("milestone 4"), "{}", d.message);
+    assert_eq!(d.code, codes::V0201);
+    assert_eq!(
+        d.message,
+        "`Shape::Circle` holds values by position; write them in parentheses: \
+         `Shape::Circle(...)`"
+    );
     assert_eq!(d.span, span_of(&sources, "Shape::Circle { r: 1.0 }"));
+}
+
+/// A closure is only the argument of a row whose parameter is a closure
+/// (M4 spec 2.2): anywhere else it is V0001 naming those calls.
+#[test]
+fn a_closure_anywhere_but_a_closure_argument_is_v0001_naming_the_calls() {
+    let cases = [
+        (
+            "fn f(n: i32) -> i32 {\n    n\n}\nfn main() {\n    let x = f(|n| n);\n}\n",
+            "|n| n",
+        ),
+        ("fn main() {\n    let f = |n| n;\n}\n", "|n| n"),
+        (
+            "fn main() {\n    let o: Option<i32> = Some(1);\n    let x = o.unwrap_or(|n| n);\n}\n",
+            "|n| n",
+        ),
+    ];
+    for (text, construct) in cases {
+        let (d, sources) = one_error(text);
+        assert_eq!(d.code, codes::V0001, "{text}");
+        assert_eq!(
+            d.message,
+            "a closure can only be the argument of a call that takes one: `map` on an \
+             `Option`, `map_err` on a `Result`, and `map`, `filter`, `any`, `all`, and `find` \
+             on a chain",
+            "{text}"
+        );
+        assert_eq!(d.span, span_of(&sources, construct), "{text}");
+    }
+}
+
+/// The closure's parameter takes its type from the row: the payload of
+/// the `Option`, the error of the `Result` (M4 spec 2.2, 2.7).
+#[test]
+fn a_closure_parameter_is_typed_from_the_row() {
+    let program = ok(
+        "fn f(r: Result<i32, bool>) -> Result<i32, string> {\n    r.map_err(|e| if e { \"yes\" } else { \"no\" })\n}\nfn main() {\n    let o: Option<string> = Some(\"a\");\n    let n = o.map(|s| s.len());\n}\n",
+    );
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "s"), Ty::String);
+    assert_eq!(
+        local_ty(main, "n"),
+        Ty::Option(Box::new(Ty::Int(IntKind::Usize)))
+    );
+    assert_eq!(local_ty(function(&program, "f"), "e"), Ty::Bool);
+}
+
+#[test]
+fn option_map_and_map_err_take_their_result_from_the_closure() {
+    let program = ok(
+        "fn g(r: Result<bool, i32>) {\n    let e = r.map_err(|e| format!(\"{}!\", e));\n}\nfn main() {\n    let d = Some(4).map(|n| n * 2);\n    let o: Option<Option<i64>> = Some(1).map(|n| None);\n}\n",
+    );
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "d"), Ty::Option(Box::new(I32)));
+    assert_eq!(
+        local_ty(main, "o"),
+        Ty::Option(Box::new(Ty::Option(Box::new(I64))))
+    );
+    assert_eq!(
+        local_ty(function(&program, "g"), "e"),
+        Ty::Result(Box::new(Ty::Bool), Box::new(Ty::String))
+    );
+    let HirExprKind::MethodCall { args, .. } = &stmt_expr(main, 0).kind else {
+        panic!("a method call");
+    };
+    let HirExprKind::Closure { body, captures, .. } = &args[0].kind else {
+        panic!("a closure, got {:?}", args[0].kind);
+    };
+    assert!(captures.is_empty());
+    assert_eq!(body.ty, I32);
+}
+
+/// A capture is recorded in every closure it is used from, the parameter
+/// of an enclosing closure included; a local of the closure is not one.
+#[test]
+fn captures_are_the_outer_locals_a_closure_uses() {
+    let program = ok(
+        "fn main() {\n    let k = 2;\n    let a = Some(1).map(|n| {\n        let m = n + k;\n        Some(m).map(|x| x + n + k)\n    });\n}\n",
+    );
+    let main = function(&program, "main");
+    let id = |name: &str| {
+        let index = main
+            .locals
+            .iter()
+            .position(|local| local.name == name)
+            .unwrap_or_else(|| panic!("no local {name}"));
+        crate::hir::LocalId(index as u32)
+    };
+    let closure = |expr: &HirExpr| match &expr.kind {
+        HirExprKind::MethodCall { args, .. } => match &args[0].kind {
+            HirExprKind::Closure {
+                param,
+                captures,
+                body,
+                ..
+            } => (*param, captures.clone(), body.clone()),
+            other => panic!("a closure, got {other:?}"),
+        },
+        other => panic!("a method call, got {other:?}"),
+    };
+    let (outer, captures, body) = closure(stmt_expr(main, 1));
+    assert_eq!(outer, id("n"));
+    assert_eq!(captures, [id("k")]);
+    let (inner, captures, _) = closure(body.tail.as_deref().expect("a tail"));
+    assert_eq!(inner, id("x"));
+    assert_eq!(captures, [id("n"), id("k")]);
+    assert_eq!(
+        main.locals[id("n").0 as usize].kind,
+        crate::hir::LocalKind::ClosureParam { deref: false }
+    );
+    assert_eq!(
+        main.locals[id("k").0 as usize].kind,
+        crate::hir::LocalKind::Plain
+    );
+}
+
+#[test]
+fn a_closure_with_other_than_one_parameter_is_v0201() {
+    for (closure, count) in [("|| 1", "none"), ("|a, b| a", "2")] {
+        let text = format!("fn main() {{\n    let x = Some(1).map({closure});\n}}\n");
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0201, "{closure}: {d:#?}");
+        assert_eq!(d.span, span_of(&sources, closure), "{closure}");
+        assert!(d.message.contains(count), "{closure}: {}", d.message);
+        assert!(d.message.contains("`|x| ..`"), "{closure}: {}", d.message);
+    }
+}
+
+/// A closure body is a value of its own: `return`, `break`, `continue`,
+/// and `?` would leave the closure, not the function (M4 spec 2.2).
+#[test]
+fn leaving_a_closure_early_is_v0001() {
+    let cases = [
+        (
+            "fn main() {\n    while true {\n        let x = Some(1).map(|n| {\n            break;\n        });\n    }\n}\n",
+            "break",
+        ),
+        (
+            "fn main() {\n    while true {\n        let x = Some(1).map(|n| {\n            continue;\n        });\n    }\n}\n",
+            "continue",
+        ),
+        (
+            "fn f() -> i32 {\n    let x = Some(1).map(|n| {\n        return 2;\n    });\n    1\n}\nfn main() {}\n",
+            "return",
+        ),
+        (
+            "fn f() -> Option<i32> {\n    let x = Some(1).map(|n| Some(n)?);\n    x\n}\nfn main() {}\n",
+            "Some(n)?",
+        ),
+    ];
+    for (text, at) in cases {
+        let (d, sources) = one_error(text);
+        assert_eq!(d.code, codes::V0001, "{text}: {d:#?}");
+        assert!(
+            d.span.start >= span_of(&sources, at).start,
+            "{text}: {d:#?}"
+        );
+        assert!(d.message.contains("closure"), "{text}: {}", d.message);
+    }
+    // A loop inside the closure is the closure's own.
+    ok(
+        "fn main() {\n    let x = Some(3).map(|n| {\n        let mut i = 0;\n        while i < n {\n            i = i + 1;\n            if i == 2 {\n                break;\n            }\n        }\n        i\n    });\n}\n",
+    );
+}
+
+#[test]
+fn a_closure_body_with_nothing_to_take_a_type_from_is_v0207() {
+    for body in ["None", "Vec::new()", "Ok(n)", "Err(n)"] {
+        let text = format!("fn main() {{\n    let x = Some(1).map(|n| {body});\n}}\n");
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0207, "{body}: {d:#?}");
+        assert_eq!(d.span, span_of(&sources, body), "{body}");
+    }
 }
 
 #[test]
@@ -834,7 +1125,7 @@ fn a_struct_literal_naming_an_enum_is_v0101() {
 }
 
 #[test]
-fn comparing_or_printing_an_enum_or_a_generic_type_is_v0203() {
+fn printing_an_enum_or_a_generic_type_is_v0203() {
     let text = "enum E {\n    A,\n}\nfn f(a: E, b: E, o: Option<i32>, v: Vec<i32>) -> bool {\n    println!(\"{} {}\", a, v);\n    o == o\n}\nfn main() {}\n";
     let (diagnostics, sources) = errors(text);
     let found: Vec<(&str, Span)> = diagnostics.iter().map(|d| (d.code, d.span)).collect();
@@ -843,13 +1134,8 @@ fn comparing_or_printing_an_enum_or_a_generic_type_is_v0203() {
         vec![
             (codes::V0203, part_of(&sources, "a, v)", "a")),
             (codes::V0203, part_of(&sources, "a, v)", "v")),
-            (codes::V0203, span_of(&sources, "o == o")),
         ],
         "{diagnostics:#?}"
-    );
-    assert_eq!(
-        diagnostics[2].message,
-        "`==` cannot be applied to `Option<i32>`"
     );
 }
 
@@ -906,6 +1192,7 @@ fn variant_values_are_enum_literals() {
         let HirExprKind::EnumLit {
             variant: found,
             args,
+            ..
         } = &value.kind
         else {
             panic!("expected an enum literal, got {value:?}");
@@ -1233,12 +1520,12 @@ fn an_unknown_method_or_associated_function_is_v0100_naming_the_type() {
         (
             "let x: Vec<i32> = vec![1];\n    x.nope();",
             "nope",
-            &["Vec<i32>", "`push`, `pop`, and `len`"][..],
+            &["Vec<i32>", "`push`, `pop`, `len`, `is_empty`"][..],
         ),
         (
             "let x = \"a\";\n    x.nope();",
             "nope",
-            &["string", "`len` and `clone`"][..],
+            &["string", "`len`, `clone`, `is_empty`"][..],
         ),
         (
             "let c = Counter::new();\n    c.nope();",
@@ -1545,15 +1832,16 @@ fn a_match_on_option_and_result_uses_their_variants_and_a_catch_all_binds_the_va
 }
 
 #[test]
-fn matching_something_that_is_not_an_enum_option_or_result_is_v0205() {
+fn matching_a_struct_is_v0205() {
     let (d, sources) = one_error(&with_match(
         "",
-        "    let n = 1;\n    match n {\n        _ => {}\n    }",
+        "    let t = mk();\n    match t {\n        _ => {}\n    }",
     ));
     assert_eq!(d.code, codes::V0205, "{d:#?}");
-    assert_eq!(d.span, part_of(&sources, "match n", "n"));
-    assert!(d.message.contains("`i32`"), "{d:#?}");
-    assert!(d.message.contains("`if`"), "{d:#?}");
+    let head = part_of(&sources, "match t {", "t {");
+    assert_eq!(d.span, Span::new(head.file, head.start, head.start + 1));
+    assert!(d.message.contains("`Task`"), "{d:#?}");
+    assert!(d.notes.iter().any(|note| note.contains("`if`")), "{d:#?}");
 }
 
 #[test]
@@ -1660,12 +1948,20 @@ fn a_catch_all_covers_the_rest_but_only_as_the_last_arm() {
     assert_eq!(d.code, codes::V0205, "{d:#?}");
 }
 
+/// M2 let a repeated variant arm through; it can never run, so it is
+/// V0205 now (M4 spec 2.5).
 #[test]
-fn a_variant_arm_repeated_after_an_identical_one_is_accepted() {
-    ok(&with_match(
+fn a_variant_arm_repeated_after_an_identical_one_is_v0205() {
+    let (d, sources) = one_error(&with_match(
         "",
         "    match s {\n        Shape::Point => {}\n        Shape::Point => {}\n        _ => {}\n    }",
     ));
+    assert_eq!(d.code, codes::V0205, "{d:#?}");
+    let second = span_of(&sources, "Shape::Point => {}\n        _");
+    assert_eq!(
+        d.span,
+        Span::new(second.file, second.start, second.start + 18)
+    );
 }
 
 #[test]
@@ -1796,7 +2092,7 @@ fn a_range_variable_takes_the_type_of_the_ends() {
     assert_eq!(local_ty(f, "i"), USIZE);
     assert_eq!(local_ty(f, "j"), I32);
     assert_eq!(local_ty(f, "k"), I64);
-    let HirForHead::Range { start, end } = for_head(f, 0) else {
+    let HirForHead::Range { start, end, .. } = for_head(f, 0) else {
         panic!("a range head");
     };
     assert_eq!((&start.ty, &end.ty), (&USIZE, &USIZE));
@@ -1906,7 +2202,8 @@ fn question_yields_the_ok_value() {
     let value = stmt_expr(run, 0);
     assert_eq!(value.ty, I32);
     match &value.kind {
-        HirExprKind::Try(operand) => {
+        HirExprKind::Try { operand, kind } => {
+            assert_eq!(*kind, TryKind::Result);
             assert_eq!(operand.ty, Ty::Result(Box::new(I32), Box::new(Ty::String)));
         }
         other => panic!("expected `?`, got {other:?}"),
@@ -1966,7 +2263,7 @@ fn question_on_something_that_is_not_a_result_is_v0206() {
     assert!(d.message.contains("`Option<i32>`"), "{d:#?}");
     assert!(d.message.contains("`Result<i32, string>`"), "{d:#?}");
     assert!(
-        d.notes.iter().any(|n| n.contains("later milestone")),
+        d.message.contains("returns `Result<i32, string>`"),
         "{d:#?}"
     );
 
@@ -2047,7 +2344,7 @@ fn misusing_an_imported_struct_says_what_to_change() {
         diagnostics[1]
             .notes
             .iter()
-            .any(|n| n.contains("`fn name(&self) -> &str`"))
+            .any(|n| n.contains("`fn name(&self) -> &String`"))
     );
     assert!(diagnostics[4].fix_it.is_none(), "{:#?}", diagnostics[4]);
 }
@@ -2084,9 +2381,10 @@ fn calling_a_rust_method_varyk_skipped_says_why_in_a_note() {
                  the build; Varyk does not import such methods"
             ),
             (
-                codes::V0100,
-                "`clone` exists in the Rust file but is a trait method; Varyk does not import \
-                 such methods; add a `pub fn clone` to a plain `impl A` block"
+                codes::V0203,
+                "`A` is a Rust type whose `.rs` file does not derive `Clone` for it; write \
+                 `#[derive(Clone)]` above it there, or add `Clone` to its `#[derive(..)]` list \
+                 (Varyk reads only `#[derive(..)]`, not a hand-written `impl`)"
             ),
         ],
         "{diagnostics:#?}"
@@ -2197,5 +2495,1192 @@ fn calling_a_rust_function_skipped_for_a_cfg_parameter_or_test_says_which() {
             ),
         ],
         "{diagnostics:#?}"
+    );
+}
+
+// --- Milestone 4: patterns, exhaustiveness, `if let`, `while let` -----------
+
+const PATTERN_ITEMS: &str = "enum Shape {\n    Circle(f64),\n    Rect(f64, f64),\n    Point,\n}\nenum Event {\n    Click { x: i32, y: i32 },\n    Key(string),\n    Quit,\n}\nenum Pair {\n    Two(i32, Option<i32>),\n}\nstruct Task {\n    done: bool,\n}\n";
+
+/// A program with [`PATTERN_ITEMS`] and `body` as the body of `f`, whose
+/// parameters cover every kind of value a pattern looks at.
+fn with_patterns(body: &str) -> String {
+    format!(
+        "{PATTERN_ITEMS}fn f(o: Option<Shape>, n: i32, b: bool, s: string, u: u8, e: Event, r: Result<Option<i32>, string>, t: Option<Task>, p: Pair, fl: f64, so: Option<string>) {{\n{body}\n}}\nfn main() {{}}\n"
+    )
+}
+
+#[test]
+fn a_named_field_variant_value_names_every_field_once() {
+    let program = ok(&with_patterns(
+        "    let a = Event::Click { y: 2, x: 1 };\n    let b = Event::Quit;",
+    ));
+    let f = function(&program, "f");
+    let value = stmt_expr(f, 0);
+    let HirExprKind::EnumLit {
+        variant,
+        args,
+        fields,
+        ..
+    } = &value.kind
+    else {
+        panic!("expected an enum literal, got {value:?}");
+    };
+    assert!(matches!(variant, VariantRef::User(_, 0)));
+    assert_eq!(args.len(), 2);
+    // In source order, each with its field's position in the declaration.
+    assert_eq!(fields.as_deref(), Some(&[1, 0][..]));
+
+    let cases = [
+        (
+            "let a = Event::Click { x: 1 };",
+            codes::V0201,
+            "Event::Click { x: 1 }",
+            "`y`",
+        ),
+        (
+            "let a = Event::Click { x: 1, y: 2, z: 3 };",
+            codes::V0102,
+            "z",
+            "`z`",
+        ),
+        (
+            "let a = Event::Key { k: 1 };",
+            codes::V0201,
+            "Event::Key { k: 1 }",
+            "Event::Key(",
+        ),
+        (
+            "let a = Event::Click(1, 2);",
+            codes::V0201,
+            "Event::Click(1, 2)",
+            "{",
+        ),
+        ("let a = Event::Click;", codes::V0201, "Event::Click", "{"),
+    ];
+    for (stmt, code, at, word) in cases {
+        let (d, sources) = one_error(&with_patterns(&format!("    {stmt}")));
+        assert_eq!(d.code, code, "{stmt}: {d:#?}");
+        assert_eq!(d.span, span_of(&sources, at), "{stmt}: {d:#?}");
+        assert!(d.message.contains(word), "{stmt}: {d:#?}");
+    }
+    let (d, sources) = one_error(&with_patterns(
+        "    let a = Event::Click { x: 1, x: 2, y: 3 };",
+    ));
+    assert_eq!(d.code, codes::V0103, "{d:#?}");
+    let second = part_of(&sources, "x: 1, x: 2", "x: 2");
+    assert_eq!(
+        d.span,
+        Span::new(second.file, second.start, second.start + 1)
+    );
+}
+
+#[test]
+fn a_variant_with_two_fields_of_one_name_is_v0103() {
+    let (d, sources) = one_error("enum E {\n    A { x: i32, x: bool },\n}\nfn main() {}\n");
+    assert_eq!(d.code, codes::V0103, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "x: bool", "x"));
+}
+
+#[test]
+fn a_named_field_variant_pattern_names_every_field() {
+    let program = ok(&with_patterns(
+        "    match e {\n        Event::Click { x: 0, y: _ } => {}\n        Event::Click { y, x } => println!(\"{}\", x + y),\n        Event::Key(k) => {}\n        Event::Quit => {}\n    }",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(local_ty(f, "x"), I32);
+    assert_eq!(local_ty(f, "k"), Ty::String);
+
+    let cases = [
+        (
+            "Event::Click { x }",
+            codes::V0205,
+            "Event::Click { x }",
+            "`y`",
+        ),
+        ("Event::Click { x, y, z }", codes::V0102, "z", "`z`"),
+        ("Event::Click { x, x: _, y }", codes::V0103, "x: _", "`x`"),
+        (
+            "Event::Key { k }",
+            codes::V0205,
+            "Event::Key { k }",
+            "Event::Key(",
+        ),
+        (
+            "Event::Click(a, b)",
+            codes::V0205,
+            "Event::Click(a, b)",
+            "{",
+        ),
+    ];
+    for (pattern, code, at, word) in cases {
+        let (d, sources) = one_error(&with_patterns(&format!(
+            "    match e {{\n        {pattern} => {{}}\n        _ => {{}}\n    }}"
+        )));
+        assert_eq!(d.code, code, "{pattern}: {d:#?}");
+        let at = if code == codes::V0103 {
+            part_of(&sources, at, "x")
+        } else {
+            span_of(&sources, at)
+        };
+        assert_eq!(d.span, at, "{pattern}: {d:#?}");
+        assert!(d.message.contains(word), "{pattern}: {d:#?}");
+    }
+}
+
+#[test]
+fn a_struct_pattern_on_a_plain_struct_is_v0001() {
+    let (d, sources) = one_error(&with_patterns(
+        "    match t {\n        Some(Task { done }) => {}\n        _ => {}\n    }",
+    ));
+    assert_eq!(d.code, codes::V0001, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "Task { done }"));
+    assert!(d.message.contains("`if`"), "{d:#?}");
+}
+
+#[test]
+fn nested_patterns_type_their_bindings() {
+    let program = ok(&with_patterns(
+        "    match o {\n        Some(Shape::Circle(radius)) => {}\n        Some(Shape::Rect(w, _)) => {}\n        Some(Shape::Point) => {}\n        None => {}\n    }\n    match r {\n        Ok(Some(inner)) => {}\n        Ok(None) => {}\n        Err(message) => {}\n    }\n    match p {\n        Pair::Two(a, Some(b)) => {}\n        Pair::Two(a, None) => {}\n    }",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(local_ty(f, "radius"), Ty::Float(FloatKind::F64));
+    assert_eq!(local_ty(f, "w"), Ty::Float(FloatKind::F64));
+    assert_eq!(local_ty(f, "inner"), I32);
+    assert_eq!(local_ty(f, "message"), Ty::String);
+    assert_eq!(local_ty(f, "b"), I32);
+}
+
+#[test]
+fn a_name_bound_twice_inside_a_nested_pattern_is_v0103() {
+    let (d, sources) = one_error(&with_patterns(
+        "    match p {\n        Pair::Two(a, Some(a)) => {}\n        _ => {}\n    }",
+    ));
+    assert_eq!(d.code, codes::V0103, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "Some(a)", "a"));
+}
+
+#[test]
+fn literal_and_range_patterns_must_fit_the_value() {
+    let cases = [
+        // (head, pattern, where the V0205 points, a word of the message)
+        ("o", "Some(true)", "true", "bool"),
+        ("n", "1.5", "1.5", "`if`"),
+        ("n", "5..=1", "5..=1", "5"),
+        ("u", "0..=300", "0..=300", "u8"),
+        ("u", "300", "300", "u8"),
+        ("u", "-1", "-1", "u8"),
+        ("so", "Some(\"a\")", "\"a\"", "=="),
+        ("n", "\"a\"", "\"a\"", "string"),
+        ("s", "1", "1", "string"),
+        ("n", "true..=false", "true..=false", "integer"),
+        ("fl", "1", "1", "`if`"),
+    ];
+    for (head, pattern, at, word) in cases {
+        let (d, sources) = one_error(&with_patterns(&format!(
+            "    match {head} {{\n        {pattern} => {{}}\n        _ => {{}}\n    }}"
+        )));
+        assert_eq!(d.code, codes::V0205, "{pattern}: {d:#?}");
+        assert_eq!(d.span, span_of(&sources, at), "{pattern}: {d:#?}");
+        assert!(d.message.contains(word), "{pattern}: {word}: {d:#?}");
+    }
+}
+
+#[test]
+fn match_on_numbers_bools_and_strings_is_accepted() {
+    ok(&with_patterns(
+        "    match n {\n        -5..=-1 => {}\n        0 => {}\n        _ => {}\n    }\n    match b {\n        true => {}\n        false => {}\n    }\n    match s {\n        \"yes\" => {}\n        other => println!(\"{}\", other),\n    }\n    match u {\n        0..=9 => {}\n        255 => {}\n        _ => {}\n    }\n    match fl {\n        x => {}\n    }",
+    ));
+}
+
+#[test]
+fn a_match_on_a_struct_or_a_vec_is_v0205() {
+    let (d, sources) = one_error(&with_patterns(
+        "    let v = vec![1];\n    match v {\n        _ => {}\n    }",
+    ));
+    assert_eq!(d.code, codes::V0205, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "match v", "v"));
+    assert!(d.message.contains("Vec<i32>"), "{d:#?}");
+}
+
+/// What the usefulness check says about a `match`: accepted, V0204 with a
+/// witness, or V0205 at an arm.
+enum Verdict {
+    Ok,
+    Missing(&'static str),
+    Useless(&'static str),
+}
+
+/// Exhaustiveness and reachability, each case with rustc's verdict on the
+/// same match (M4 spec 7): Varyk may be stricter than rustc (a
+/// catch-all a number needs, an unreachable arm rustc only warns about),
+/// never looser.
+#[test]
+fn exhaustiveness_and_reachability_agree_with_rustc() {
+    use Verdict::{Missing, Ok as Accepted, Useless};
+    let cases: &[(&str, Verdict)] = &[
+        // rustc: E0004, `Some(Shape::Point)` not covered.
+        (
+            "match o {\n        Some(Shape::Circle(_)) => {}\n        Some(Shape::Rect(_, _)) => {}\n        None => {}\n    }",
+            Missing("`Some(Shape::Point)`"),
+        ),
+        // rustc: accepted.
+        (
+            "match o {\n        Some(Shape::Circle(_)) => {}\n        Some(_) => {}\n        None => {}\n    }",
+            Accepted,
+        ),
+        // rustc: E0004, `false` not covered.
+        ("match b {\n        true => {}\n    }", Missing("`false`")),
+        // rustc: accepted.
+        (
+            "match b {\n        true => {}\n        false => {}\n    }",
+            Accepted,
+        ),
+        // rustc: accepted, the `_` unreachable (a warning).
+        (
+            "match b {\n        true => {}\n        false => {}\n        _ => {}\n    }",
+            Useless("_ => {}"),
+        ),
+        // rustc: E0004, the other numbers not covered.
+        (
+            "match n {\n        1 => {}\n        2 => {}\n    }",
+            Missing("`_ => ...`"),
+        ),
+        // rustc: accepted.
+        (
+            "match n {\n        1 => {}\n        _ => {}\n    }",
+            Accepted,
+        ),
+        // rustc: E0004, `&_` not covered.
+        (
+            "match s {\n        \"a\" => {}\n    }",
+            Missing("`_ => ...`"),
+        ),
+        // rustc: accepted; the other strings go to the catch-all.
+        (
+            "match s {\n        \"a\" => {}\n        _ => {}\n    }",
+            Accepted,
+        ),
+        // rustc: accepted; Varyk still wants the catch-all (stricter).
+        (
+            "match u {\n        0..=255 => {}\n    }",
+            Missing("`_ => ...`"),
+        ),
+        // rustc: accepted, the `_` unreachable (a warning); Varyk never
+        // calls a number's catch-all unreachable.
+        (
+            "match u {\n        0..=255 => {}\n        _ => {}\n    }",
+            Accepted,
+        ),
+        // rustc: accepted, `4` unreachable (a warning).
+        (
+            "match n {\n        1..=5 => {}\n        3..=8 => {}\n        4 => {}\n        _ => {}\n    }",
+            Useless("4 => {}"),
+        ),
+        // rustc: accepted, `6` reachable.
+        (
+            "match n {\n        1..=5 => {}\n        6 => {}\n        _ => {}\n    }",
+            Accepted,
+        ),
+        // rustc: accepted, the repeated range unreachable (a warning).
+        (
+            "match n {\n        1..=5 => {}\n        2..=3 => {}\n        _ => {}\n    }",
+            Useless("2..=3 => {}"),
+        ),
+        // rustc: accepted, the second `\"a\"` unreachable (a warning).
+        (
+            "match s {\n        \"a\" => {}\n        \"a\" => {}\n        _ => {}\n    }",
+            Useless("\"a\" => {}\n        _"),
+        ),
+        // rustc: accepted, the repeated `None` unreachable (a warning).
+        (
+            "match o {\n        None => {}\n        None => {}\n        Some(_) => {}\n    }",
+            Useless("None => {}\n        Some"),
+        ),
+        // rustc: accepted, the arm after the catch-all unreachable.
+        (
+            "match o {\n        _ => {}\n        None => {}\n    }",
+            Useless("_ => {}"),
+        ),
+        // rustc: accepted, the last arm unreachable.
+        (
+            "match o {\n        Some(_) => {}\n        None => {}\n        x => {}\n    }",
+            Useless("x => {}"),
+        ),
+        // rustc: accepted, `Some(Shape::Point)` unreachable.
+        (
+            "match o {\n        Some(_) => {}\n        Some(Shape::Point) => {}\n        None => {}\n    }",
+            Useless("Some(Shape::Point) => {}"),
+        ),
+        // rustc: E0004, `Event::Click { x: .., .. }` not covered.
+        (
+            "match e {\n        Event::Click { x: 0, y: _ } => {}\n        Event::Key(_) => {}\n        Event::Quit => {}\n    }",
+            Missing("`Event::Click { x: _, y: _ }`"),
+        ),
+        // rustc: accepted.
+        (
+            "match e {\n        Event::Click { x: 0, y } => {}\n        Event::Click { x, y: _ } => {}\n        Event::Key(k) => {}\n        Event::Quit => {}\n    }",
+            Accepted,
+        ),
+        // rustc: E0004, `Ok(None)` not covered.
+        (
+            "match r {\n        Ok(Some(_)) => {}\n        Err(_) => {}\n    }",
+            Missing("`Ok(None)`"),
+        ),
+        // rustc: accepted.
+        (
+            "match n {\n        -5..=-1 => {}\n        0 => {}\n        _ => {}\n    }",
+            Accepted,
+        ),
+    ];
+    for (stmt, verdict) in cases {
+        let text = with_patterns(&format!("    {stmt}"));
+        match verdict {
+            Accepted => {
+                ok(&text);
+            }
+            Missing(witness) => {
+                let (d, sources) = one_error(&text);
+                assert_eq!(d.code, codes::V0204, "{stmt}: {d:#?}");
+                assert!(d.message.contains(witness), "{stmt}: {d:#?}");
+                let head = stmt.split(" {").next().unwrap_or_default();
+                assert_eq!(d.span, span_of(&sources, head), "{stmt}: {d:#?}");
+            }
+            Useless(arm) => {
+                let (d, sources) = one_error(&text);
+                assert_eq!(d.code, codes::V0205, "{stmt}: {d:#?}");
+                // `arm` may run on into the next arm to be unique; the
+                // span is its first line.
+                let at = span_of(&sources, stmt);
+                let offset = stmt.find(arm).unwrap_or_default() as u32;
+                let len = arm.split('\n').next().unwrap_or_default().len() as u32;
+                assert_eq!(
+                    d.span,
+                    Span::new(at.file, at.start + offset, at.start + offset + len),
+                    "{stmt}: {d:#?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn if_let_is_an_expression_typed_like_if() {
+    let program = ok(&with_patterns(
+        "    let x = if let Some(Shape::Circle(radius)) = o {\n        radius\n    } else {\n        0.0\n    };\n    if let Some(Shape::Point) = o {\n        println!(\"point\");\n    }\n    if let \"yes\" = s {\n    } else if let Some(n) = so {\n    }",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(local_ty(f, "x"), Ty::Float(FloatKind::F64));
+    let value = stmt_expr(f, 0);
+    assert!(matches!(value.kind, HirExprKind::IfLet { .. }), "{value:?}");
+
+    let (d, _) = one_error(&with_patterns(
+        "    let x = if let Some(y) = o {\n        1\n    };",
+    ));
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    let (d, _) = one_error(&with_patterns(
+        "    let x = if let Some(y) = o {\n        1\n    } else {\n        \"no\"\n    };",
+    ));
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    // The binding lives only in the first block.
+    let (d, _) = one_error(&with_patterns(
+        "    if let Some(y) = o {\n    } else {\n        let z = y;\n    }",
+    ));
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+}
+
+#[test]
+fn while_let_is_a_loop() {
+    ok(&with_patterns(
+        "    let mut v: Vec<i32> = vec![1, 2];\n    while let Some(n) = v.pop() {\n        if n == 1 {\n            break;\n        }\n        continue;\n    }",
+    ));
+    let (d, _) = one_error(&with_patterns(
+        "    let mut v: Vec<i32> = vec![1, 2];\n    while let Some(n) = v.pop() {\n        n\n    }",
+    ));
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+}
+
+#[test]
+fn if_let_and_while_let_heads_follow_the_rules_of_match() {
+    for stmt in [
+        "if let Some(x) = { o } {\n    }",
+        "while let Some(x) = { o } {\n    }",
+        "if let Some(x) = (if b { o } else { None }) {\n    }",
+    ] {
+        let (d, _) = one_error(&with_patterns(&format!("    {stmt}")));
+        assert_eq!(d.code, codes::V0001, "{stmt}: {d:#?}");
+        assert!(d.message.contains("`let`"), "{stmt}: {d:#?}");
+    }
+    // A nested string literal is V0205 in an `if let` too.
+    let (d, _) = one_error(&with_patterns("    if let Some(\"a\") = so {\n    }"));
+    assert_eq!(d.code, codes::V0205, "{d:#?}");
+}
+
+#[test]
+fn a_string_head_is_marked() {
+    let program = ok(&with_patterns(
+        "    match s {\n        \"a\" => {}\n        _ => {}\n    }\n    match so {\n        Some(x) => {}\n        None => {}\n    }",
+    ));
+    let f = function(&program, "f");
+    let tail = f.body.tail.as_deref().expect("a tail");
+    let heads: Vec<bool> = [stmt_expr(f, 0), tail]
+        .iter()
+        .map(|expr| match &expr.kind {
+            HirExprKind::Match { head_is_str, .. } => *head_is_str,
+            other => panic!("expected a match, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(heads, vec![true, false]);
+}
+
+// --- `?` on `Option`, expected types through `?`, `as`, `..=` (M4 spec 2.6, 2.9, 2.11) ---
+
+fn with_fn(params: &str, ret: &str, body: &str) -> String {
+    format!("fn run({params}){ret} {{\n{body}\n}}\n\nfn main() {{}}\n")
+}
+
+#[test]
+fn question_on_an_option_yields_the_payload() {
+    let program = ok(&with_fn(
+        "o: Option<i32>",
+        " -> Option<i32>",
+        "    let v = o?;\n    Some(v + 1)",
+    ));
+    let run = function(&program, "run");
+    assert_eq!(local_ty(run, "v"), I32);
+    match &stmt_expr(run, 0).kind {
+        HirExprKind::Try { operand, kind } => {
+            assert_eq!(*kind, TryKind::Option);
+            assert_eq!(operand.ty, Ty::Option(Box::new(I32)));
+        }
+        other => panic!("expected `?`, got {other:?}"),
+    }
+}
+
+#[test]
+fn question_on_the_wrong_one_of_option_and_result_is_v0206_naming_both() {
+    let (d, sources) = one_error(&with_fn(
+        "o: Option<i32>",
+        " -> Result<i32, string>",
+        "    let v = o?;\n    Ok(v)",
+    ));
+    assert_eq!(d.code, codes::V0206, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "o?"));
+    assert!(d.message.contains("`Option<i32>`"), "{d:#?}");
+    assert!(d.message.contains("`Result<i32, string>`"), "{d:#?}");
+
+    let (d, _) = one_error(&with_fn(
+        "r: Result<i32, string>",
+        " -> Option<i32>",
+        "    let v = r?;\n    Some(v)",
+    ));
+    assert_eq!(d.code, codes::V0206, "{d:#?}");
+    assert!(d.message.contains("`Result<i32, string>`"), "{d:#?}");
+    assert!(d.message.contains("`Option<i32>`"), "{d:#?}");
+}
+
+#[test]
+fn the_expected_type_flows_through_question() {
+    let program = ok(&with_fn(
+        "x: i32",
+        " -> Option<i32>",
+        "    let n: i32 = Some(x)?;\n    Some(n)",
+    ));
+    let run = function(&program, "run");
+    assert_eq!(local_ty(run, "n"), I32);
+    let program = ok(&with_fn(
+        "x: i32",
+        " -> Result<i32, string>",
+        "    let n: i32 = Ok(x)?;\n    Ok(n)",
+    ));
+    let HirExprKind::Try { operand, .. } = &stmt_expr(function(&program, "run"), 0).kind else {
+        panic!("expected `?`");
+    };
+    assert_eq!(operand.ty, Ty::Result(Box::new(I32), Box::new(Ty::String)));
+    let HirExprKind::EnumLit {
+        write_full_type, ..
+    } = &operand.kind
+    else {
+        panic!("expected `Ok`");
+    };
+    assert!(*write_full_type);
+
+    let (d, _) = one_error(&with_fn(
+        "x: i32",
+        " -> Option<i64>",
+        "    let n: i64 = Some(x)?;\n    Some(n)",
+    ));
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+}
+
+#[test]
+fn ok_question_without_an_expected_type_takes_the_functions_error_type() {
+    let program = ok(&with_fn(
+        "x: i32",
+        " -> Result<i32, string>",
+        "    let v = Ok(x)?;\n    Ok(v)",
+    ));
+    let run = function(&program, "run");
+    assert_eq!(local_ty(run, "v"), I32);
+    let HirExprKind::Try { operand, .. } = &stmt_expr(run, 0).kind else {
+        panic!("expected `?`");
+    };
+    assert_eq!(operand.ty, Ty::Result(Box::new(I32), Box::new(Ty::String)));
+}
+
+#[test]
+fn question_on_a_constructor_of_the_wrong_kind_is_v0206_whatever_is_expected() {
+    let cases = [
+        // In a function returning nothing.
+        (
+            "x: i32",
+            "",
+            "    let n = Ok(x)?;",
+            "`Result<_, _>`",
+            "nothing",
+        ),
+        (
+            "x: i32",
+            "",
+            "    let n: i32 = Some(x)?;",
+            "`Option<_>`",
+            "nothing",
+        ),
+        ("e: string", "", "    Err(e)?;", "`Result<_, _>`", "nothing"),
+        // In a function of the other family, with an expected type.
+        (
+            "x: i32",
+            " -> Result<i32, string>",
+            "    let n: i32 = Some(x)?;\n    Ok(n)",
+            "`Option<_>`",
+            "`Result<i32, string>`",
+        ),
+        (
+            "x: i32",
+            " -> Option<i32>",
+            "    let n: i32 = Ok(x)?;\n    Some(n)",
+            "`Result<_, _>`",
+            "`Option<i32>`",
+        ),
+        (
+            "",
+            " -> Result<i32, string>",
+            "    let n: i32 = None?;\n    Ok(n)",
+            "`Option<_>`",
+            "`Result<i32, string>`",
+        ),
+    ];
+    for (params, ret, body, found, returns) in cases {
+        let (d, _) = one_error(&with_fn(params, ret, body));
+        assert_eq!(d.code, codes::V0206, "{body}: {d:#?}");
+        assert!(d.message.contains(found), "{body}: {d:#?}");
+        assert!(d.message.contains(returns), "{body}: {d:#?}");
+    }
+}
+
+#[test]
+fn err_question_as_a_statement_is_v0207() {
+    let (d, sources) = one_error(&with_fn(
+        "e: string",
+        " -> Result<i32, string>",
+        "    Err(e)?;\n    Ok(1)",
+    ));
+    assert_eq!(d.code, codes::V0207, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "Err(e)"));
+}
+
+#[test]
+fn as_converts_between_number_types() {
+    let program = ok(&with_fn(
+        "x: i32, v: Vec<i32>, f: f64",
+        "",
+        "    let a = x as i64;\n    let n = v.len() as i32;\n    let g = f as u8;\n    let h = x as f32;",
+    ));
+    let run = function(&program, "run");
+    assert_eq!(local_ty(run, "a"), I64);
+    assert_eq!(local_ty(run, "n"), I32);
+    assert_eq!(local_ty(run, "g"), Ty::Int(IntKind::U8));
+    assert_eq!(local_ty(run, "h"), Ty::Float(FloatKind::F32));
+    assert!(matches!(stmt_expr(run, 0).kind, HirExprKind::Cast { .. }));
+}
+
+#[test]
+fn as_on_something_that_is_not_a_number_is_v0200() {
+    for (params, body) in [
+        ("b: bool", "    let n = b as i32;"),
+        ("x: i32", "    let n = x as bool;"),
+        ("s: string", "    let n = s as i32;"),
+        ("x: i32", "    let n = x as string;"),
+    ] {
+        let (d, _) = one_error(&with_fn(params, "", body));
+        assert_eq!(d.code, codes::V0200, "{body}: {d:#?}");
+    }
+    let (d, _) = one_error(
+        "struct P {\n    x: i32,\n}\n\nfn main() {\n    let p = P { x: 1 };\n    let n = p as i32;\n}\n",
+    );
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+}
+
+#[test]
+fn as_binds_tighter_than_multiplication() {
+    let program = ok(&with_fn("a: i64", "", "    let n = a as i32 * 2;"));
+    let run = function(&program, "run");
+    assert_eq!(local_ty(run, "n"), I32);
+    let HirExprKind::Binary { lhs, .. } = &stmt_expr(run, 0).kind else {
+        panic!("expected a product");
+    };
+    assert!(matches!(lhs.kind, HirExprKind::Cast { .. }), "{lhs:?}");
+}
+
+#[test]
+fn an_inclusive_range_counts_in_the_type_of_its_ends() {
+    let program = ok(&with_fn(
+        "n: usize",
+        "",
+        "    for i in 1..=n {\n        let k: usize = i;\n    }",
+    ));
+    let run = function(&program, "run");
+    assert_eq!(local_ty(run, "i"), Ty::Int(IntKind::Usize));
+    match &run.body.stmts[0] {
+        HirStmt::For { head, .. } => assert!(matches!(
+            head,
+            HirForHead::Range {
+                inclusive: true,
+                ..
+            }
+        )),
+        other => panic!("expected `for`, got {other:?}"),
+    }
+
+    let (d, _) = one_error(&with_fn(
+        "x: i64",
+        "",
+        "    let s: i32 = 1;\n    for i in s..=x {\n    }",
+    ));
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+}
+
+// --- Table rows and `HashMap` (M4 spec 2.7) ---------------------------------
+
+fn map_of(key: Ty, value: Ty) -> Ty {
+    Ty::HashMap(Box::new(key), Box::new(value))
+}
+
+#[test]
+fn the_value_rows_type_as_the_table_says() {
+    let program = ok("fn main() {
+    let mut v: Vec<i32> = vec![3, 1];
+    let a = v.is_empty();
+    v.insert(0, 5);
+    let b = v.remove(1);
+    let c = v.contains(3);
+    v.sort();
+    let words = vec![\"a\", \"b\"];
+    let d = words.join(\", \");
+    let mut s = \"text\";
+    let e = s.is_empty();
+    let f = s.contains(\"x\");
+    let g = s.starts_with(\"t\");
+    let h = s.to_uppercase();
+    let i = s.replace(\"t\", \"T\");
+    s.push_str(\"!\");
+    let j: Option<i32> = s.parse();
+    let o: Option<i32> = None;
+    let k = o.is_some();
+    let r: Result<i32, string> = Ok(1);
+    let l = r.is_ok();
+    let m = r.is_err();
+    let mut counts: HashMap<string, i32> = HashMap::new();
+    let n = counts.insert(\"a\", 1);
+    let p = counts.contains_key(\"a\");
+    let q = counts.len();
+}
+");
+    let main = function(&program, "main");
+    for (name, ty) in [
+        ("a", Ty::Bool),
+        ("b", I32),
+        ("c", Ty::Bool),
+        ("d", Ty::String),
+        ("e", Ty::Bool),
+        ("f", Ty::Bool),
+        ("g", Ty::Bool),
+        ("h", Ty::String),
+        ("i", Ty::String),
+        ("j", opt(I32)),
+        ("k", Ty::Bool),
+        ("l", Ty::Bool),
+        ("m", Ty::Bool),
+        ("counts", map_of(Ty::String, I32)),
+        ("n", opt(I32)),
+        ("p", Ty::Bool),
+        ("q", USIZE),
+    ] {
+        assert_eq!(local_ty(main, name), ty, "{name}");
+    }
+}
+
+#[test]
+fn element_rules_are_v0200_naming_the_row() {
+    for (stmts, at, words) in [
+        (
+            "let mut v: Vec<f64> = vec![1.5];\n    v.sort();",
+            "sort",
+            &["`sort`", "Vec<f64>", "an integer type, `bool`, or `string`"][..],
+        ),
+        (
+            "let mut v = vec![P { n: 1 }];\n    v.sort();",
+            "sort",
+            &["`sort`", "Vec<P>"][..],
+        ),
+        (
+            "let v = vec![P { n: 1 }];\n    let b = v.contains(P { n: 1 });",
+            "contains",
+            &["`contains`", "Vec<P>", "a number type, `bool`, or `string`"][..],
+        ),
+        (
+            "let v = vec![1, 2];\n    let s = v.join(\",\");",
+            "join",
+            &["`join`", "Vec<i32>", "`Vec<string>`"][..],
+        ),
+    ] {
+        let text = format!("struct P {{\n    n: i32,\n}}\nfn main() {{\n    {stmts}\n}}\n");
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0200, "{stmts}: {d:#?}");
+        assert_eq!(
+            d.span,
+            part_of(&sources, &format!(".{at}("), at),
+            "{stmts}: {d:#?}"
+        );
+        for word in words {
+            assert!(d.message.contains(word), "{stmts}: {word}: {d:#?}");
+        }
+    }
+}
+
+#[test]
+fn contains_and_sort_accept_integers_and_strings() {
+    ok("fn main() {
+    let mut v = vec![2, 1];
+    v.sort();
+    let a = v.contains(1);
+    let mut w = vec![\"b\", \"a\"];
+    w.sort();
+    let b = w.contains(\"a\");
+    let mut f = vec![true];
+    f.sort();
+    let x = vec![1.5];
+    let c = x.contains(1.5);
+}
+");
+}
+
+#[test]
+fn parse_takes_its_type_from_where_it_goes() {
+    let program = ok("fn first(text: string) -> Option<i32> {
+    let n: i32 = text.parse()?;
+    Some(n)
+}
+fn flag(text: string) -> Option<bool> {
+    text.parse()
+}
+fn take(n: Option<u8>) {}
+fn main() {
+    let a: Option<f64> = \"1.5\".parse();
+    take(\"7\".parse());
+}
+");
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "a"), opt(Ty::Float(FloatKind::F64)));
+    assert_eq!(
+        call_args(stmt_expr(main, 1))[0].ty,
+        opt(Ty::Int(IntKind::U8))
+    );
+    let first = function(&program, "first");
+    assert_eq!(local_ty(first, "n"), I32);
+}
+
+#[test]
+fn parse_into_a_string_is_v0200_and_with_nothing_expected_v0207() {
+    let (d, sources) =
+        one_error("fn main() {\n    let s = \"a\";\n    let t: Option<string> = s.parse();\n}\n");
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "s.parse()"));
+    assert!(d.message.contains("`string`"), "{d:#?}");
+    assert!(d.message.contains("a number or `bool`"), "{d:#?}");
+
+    let (d, sources) = one_error("fn main() {\n    let s = \"a\";\n    let n = s.parse();\n}\n");
+    assert_eq!(d.code, codes::V0207, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "s.parse()"));
+    assert!(
+        d.message
+            .contains("`let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?`"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn hash_map_new_takes_its_type_from_where_it_goes() {
+    let program = ok("fn f(m: HashMap<i32, string>) {}
+fn g() -> HashMap<string, Vec<i32>> {
+    HashMap::new()
+}
+fn main() {
+    f(HashMap::new());
+}
+");
+    let main = function(&program, "main");
+    assert_eq!(call_args(stmt_expr(main, 0))[0].ty, map_of(I32, Ty::String));
+    let (d, sources) = one_error("fn main() {\n    let m = HashMap::new();\n}\n");
+    assert_eq!(d.code, codes::V0207, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "HashMap::new()"));
+    assert!(
+        d.message
+            .contains("`let m: HashMap<string, i32> = HashMap::new();`"),
+        "{d:#?}"
+    );
+    let (d, _) = one_error("fn main() {\n    let m: Vec<i32> = HashMap::new();\n}\n");
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    let (d, _) = one_error("fn main() {\n    let m: HashMap<i32, i32> = HashMap::nope();\n}\n");
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+    assert!(d.message.contains("`HashMap::new()`"), "{d:#?}");
+}
+
+#[test]
+fn methods_of_option_result_and_hash_map_are_listed_for_v0100() {
+    for (stmts, words) in [
+        (
+            "let o: Option<i32> = None;\n    o.nope();",
+            &[
+                "Option<i32>",
+                "the methods of an `Option` are `is_some`, `unwrap_or`, `ok_or`, and `map`",
+            ][..],
+        ),
+        (
+            "let r: Result<i32, string> = Ok(1);\n    r.nope();",
+            &[
+                "the methods of a `Result` are `is_ok`, `is_err`, `ok`, `unwrap_or`, and \
+                 `map_err`",
+            ][..],
+        ),
+        (
+            "let m: HashMap<i32, i32> = HashMap::new();\n    m.nope();",
+            &[
+                "the methods of a `HashMap` are `insert`, `contains_key`, `len`, `get`, `keys`, \
+                 and `values`",
+            ][..],
+        ),
+    ] {
+        let (d, _) = one_error(&format!("fn main() {{\n    {stmts}\n}}\n"));
+        assert_eq!(d.code, codes::V0100, "{stmts}: {d:#?}");
+        for word in words {
+            assert!(d.message.contains(word), "{stmts}: {word}: {d:#?}");
+        }
+    }
+}
+
+#[test]
+fn for_over_a_hash_map_is_v0001_naming_keys_and_values() {
+    let (d, sources) = one_error(
+        "fn main() {\n    let m: HashMap<string, i32> = HashMap::new();\n    for k in m {\n    }\n}\n",
+    );
+    assert_eq!(d.code, codes::V0001, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "in m {", "m"));
+    assert!(d.message.contains("`keys()`"), "{d:#?}");
+    assert!(d.message.contains("`values()`"), "{d:#?}");
+}
+
+#[test]
+fn a_hash_map_is_not_printed() {
+    let (d, _) = one_error(
+        "fn main() {\n    let m: HashMap<i32, i32> = HashMap::new();\n    println!(\"{}\", m);\n}\n",
+    );
+    assert_eq!(d.code, codes::V0203, "{d:#?}");
+    assert!(d.message.contains("HashMap<i32, i32>"), "{d:#?}");
+}
+
+#[test]
+fn a_hash_map_node_type_checks() {
+    ok("struct Node {
+    children: HashMap<string, Node>,
+}
+fn main() {
+    let n = Node { children: HashMap::new() };
+    let k = n.children.len();
+}
+");
+}
+
+#[test]
+fn hash_map_as_a_let_name_is_v0103() {
+    let (d, _) = one_error("fn main() {\n    let HashMap = 1;\n}\n");
+    assert_eq!(d.code, codes::V0103, "{d:#?}");
+    assert_eq!(
+        d.message,
+        "the name `HashMap` is already taken by a built-in type"
+    );
+}
+
+#[test]
+fn parse_under_question_in_a_result_function_is_v0206_showing_two_statements() {
+    let (d, sources) = one_error(
+        "fn f(text: string) -> Result<i32, string> {\n    let n: i32 = text.parse()?;\n    Ok(n)\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0206, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "text.parse()"));
+    assert!(d.message.contains("`Option<_>`"), "{d:#?}");
+    assert!(d.message.contains("`Result<i32, string>`"), "{d:#?}");
+    assert!(
+        d.notes.iter().any(
+            |n| n.contains("`let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?`")
+        ),
+        "{d:#?}"
+    );
+    // A `Result` expected anywhere else is a plain mismatch.
+    let (d, _) = one_error(
+        "fn main() {\n    let s = \"1\";\n    let r: Result<i32, string> = s.parse();\n}\n",
+    );
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    let (d, _) = one_error(
+        "fn f(text: string) -> Result<i32, string> {\n    let r: Result<i32, string> = Ok(text.parse()?);\n    r\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0206, "{d:#?}");
+}
+
+#[test]
+fn ok_or_takes_its_error_type_from_an_expected_result_else_from_its_argument() {
+    let program = ok(
+        "fn f(o: Option<i32>) -> Result<i32, i64> {\n    let a: Result<i32, i64> = o.ok_or(1);\n    let b = o.ok_or(2);\n    let c = o.ok_or(\"none\");\n    let n: i32 = o.ok_or(3)?;\n    Ok(n)\n}\nfn main() {}\n",
+    );
+    let f = function(&program, "f");
+    let result = |e: Ty| Ty::Result(Box::new(I32), Box::new(e));
+    assert_eq!(local_ty(f, "a"), result(I64));
+    assert_eq!(local_ty(f, "b"), result(I32));
+    assert_eq!(local_ty(f, "c"), result(Ty::String));
+    // Through `?`, from the function's error type.
+    let HirExprKind::Try { operand, .. } = &stmt_expr(f, 3).kind else {
+        panic!("a `?`");
+    };
+    assert_eq!(operand.ty, result(I64));
+    let (d, _) = one_error(
+        "fn f(o: Option<i32>) {\n    let a: Result<i32, i64> = o.ok_or(\"x\");\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+}
+
+#[test]
+fn parse_then_ok_or_under_question_is_v0207_showing_two_statements() {
+    let (d, sources) = one_error(
+        "fn f(text: string) -> Result<i32, string> {\n    let n = text.parse().ok_or(\"bad\")?;\n    Ok(n)\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0207, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "text.parse()"));
+    assert!(
+        d.notes
+            .iter()
+            .chain(std::iter::once(&d.message))
+            .any(|n| n.contains("parsed.ok_or(e)?")),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_get_is_rooted_at_its_receiver_only_when_its_payload_is_not_copy() {
+    let program = ok(
+        "fn f(v: Vec<string>, n: Vec<i32>, m: HashMap<string, Vec<i32>>, c: HashMap<i32, bool>) {\n    let a = v.get(0);\n    let b = n.get(0);\n    let d = m.get(\"k\");\n    let e = c.get(1);\n}\nfn main() {}\n",
+    );
+    let f = function(&program, "f");
+    let rooted = |index| match &stmt_expr(f, index).kind {
+        HirExprKind::MethodCall { rooted, .. } => *rooted,
+        other => panic!("a method call, got {other:?}"),
+    };
+    assert_eq!(rooted(0), Some(0));
+    assert_eq!(rooted(1), None);
+    assert_eq!(rooted(2), Some(0));
+    assert_eq!(rooted(3), None);
+    assert_eq!(local_ty(f, "b"), Ty::Option(Box::new(I32)));
+    assert_eq!(
+        local_ty(f, "d"),
+        Ty::Option(Box::new(Ty::Vec(Box::new(I32))))
+    );
+}
+
+#[test]
+fn trim_is_rooted_at_its_receiver_and_calls_are_left_unrooted() {
+    let program = ok(
+        "struct U {\n    name: string,\n}\nimpl U {\n    fn name_ref(self) -> string {\n        self.name.clone()\n    }\n}\nfn first(s: string) -> string {\n    s.clone()\n}\nfn f(s: string, u: U) {\n    let a = s.trim();\n    let b = \"  x \".trim();\n    let c = u.name_ref();\n    let d = first(s);\n}\nfn main() {}\n",
+    );
+    let f = function(&program, "f");
+    let rooted = |index| match &stmt_expr(f, index).kind {
+        HirExprKind::MethodCall { rooted, .. } | HirExprKind::Call { rooted, .. } => *rooted,
+        other => panic!("a call, got {other:?}"),
+    };
+    assert_eq!(rooted(0), Some(0));
+    assert_eq!(rooted(1), Some(0));
+    // Borrow analysis decides what a Varyk function returns (M4 spec 3.1).
+    assert_eq!(rooted(2), None);
+    assert_eq!(rooted(3), None);
+    assert_eq!(local_ty(f, "a"), Ty::String);
+    assert_eq!(f.ret_root, None);
+}
+
+/// Deliberately over-strict: a head is judged by its shape, before borrow
+/// analysis knows which calls are borrowed returns, so a field of one is
+/// "part of a value that is not stored anywhere" (M4 spec 3.1).
+#[test]
+fn a_field_of_a_call_as_a_head_stays_v0001() {
+    let (d, sources) = one_error(
+        "enum K {\n    A,\n    B,\n}\nstruct Info {\n    kind: K,\n}\nstruct Obj {\n    info: Info,\n}\nimpl Obj {\n    fn info(self) -> Info {\n        self.info\n    }\n}\nfn f(obj: Obj) {\n    match obj.info().kind {\n        K::A => {}\n        K::B => {}\n    }\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0001, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "obj.info().kind"));
+}
+
+// --- Chains (M4 spec 2.3, 2.7) ----------------------------------------------
+
+/// `main` with a `Vec<i32>` `v`, a `Vec<string>` `n`, a `HashMap` `m`, and
+/// a `string` `text`, around `stmts`, beside helpers taking and returning
+/// values.
+fn with_chains(stmts: &str) -> String {
+    format!(
+        "struct S {{\n    n: i32,\n}}\nfn take(n: i32) {{}}\nfn tail(v: Vec<i32>) -> i32 {{\n    0\n}}\nfn main() {{\n    let v = vec![1, 2];\n    let n = vec![\"a\", \"b\"];\n    let mut m: HashMap<string, i32> = HashMap::new();\n    let text = \"a b\";\n    {stmts}\n}}\n"
+    )
+}
+
+/// An unfinished chain has no Varyk type: anywhere but the receiver of
+/// the next call it is V0208, "finish the chain here" (M4 spec 2.3).
+#[test]
+fn an_unfinished_chain_anywhere_but_the_next_call_is_v0208() {
+    let cases = [
+        ("let c = v.iter();", "v.iter()"),
+        ("let c: Vec<i32> = v.iter();", "v.iter()"),
+        ("take(v.iter());", "v.iter()"),
+        ("v.iter().map(|x| x);", "v.iter().map(|x| x)"),
+        ("let s = S { n: v.iter() };", "v.iter()"),
+        ("let o = Some(v.iter());", "v.iter()"),
+        ("let w = vec![v.iter()];", "v.iter()"),
+        ("println!(\"{}\", v.iter());", "v.iter()"),
+        ("while true {\n        v.iter()\n    }", "v.iter()"),
+        ("for x in v {\n        v.iter()\n    }", "v.iter()"),
+        (
+            "let k = (if true { v.iter() } else { v.iter() }).count();",
+            "if true { v.iter() } else { v.iter() }",
+        ),
+        ("let d = v.iter().map(|x| n.iter()).count();", "n.iter()"),
+        ("let e = Some(1).map(|x| n.iter());", "n.iter()"),
+        ("match v.iter() {\n        _ => {}\n    }", "v.iter()"),
+        ("if let x = v.iter() {}", "v.iter()"),
+        (
+            "while let x = v.iter() {\n        break;\n    }",
+            "v.iter()",
+        ),
+    ];
+    for (stmt, at) in cases {
+        let (d, sources) = one_error(&with_chains(stmt));
+        assert_eq!(d.code, codes::V0208, "{stmt}: {d:#?}");
+        assert_eq!(d.span, span_of(&sources, at), "{stmt}: {d:#?}");
+        assert!(
+            d.message.contains("finish the chain here"),
+            "{stmt}: {d:#?}"
+        );
+    }
+    let returns = [
+        "fn f(v: Vec<i32>) -> i32 {\n    v.iter()\n}\nfn main() {}\n",
+        "fn f(v: Vec<i32>) -> i32 {\n    return v.iter();\n}\nfn main() {}\n",
+    ];
+    for text in returns {
+        let (d, sources) = one_error(text);
+        assert_eq!(d.code, codes::V0208, "{text}: {d:#?}");
+        assert_eq!(d.span, span_of(&sources, "v.iter()"), "{text}");
+    }
+    // Finished, a chain is an ordinary value.
+    ok(&with_chains(
+        "let a = v.iter().count();\n    take(v.iter().sum());\n    let b = v.iter().map(|x| x * 2).filter(|x| x > 2).any(|x| x == 4);",
+    ));
+}
+
+#[test]
+fn a_chain_types_its_items_from_its_source() {
+    let program = ok(&with_chains(
+        "let a = v.iter().collect();\n    let b = n.iter().map(|s| s.len()).collect();\n    let c = text.split(\" \").filter(|w| w.len() > 0).count();\n    let d = m.keys().all(|k| k.len() > 0);\n    let e = m.values().sum();\n    let f = v.iter().find(|x| x > 1);\n    let g = n.iter().map(|s| s.clone()).collect();",
+    ));
+    let main = function(&program, "main");
+    let vec = |ty: Ty| Ty::Vec(Box::new(ty));
+    assert_eq!(local_ty(main, "a"), vec(I32));
+    assert_eq!(local_ty(main, "b"), vec(Ty::Int(IntKind::Usize)));
+    assert_eq!(local_ty(main, "s"), Ty::String);
+    assert_eq!(local_ty(main, "w"), Ty::String);
+    assert_eq!(local_ty(main, "c"), Ty::Int(IntKind::Usize));
+    assert_eq!(local_ty(main, "k"), Ty::String);
+    assert_eq!(local_ty(main, "d"), Ty::Bool);
+    assert_eq!(local_ty(main, "e"), I32);
+    assert_eq!(local_ty(main, "f"), Ty::Option(Box::new(I32)));
+    assert_eq!(local_ty(main, "g"), vec(Ty::String));
+    // `find` is looked into or not by its items, which borrow analysis
+    // decides: the checker roots nothing.
+    let HirExprKind::MethodCall {
+        rooted,
+        looked_into,
+        ..
+    } = &stmt_expr(main, 9).kind
+    else {
+        panic!("a method call");
+    };
+    assert_eq!(*rooted, None);
+    assert!(!looked_into);
+}
+
+#[test]
+fn sum_on_items_that_are_not_numbers_is_v0200() {
+    let (d, sources) = one_error(&with_chains("let t = n.iter().sum();"));
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "sum"));
+    assert!(d.message.contains("number"), "{d:#?}");
+    assert!(d.message.contains("`string`"), "{d:#?}");
+}
+
+#[test]
+fn a_test_closure_of_a_chain_must_return_bool() {
+    for call in ["filter", "any", "all", "find"] {
+        let stmt = format!("let t = v.iter().{call}(|x| x + 1);");
+        let (d, sources) = one_error(&with_chains(&stmt));
+        assert_eq!(d.code, codes::V0200, "{call}: {d:#?}");
+        assert_eq!(d.span, span_of(&sources, "x + 1"), "{call}");
+        assert!(d.message.contains("expected `bool`"), "{call}: {d:#?}");
+    }
+}
+
+#[test]
+fn a_method_a_chain_lacks_is_v0100_listing_its_calls() {
+    let (d, sources) = one_error(&with_chains("let t = v.iter().len();"));
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "len"));
+    assert!(
+        d.message.contains(
+            "the calls of a chain are `map`, `filter`, `collect`, `count`, `sum`, `any`, \
+             `all`, and `find`"
+        ),
+        "{d:#?}"
+    );
+}
+
+/// A chain as a `for` head binds one item per round (M4 spec 2.3, 3.3):
+/// the variable has the item type, and the head is no unfinished chain.
+#[test]
+fn a_for_over_a_chain_types_its_variable_as_the_item() {
+    let program = ok(&with_chains(
+        "for x in v.iter().filter(|y| y > 1) {\n        take(x);\n    }\n    for w in text.split(\" \") {\n        let k = w.len();\n    }",
+    ));
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "x"), I32);
+    assert_eq!(local_ty(main, "w"), Ty::String);
+    // Anything but a chain call as the head is still unfinished.
+    let (d, sources) = one_error(&with_chains(
+        "for x in if true { v.iter() } else { v.iter() } {\n    }",
+    ));
+    assert_eq!(d.code, codes::V0208, "{d:#?}");
+    assert_eq!(
+        d.span,
+        span_of(&sources, "if true { v.iter() } else { v.iter() }")
     );
 }

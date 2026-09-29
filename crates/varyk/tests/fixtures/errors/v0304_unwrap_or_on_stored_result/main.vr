@@ -1,0 +1,7 @@
+fn count(r: Result<i32, string>) -> i32 {
+    r.unwrap_or(0)
+}
+
+fn main() {
+    println!("{}", count(Ok(3)));
+}

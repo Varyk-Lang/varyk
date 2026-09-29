@@ -1,0 +1,9 @@
+fn main() {
+    let mut seen = 0;
+    let count: Option<i32> = Some(3);
+    let doubled = count.map(|n| {
+        seen = n;
+        n * 2
+    });
+    println!("{} {}", seen, doubled.unwrap_or(0));
+}

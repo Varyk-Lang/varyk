@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0207]: the type of `None` cannot be worked out here; write the type, as in `let x: Option<i32> = None;`
+ --> crates/varyk/tests/fixtures/errors/v0207_closure_body_none/main.vr:3:29
+  |
+3 |     let adult = age.map(|a| None);
+  |                             ^^^^ the type of `None` cannot be worked out here; write the type, as in `let x: Option<i32> = None;`
+  |
+  = note: such a value takes its type from where it goes: a `let` with a written type, a parameter, a return value, a field, or a `vec!` element after one whose type is known; in Rust terms, the type cannot be inferred here
+  = note: a closure's value takes its type from where the result of `map` goes, such as a `let` with a written type

@@ -1,0 +1,13 @@
+fn shout(mut text: string) {
+    text.push_str("!");
+}
+
+fn main() {
+    let mut greeting = "hello".to_uppercase();
+    let times: Option<i32> = Some(2);
+    let said = times.map(|n| {
+        shout(greeting);
+        n
+    });
+    println!("{}", greeting);
+}

@@ -1,0 +1,3 @@
+fn main() {
+    let digits = 0..=9;
+}

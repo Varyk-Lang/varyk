@@ -1,0 +1,5 @@
+fn main() {
+    let numbers = vec![1, 2, 3, 4];
+    let evens = numbers.iter().filter(|n: i32| n % 2 == 0).count();
+    println!("{}", evens);
+}

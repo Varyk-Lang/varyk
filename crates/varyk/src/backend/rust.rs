@@ -12,11 +12,11 @@ use super::rust_expr::{FnEmitter, Need, Repr};
 use super::writer::Writer;
 use super::{Backend, CrateInfo, GeneratedCrate};
 use crate::hir::{
-    HirBlock, HirEnum, HirExprKind, HirForHead, HirFunction, HirModule, HirModuleKind, HirProgram,
-    HirStmt, HirStruct, is_place,
+    HirBlock, HirEnum, HirExprKind, HirForHead, HirFunction, HirModule, HirModuleKind, HirParam,
+    HirProgram, HirStmt, HirStruct, is_place_or_rooted,
 };
-use crate::resolve::{ModuleId, StructId, UserType};
-use crate::types::{ParamMode, Ty};
+use crate::resolve::{ModuleId, StructId, UserType, VariantFieldsDef};
+use crate::types::{Derives, ParamMode, Ty};
 use varyk_syntax::Span;
 
 /// The item-level attribute every generated `fn`, `struct`, `enum`,
@@ -193,6 +193,7 @@ fn write_module_items(program: &HirProgram, module: ModuleId, writer: &mut Write
 
 fn emit_struct(program: &HirProgram, s: &HirStruct, writer: &mut Writer) {
     writer.line(0, ALLOW_ITEM, None);
+    write_derives(s.derives, writer);
     let vis = if s.is_pub { "pub " } else { "" };
     if s.fields.is_empty() {
         writer.line(0, &format!("{vis}struct {} {{}}", s.name), Some(s.span));
@@ -209,26 +210,50 @@ fn emit_struct(program: &HirProgram, s: &HirStruct, writer: &mut Writer) {
 
 fn emit_enum(program: &HirProgram, e: &HirEnum, writer: &mut Writer) {
     writer.line(0, ALLOW_ITEM, None);
+    write_derives(e.derives, writer);
     let vis = if e.is_pub { "pub " } else { "" };
     writer.line(0, &format!("{vis}enum {} {{", e.name), Some(e.span));
-    for (name, payload) in &e.variants {
-        if payload.is_empty() {
-            writer.line(1, &format!("{name},"), Some(e.span));
-        } else {
-            let types: Vec<String> = payload
-                .iter()
-                .map(|ty| rust_type(program, ty, e.module))
-                .collect();
-            writer.line(1, &format!("{name}({}),", types.join(", ")), Some(e.span));
-        }
+    for variant in &e.variants {
+        let name = &variant.name;
+        let line = match &variant.fields {
+            VariantFieldsDef::Tuple(types) if types.is_empty() => format!("{name},"),
+            VariantFieldsDef::Tuple(types) => {
+                let types: Vec<String> = types
+                    .iter()
+                    .map(|ty| rust_type(program, ty, e.module))
+                    .collect();
+                format!("{name}({}),", types.join(", "))
+            }
+            VariantFieldsDef::Named(fields) => {
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|(field, ty)| format!("{field}: {}", rust_type(program, ty, e.module)))
+                    .collect();
+                format!("{name} {{ {} }},", fields.join(", "))
+            }
+        };
+        writer.line(1, &line, Some(e.span));
     }
     writer.line(0, "}", None);
 }
 
+/// The one `#[derive(..)]` line of a struct or enum (M4 spec 2.10, 5):
+/// `Clone` and `PartialEq` as it allows, in that order; none when it
+/// allows neither.
+fn write_derives(derives: Derives, writer: &mut Writer) {
+    let names: Vec<&str> = [(derives.clone, "Clone"), (derives.eq, "PartialEq")]
+        .into_iter()
+        .filter_map(|(has, name)| has.then_some(name))
+        .collect();
+    if !names.is_empty() {
+        writer.line(0, &format!("#[derive({})]", names.join(", ")), None);
+    }
+}
+
 /// The Rust spelling of a value of type `ty`, from `from`. A `string` is
 /// an owned `String` wherever a type is spelled: a field, a payload, a
-/// return, and inside `Option`, `Result`, and `Vec`.
-fn rust_type(program: &HirProgram, ty: &Ty, from: ModuleId) -> String {
+/// return, and inside `Option`, `Result`, `Vec`, and `HashMap`.
+pub(super) fn rust_type(program: &HirProgram, ty: &Ty, from: ModuleId) -> String {
     match ty {
         Ty::Bool => "bool".to_string(),
         Ty::Int(kind) => kind.name().to_string(),
@@ -246,6 +271,17 @@ fn rust_type(program: &HirProgram, ty: &Ty, from: ModuleId) -> String {
             rust_type(program, err, from)
         ),
         Ty::Vec(inner) => format!("Vec<{}>", rust_type(program, inner, from)),
+        // In full, so that no `use` line of a `.rs` module can shadow it.
+        Ty::HashMap(key, value) => format!(
+            "::std::collections::HashMap<{}, {}>",
+            rust_type(program, key, from),
+            rust_type(program, value, from)
+        ),
+        // Never spelled for a program `check` accepts (V0208).
+        Ty::Chain(item) => format!(
+            "impl ::std::iter::Iterator<Item = {}>",
+            rust_type(program, item, from)
+        ),
         Ty::Unit => "()".to_string(),
     }
 }
@@ -308,6 +344,7 @@ fn stmt_span(stmt: &HirStmt) -> Span {
         | HirStmt::Expr { span, .. }
         | HirStmt::Return { span, .. }
         | HirStmt::While { span, .. }
+        | HirStmt::WhileLet { span, .. }
         | HirStmt::For { span, .. }
         | HirStmt::Break { span }
         | HirStmt::Continue { span } => *span,
@@ -320,36 +357,57 @@ impl FnEmitter<'_> {
     /// line carrying the function's span, its body's statements each
     /// carrying their own span, then the closing brace (structural). A
     /// method's receiver is `&self` or `&mut self`.
+    ///
+    /// A borrowed return (M4 spec 3.1) is `-> &str` or `-> &T`; when the
+    /// signature has more than one reference parameter and the root is
+    /// not `self`, elision would not name the root, so one lifetime is
+    /// written on the rooted parameter and the return.
     pub(super) fn function(&self, writer: &mut Writer, indent: usize) {
         let f: &HirFunction = self.function;
         let vis = if f.is_pub { "pub " } else { "" };
+        let is_self = |p: &HirParam| f.owner.is_some() && p.name == "self";
+        let references = f
+            .params
+            .iter()
+            .filter(|p| p.mode != ParamMode::Owned)
+            .count();
+        let lifetime = f.ret_root.filter(|root| {
+            references > 1 && f.params.get(root.0 as usize).is_some_and(|p| !is_self(p))
+        });
         let params: Vec<String> = f
             .params
             .iter()
             .map(|p| match p.mode {
-                _ if f.owner.is_none() || p.name != "self" => {
+                _ if !is_self(p) => {
                     let ty = param_type(self.program, &p.ty, p.mode, self.module);
+                    let ty = match lifetime {
+                        Some(root) if root == p.local => ty.replacen('&', "&'a ", 1),
+                        _ => ty,
+                    };
                     format!("{}: {ty}", p.name)
                 }
                 ParamMode::MutableBorrow => "&mut self".to_string(),
                 _ => "&self".to_string(),
             })
             .collect();
-        let ret = match &f.ret {
-            Ty::Unit => String::new(),
-            ty => format!(" -> {}", rust_type(self.program, ty, self.module)),
+        let named = if lifetime.is_some() { "'a " } else { "" };
+        let ret = match (&f.ret, f.ret_root) {
+            (Ty::Unit, _) => String::new(),
+            (Ty::String, Some(_)) => format!(" -> &{named}str"),
+            (ty, Some(_)) => format!(" -> &{named}{}", rust_type(self.program, ty, self.module)),
+            (ty, None) => format!(" -> {}", rust_type(self.program, ty, self.module)),
         };
-        let need = if f.ret == Ty::Unit {
-            Need::AsIs
-        } else {
-            Need::Value
-        };
+        let generics = if lifetime.is_some() { "<'a>" } else { "" };
         writer.line(
             indent,
-            &format!("{vis}fn {}({}){ret} {{", f.name, params.join(", ")),
+            &format!(
+                "{vis}fn {}{generics}({}){ret} {{",
+                f.name,
+                params.join(", ")
+            ),
             Some(f.span),
         );
-        self.block_after(writer, &f.body, need, indent);
+        self.block_after(writer, &f.body, self.return_need(), indent);
     }
 
     /// Writes `block`'s statements and tail into `writer`, each physical
@@ -392,11 +450,12 @@ impl FnEmitter<'_> {
             HirStmt::Let { local, value, .. } => {
                 let info = &self.function.locals[local.0 as usize];
                 let mutability = if info.mutable { "mut " } else { "" };
-                // A value holding `Option`, `Result`, or `Vec` may have
-                // taken part of its type from the `let` (`None`, `vec![]`,
-                // spec 2.6), so the Rust keeps the type written.
+                // A value holding `Option`, `Result`, `Vec`, or `HashMap`
+                // may have taken part of its type from the `let` (`None`,
+                // `vec![]`, `HashMap::new()`, spec 2.6), so the Rust keeps
+                // the type written.
                 let ty = match info.ty {
-                    Ty::Option(_) | Ty::Result(..) | Ty::Vec(_)
+                    Ty::Option(_) | Ty::Result(..) | Ty::Vec(_) | Ty::HashMap(..)
                         if self.repr(*local) == Repr::Owned =>
                     {
                         format!(": {}", rust_type(self.program, &info.ty, self.module))
@@ -432,7 +491,10 @@ impl FnEmitter<'_> {
                         self.expr(expr, Need::Shared { binding: true }, indent)
                     )
                 }
-                HirExprKind::If { .. } | HirExprKind::Block(_) | HirExprKind::Match { .. }
+                HirExprKind::If { .. }
+                | HirExprKind::IfLet { .. }
+                | HirExprKind::Block(_)
+                | HirExprKind::Match { .. }
                     if expr.ty == Ty::Unit =>
                 {
                     self.expr(expr, Need::AsIs, indent)
@@ -442,18 +504,36 @@ impl FnEmitter<'_> {
             HirStmt::Return { value: None, .. } => "return;".to_string(),
             HirStmt::Return {
                 value: Some(value), ..
-            } => format!("return {};", self.expr(value, Need::Value, indent)),
+            } => format!("return {};", self.expr(value, self.return_need(), indent)),
             HirStmt::While { cond, body, .. } => format!(
                 "while {} {}",
                 self.expr(cond, Need::Value, indent),
                 self.block(body, Need::AsIs, indent)
             ),
+            HirStmt::WhileLet {
+                pattern,
+                value,
+                body,
+                head_is_str,
+                ..
+            } => {
+                let (head, copies) = self.let_head(value, pattern, *head_is_str, indent);
+                format!(
+                    "while let {} = {head} {}",
+                    self.pattern(pattern),
+                    self.block_body(body, &copies, Need::AsIs, indent)
+                )
+            }
             HirStmt::For {
                 local, head, body, ..
             } => {
                 let name = self.local_name(*local);
                 let (head, copies) = match head {
-                    HirForHead::Range { start, end } => {
+                    HirForHead::Range {
+                        start,
+                        end,
+                        inclusive,
+                    } => {
                         let start = self.expr(start, Need::Value, indent);
                         let mut end = self.expr(end, Need::Value, indent);
                         // Rust would take an end starting with a block for
@@ -461,12 +541,13 @@ impl FnEmitter<'_> {
                         if end.starts_with('{') {
                             end = format!("({end})");
                         }
-                        (format!("{start}..{end}"), Vec::new())
+                        let dots = if *inclusive { "..=" } else { ".." };
+                        (format!("{start}{dots}{end}"), Vec::new())
                     }
                     // A place is looped over through a shared reference
                     // (spec 5), and a Copy element reached through it is
                     // copied first; a temporary is owned by the loop.
-                    HirForHead::Vec(vec) if is_place(vec) => {
+                    HirForHead::Vec(vec) if is_place_or_rooted(vec) => {
                         let head = self.expr(vec, Need::Shared { binding: true }, indent);
                         let copies = if self.function.locals[local.0 as usize].ty.is_copy() {
                             vec![format!("let {name} = *{name};")]
@@ -475,7 +556,11 @@ impl FnEmitter<'_> {
                         };
                         (head, copies)
                     }
-                    HirForHead::Vec(vec) => (self.expr(vec, Need::Value, indent), Vec::new()),
+                    // A chain is written as it is: its items are what the
+                    // variable is (M4 spec 3.3).
+                    HirForHead::Vec(head) | HirForHead::Chain(head) => {
+                        (self.expr(head, Need::Value, indent), Vec::new())
+                    }
                 };
                 format!(
                     "for {name} in {head} {}",

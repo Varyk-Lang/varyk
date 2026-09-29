@@ -3,12 +3,14 @@ source: crates/varyk/tests/codegen.rs
 expression: "file(&krate, \"src/task.rs\")"
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 pub enum Status {
     Open,
     Done,
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 pub struct Task {
     title: String,
     status: Status,
@@ -31,12 +33,16 @@ impl Task {
         }
     }
 
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
     pub fn label(&self) -> String {
         let mark = if Task::is_done(self) {
             "x"
         } else {
             " "
         };
-        ::std::format!("[{}] {}", mark, self.title)
+        ::std::format!("[{}] {}", mark, Task::title(self))
     }
 }

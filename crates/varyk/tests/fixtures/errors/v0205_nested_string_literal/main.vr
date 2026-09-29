@@ -1,0 +1,10 @@
+fn agreed(answer: Option<string>) -> bool {
+    match answer {
+        Some("yes") => true,
+        _ => false,
+    }
+}
+
+fn main() {
+    println!("{}", agreed(Some("yes")));
+}

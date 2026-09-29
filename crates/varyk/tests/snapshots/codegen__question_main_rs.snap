@@ -3,6 +3,7 @@ source: crates/varyk/tests/codegen.rs
 expression: main
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct User {
     name: String,
     age: i32,

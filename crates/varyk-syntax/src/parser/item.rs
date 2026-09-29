@@ -5,7 +5,7 @@
 use super::Parser;
 use crate::ast::{
     EnumDecl, EnumVariant, FieldDecl, Function, Ident, ImplBlock, Item, ModDecl, Param, Path,
-    Program, SelfMode, StructDecl, UseDecl,
+    Program, SelfMode, StructDecl, UseDecl, VariantField, VariantFields,
 };
 use crate::error::{FixIt, V0001, V0002, V0011, V0012};
 use crate::span::Span;
@@ -109,8 +109,8 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RParen, "`)` after the parameters")?;
-        let return_type = if self.bump_if(&TokenKind::Arrow) {
-            Some(self.parse_type()?)
+        let return_type = if self.peek() == Some(&TokenKind::Arrow) {
+            Some(self.parse_return_type()?)
         } else {
             None
         };
@@ -126,6 +126,42 @@ impl<'a> Parser<'a> {
             body,
             span,
         })
+    }
+
+    /// `-> T` at the `->`. A Rust-style `-> &T` or `-> &mut T`, with or
+    /// without a lifetime, is `V0011` with a fix-it writing `-> T`, and
+    /// `-> string` for `-> &str` (M4 spec 5): a borrowed return is worked
+    /// out, never written. Parsing goes on with `T` as the return type.
+    fn parse_return_type(&mut self) -> Result<crate::ast::TypeExpr, ()> {
+        let arrow = self.bump().expect("caller confirmed `->`");
+        if !self.bump_if(&TokenKind::Amp) {
+            return self.parse_type();
+        }
+        if matches!(self.peek(), Some(TokenKind::Lifetime(_))) {
+            self.bump();
+        }
+        self.bump_if(&TokenKind::Mut);
+        let ty = self.parse_type()?;
+        let written = ty.display_name();
+        let owned = if written == "str" {
+            "string".to_string()
+        } else {
+            written
+        };
+        let span = self.span_from(arrow.span, ty.span);
+        self.push_error_with_fix_it(
+            V0011,
+            span,
+            format!(
+                "a return type has no `&` in Varyk; write `-> {owned}`, and Varyk works out the \
+                 borrow"
+            ),
+            FixIt {
+                span,
+                replacement: format!("-> {owned}"),
+            },
+        );
+        Ok(ty)
     }
 
     /// Reads an optional `self` receiver right after a method's `(`, in one
@@ -399,9 +435,7 @@ impl<'a> Parser<'a> {
     fn parse_use(&mut self, start_span: Span) -> Result<UseDecl, ()> {
         self.bump(); // `use`
         let path = self.parse_use_path()?;
-        let alias = if matches!(self.peek(), Some(TokenKind::ReservedKeyword(word)) if word == "as")
-        {
-            self.bump(); // `as`
+        let alias = if self.bump_if(&TokenKind::As) {
             Some(self.expect_name_identifier("a name after `as`")?)
         } else {
             None
@@ -494,42 +528,84 @@ impl<'a> Parser<'a> {
     }
 
     /// A unit variant (`Point`), a tuple variant (`Circle(f64, f64)`), or a
-    /// named-field variant (`Circle { x: f64 }`), the last of which is
-    /// `V0001` naming milestone 4: it is reported and its field group is
-    /// discarded, still yielding a variant with no fields, so the enum
-    /// keeps parsing.
+    /// variant with named fields (`Click { x: i32, y: i32 }`, M4 spec 2.5).
     fn parse_enum_variant(&mut self) -> Result<EnumVariant, ()> {
         let name = self.expect_name_identifier("a variant name")?;
-        let mut span = name.span;
-        let mut fields = Vec::new();
-
-        if self.peek() == Some(&TokenKind::LParen) {
-            self.bump();
-            if self.peek() != Some(&TokenKind::RParen) {
-                loop {
-                    fields.push(self.parse_type()?);
-                    if self.bump_if(&TokenKind::Comma) {
-                        if self.peek() == Some(&TokenKind::RParen) {
-                            break;
+        let (fields, span) = match self.peek() {
+            Some(TokenKind::LParen) => {
+                self.bump();
+                let mut types = Vec::new();
+                if self.peek() != Some(&TokenKind::RParen) {
+                    loop {
+                        types.push(self.parse_type()?);
+                        if self.bump_if(&TokenKind::Comma) {
+                            if self.peek() == Some(&TokenKind::RParen) {
+                                break;
+                            }
+                            continue;
                         }
-                        continue;
+                        break;
                     }
-                    break;
                 }
+                let rparen = self.expect(TokenKind::RParen, "`)` after the variant's fields")?;
+                (
+                    VariantFields::Tuple(types),
+                    self.span_from(name.span, rparen.span),
+                )
             }
-            let rparen = self.expect(TokenKind::RParen, "`)` after the variant's fields")?;
-            span = self.span_from(name.span, rparen.span);
-        } else if self.peek() == Some(&TokenKind::LBrace) {
-            let group_span = self.skip_brace_group();
-            span = self.span_from(name.span, group_span);
-            self.push_error(
+            Some(TokenKind::LBrace) => {
+                self.bump();
+                let mut fields = Vec::new();
+                if self.peek() != Some(&TokenKind::RBrace) {
+                    loop {
+                        fields.push(self.parse_variant_field()?);
+                        if self.bump_if(&TokenKind::Comma) {
+                            if self.peek() == Some(&TokenKind::RBrace) {
+                                break;
+                            }
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                let rbrace = self.expect(TokenKind::RBrace, "`}` after the variant's fields")?;
+                (
+                    VariantFields::Named(fields),
+                    self.span_from(name.span, rbrace.span),
+                )
+            }
+            _ => (VariantFields::Unit, name.span),
+        };
+        Ok(EnumVariant { name, fields, span })
+    }
+
+    /// A named field of a variant: `name: T`. `pub` (or `pub(...)`) before
+    /// it is `V0001` with a fix-it removing it, since a variant's fields
+    /// are as visible as the enum; parsing goes on without it.
+    fn parse_variant_field(&mut self) -> Result<VariantField, ()> {
+        if self.peek() == Some(&TokenKind::Pub) {
+            let pub_span = self.current_span();
+            self.bump();
+            if self.peek() == Some(&TokenKind::LParen) {
+                self.skip_paren_group();
+            }
+            let next_start = self.current_span().start;
+            let span = Span::new(pub_span.file, pub_span.start, next_start);
+            self.push_error_with_fix_it(
                 V0001,
                 span,
-                "enum variants with named fields are not supported until milestone 4; use a tuple variant instead",
+                "a variant's fields take no `pub` in Varyk; they are as visible as the enum",
+                FixIt {
+                    span,
+                    replacement: String::new(),
+                },
             );
         }
-
-        Ok(EnumVariant { name, fields, span })
+        let name = self.expect_name_identifier("a field name")?;
+        self.expect(TokenKind::Colon, "`:` after the field name")?;
+        let ty = self.parse_type()?;
+        let span = self.span_from(name.span, ty.span);
+        Ok(VariantField { name, ty, span })
     }
 
     /// Consumes a `{...}` group whose opening `{` is already confirmed
@@ -1016,12 +1092,17 @@ mod tests {
         assert!(!e.is_pub);
         assert_eq!(e.variants.len(), 3);
         assert_eq!(e.variants[0].name.name, "Circle");
-        assert_eq!(e.variants[0].fields.len(), 1);
-        assert_eq!(e.variants[0].fields[0].name.name, "f64");
+        match &e.variants[0].fields {
+            VariantFields::Tuple(types) => {
+                assert_eq!(types.len(), 1);
+                assert_eq!(types[0].name.name, "f64");
+            }
+            other => panic!("expected a tuple variant, got {other:?}"),
+        }
         assert_eq!(e.variants[1].name.name, "Rect");
-        assert_eq!(e.variants[1].fields.len(), 2);
+        assert!(matches!(&e.variants[1].fields, VariantFields::Tuple(types) if types.len() == 2));
         assert_eq!(e.variants[2].name.name, "Point");
-        assert!(e.variants[2].fields.is_empty());
+        assert_eq!(e.variants[2].fields, VariantFields::Unit);
     }
 
     #[test]
@@ -1041,18 +1122,92 @@ mod tests {
     }
 
     #[test]
-    fn named_field_variant_is_v0001_naming_milestone_4() {
-        let (program, errors) = parse_program("enum Shape {\n    Circle { radius: f64 },\n}");
-        assert!(!program.items.is_empty(), "V0001 must not stop parsing");
-        let v0001 = errors
-            .iter()
-            .find(|e| e.code == V0001)
-            .expect("expected a V0001");
-        assert!(v0001.message.contains("milestone 4"), "{}", v0001.message);
+    fn named_field_variant() {
+        let src = "Click { x: i32, y: i32 }";
+        let program = parse_program_ok(&format!("enum Event {{\n    {src},\n    Quit,\n}}"));
         let e = only_enum(&program);
-        assert_eq!(e.variants.len(), 1);
-        assert_eq!(e.variants[0].name.name, "Circle");
-        assert!(e.variants[0].fields.is_empty());
+        assert_eq!(e.variants.len(), 2);
+        let click = &e.variants[0];
+        assert_eq!(click.name.name, "Click");
+        assert_eq!(click.span.end - click.span.start, src.len() as u32);
+        let VariantFields::Named(fields) = &click.fields else {
+            panic!("expected named fields, got {:?}", click.fields);
+        };
+        let names: Vec<(&str, &str)> = fields
+            .iter()
+            .map(|f| (f.name.name.as_str(), f.ty.name.name.as_str()))
+            .collect();
+        assert_eq!(names, vec![("x", "i32"), ("y", "i32")]);
+        assert_eq!(
+            fields[0].span.end - fields[0].span.start,
+            "x: i32".len() as u32
+        );
+        assert_eq!(e.variants[1].fields, VariantFields::Unit);
+    }
+
+    #[test]
+    fn pub_on_a_variant_field_is_v0001_with_a_fix_it() {
+        let (program, errors) = parse_program("enum Event {\n    Click { pub x: i32 },\n}");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, V0001);
+        assert_eq!(
+            errors[0].message,
+            "a variant's fields take no `pub` in Varyk; they are as visible as the enum"
+        );
+        let fix_it = errors[0].fix_it.as_ref().expect("a fix-it");
+        assert_eq!(fix_it.replacement, "");
+        assert_eq!((fix_it.span.start, fix_it.span.end), (25, 29));
+        let e = only_enum(&program);
+        assert!(matches!(&e.variants[0].fields, VariantFields::Named(fields) if fields.len() == 1));
+    }
+
+    #[test]
+    fn reference_return_type_is_v0011_with_a_fix_it() {
+        let cases = [
+            (
+                "fn f(s: string) -> &str { s }",
+                "-> &str",
+                "-> string",
+                "str",
+            ),
+            (
+                "fn f(u: User) -> &User { u }",
+                "-> &User",
+                "-> User",
+                "User",
+            ),
+            (
+                "fn f(mut u: User) -> &mut User { u }",
+                "-> &mut User",
+                "-> User",
+                "User",
+            ),
+        ];
+        for (src, written, replacement, parsed) in cases {
+            let (program, errors) = parse_program(src);
+            assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+            assert_eq!(errors[0].code, V0011);
+            assert_eq!(
+                errors[0].message,
+                format!(
+                    "a return type has no `&` in Varyk; write `{replacement}`, and Varyk works \
+                     out the borrow"
+                )
+            );
+            let start = src.find(written).expect("the written return type") as u32;
+            let fix_it = errors[0].fix_it.as_ref().expect("a fix-it");
+            assert_eq!(fix_it.replacement, replacement);
+            assert_eq!(
+                (fix_it.span.start, fix_it.span.end),
+                (start, start + written.len() as u32)
+            );
+            assert_eq!(errors[0].span, fix_it.span);
+            let f = only_function(&program);
+            assert_eq!(
+                f.return_type.as_ref().map(|t| t.name.name.as_str()),
+                Some(parsed)
+            );
+        }
     }
 
     // --- Impl blocks and methods (spec 2.5) ---------------------------------

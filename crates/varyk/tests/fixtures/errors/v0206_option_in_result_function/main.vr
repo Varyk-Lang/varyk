@@ -1,0 +1,18 @@
+fn find(id: i32) -> Option<i32> {
+    if id == 1 {
+        return Some(10);
+    }
+    None
+}
+
+fn load(id: i32) -> Result<i32, string> {
+    let value = find(id)?;
+    Ok(value)
+}
+
+fn main() {
+    match load(1) {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{}", e),
+    }
+}

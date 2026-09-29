@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0303]: `shout` may change `greeting`, but inside a closure a name from outside can only be read
+ --> crates/varyk/tests/fixtures/errors/v0303_captured_name_to_mut_parameter/main.vr:9:15
+  |
+6 |     let mut greeting = "hello".to_uppercase();
+  |             -------- `greeting` is declared outside the closure
+...
+9 |         shout(greeting);
+  |               ^^^^^^^^ `shout` may change `greeting`, but inside a closure a name from outside can only be read
+  |
+  = note: change it after the call the closure is given to, or make a new value inside the closure instead
+  = note: in Rust terms, the closure borrows `greeting` as a shared reference

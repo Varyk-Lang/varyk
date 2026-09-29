@@ -1,0 +1,5 @@
+fn main() {
+    let age: Option<i32> = Some(17);
+    let adult = age.map(|a| None);
+    println!("{}", adult.is_some());
+}

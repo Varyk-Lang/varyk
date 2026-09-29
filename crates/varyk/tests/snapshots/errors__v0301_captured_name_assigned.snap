@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0301]: inside a closure a name from outside can only be read, so `seen` cannot be changed here
+ --> crates/varyk/tests/fixtures/errors/v0301_captured_name_assigned/main.vr:5:9
+  |
+2 |     let mut seen = 0;
+  |             ---- `seen` is declared outside the closure
+...
+5 |         seen = n;
+  |         ^^^^ inside a closure a name from outside can only be read, so `seen` cannot be changed here
+  |
+  = note: change it after the call the closure is given to, or make a new value inside the closure instead
+  = note: in Rust terms, the closure borrows `seen` as a shared reference

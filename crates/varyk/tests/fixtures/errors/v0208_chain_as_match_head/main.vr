@@ -1,0 +1,6 @@
+fn main() {
+    let names = vec!["ada", "bob"];
+    match names.iter() {
+        _ => println!("names"),
+    }
+}

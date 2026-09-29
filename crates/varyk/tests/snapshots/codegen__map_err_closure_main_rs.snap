@@ -1,0 +1,32 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn parse_age(text: &str) -> Result<i32, String> {
+    if text == "17" {
+        Ok(17)
+    } else {
+        Err("not a number".to_string())
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn age_of(text: &str, field: &str) -> Result<i32, String> {
+    parse_age(text).map_err(|e| ::std::format!("{}: {}", field, e))
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn width(text: &str) -> usize {
+    text.len()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let label = "age".to_uppercase();
+    let checked: Result<i32, String> = parse_age("x").map_err(|e| {
+        let shown = &label;
+        ::std::format!("{} {} {}", shown, e, width(&label))
+    });
+    ::std::println!("{}", age_of("17", &label).is_ok());
+}

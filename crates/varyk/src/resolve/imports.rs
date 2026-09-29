@@ -16,7 +16,7 @@ use crate::types::Ty;
 use super::signatures::Mapper;
 use super::{
     Callee, DropCause, EnumDef, EnumId, FieldDef, ImportedFnId, ImportedSig, Module, ModuleId,
-    ModuleKind, StructDef, StructId, Symbols, Unusable, UserType,
+    ModuleKind, StructDef, StructId, Symbols, Unusable, UserType, VariantDef, VariantFieldsDef,
 };
 
 /// Marks the enums an `impl Drop` in any `.rs` file is for (see
@@ -155,6 +155,7 @@ pub(super) fn register(
                 module: *module,
                 is_pub: true,
                 imported: true,
+                derives: Some(s.derives),
                 fields: Vec::new(),
                 span: Span::new(file, s.span.start as u32, s.span.end as u32),
             });
@@ -178,6 +179,7 @@ pub(super) fn register(
                 module: *module,
                 is_pub: true,
                 imported: true,
+                derives: Some(e.derives),
                 drops: None,
                 opaque: e.opaque.clone(),
                 variants: Vec::new(),
@@ -299,7 +301,10 @@ pub(super) fn register(
                         }
                     })
                     .collect();
-                (v.name, payload)
+                VariantDef {
+                    name: v.name,
+                    fields: VariantFieldsDef::Tuple(payload),
+                }
             })
             .collect();
         symbols.enums[id.0 as usize].variants = variants;

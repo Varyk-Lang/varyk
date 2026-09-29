@@ -1,0 +1,4 @@
+fn main() {
+    let words = vec!["apple", "fig"];
+    let short = words.iter().find(|w| w.len() < 4);
+}

@@ -3,6 +3,7 @@ source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"struct Point {\\n    x: i32,\\n}\\n\\nfn main() {\\n    let p = Point { x: 1 };\\n    let x = { p }.x;\\n    println!(\\\"{} {}\\\", x, p.x);\\n}\\n\")"
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct Point {
     x: i32,
 }

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: the value matched on cannot be a part of a value that is not stored anywhere; store that value with `let` first, then match on its part
+  --> crates/varyk/tests/fixtures/errors/v0001_field_of_call_as_head/main.vr:22:11
+   |
+22 |     match user.info().kind {
+   |           ^^^^^^^^^^^^^^^^ the value matched on cannot be a part of a value that is not stored anywhere; store that value with `let` first, then match on its part

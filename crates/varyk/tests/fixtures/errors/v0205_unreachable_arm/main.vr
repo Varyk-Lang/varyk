@@ -1,0 +1,12 @@
+fn size(n: i32) -> string {
+    match n {
+        1..=5 => "small",
+        3..=8 => "medium",
+        4 => "four",
+        _ => "large",
+    }
+}
+
+fn main() {
+    println!("{}", size(4));
+}

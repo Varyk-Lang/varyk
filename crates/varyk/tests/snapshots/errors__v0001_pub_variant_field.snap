@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: a variant's fields take no `pub` in Varyk; they are as visible as the enum
+ --> crates/varyk/tests/fixtures/errors/v0001_pub_variant_field/main.vr:2:13
+  |
+2 |     Click { pub x: i32, y: i32 },
+  |             ^^^^ a variant's fields take no `pub` in Varyk; they are as visible as the enum
+  |
+help: remove `pub `

@@ -12,9 +12,15 @@ Recorded, deliberately unanswered.
 - What syntax should explicit ownership transfer use for Varyk-declared
   functions? `move` is a candidate. The async runtime decision depends on it.
 - How should owned versus borrowed return values be expressed and inferred?
+  Answered in milestone 4: inferred from the body, never written; every
+  return is new, or every return is part of one read-only parameter.
 - How should an explicit string copy be spelled, once method calls exist?
   Answered in milestone 2: `s.clone()`.
 - How should lifetime inference work across function boundaries?
+  Answered in milestone 4: the result of a call with a borrowed return is
+  another name for the argument in the rooted position, under the alias
+  rule; one written lifetime in the generated Rust where elision would not
+  pick that parameter.
 - How should Rust traits, generics, and attributes map into Varyk while
   keeping Go-like simplicity?
 - Should serde derivation be automatic for every struct, or declared with
@@ -47,3 +53,22 @@ Recorded, deliberately unanswered.
   structs; and expected-type inference for a query result. Each is settled
   by the milestone-5 spec, and the site copies the real example once it
   exists.
+- Should closures ever be values, with function types in the surface?
+  Milestone 4 says no until the generics and traits question is answered,
+  since no Varyk function could take one; closures exist only as arguments
+  of built-in calls.
+- Should serde derivation follow milestone 4's rule for `Clone` and
+  `PartialEq`, automatic wherever the fields allow, or be declared? The
+  serde question above, with milestone 4 as an input.
+- Should `parse` return a `Result` once milestone 5 has a shared error
+  type, so `?` works on it directly? Milestone 4 returns an `Option`.
+- Should an `Option` of a borrowed value ever be a first-class value, so
+  `get` and `find` could be stored and passed? Milestone 4 opens it only in
+  the head of a `match`, `if let`, or `while let`, and copies a number or
+  `bool` payload out instead.
+- Does Varyk need a character type? `chars()` waits on it.
+- Should the standard table of built-in calls move out of the compiler
+  into a declaration file in Varyk's own signature vocabulary, so rows are
+  added without a compiler change and a facade author can declare shapes
+  the importer cannot infer? The milestone-4 spec (section 2.7) says why the
+  table exists; where it lives is a later choice.

@@ -1,0 +1,26 @@
+enum Kind {
+    Admin,
+    Guest,
+}
+
+struct Info {
+    kind: Kind,
+}
+
+struct User {
+    info: Info,
+}
+
+impl User {
+    fn info(self) -> Info {
+        self.info
+    }
+}
+
+fn main() {
+    let user = User { info: Info { kind: Kind::Guest } };
+    match user.info().kind {
+        Kind::Admin => println!("admin"),
+        Kind::Guest => println!("guest"),
+    }
+}

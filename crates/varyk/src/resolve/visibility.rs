@@ -136,7 +136,7 @@ impl Symbols {
             Ty::Option(inner) | Ty::Vec(inner) => {
                 return self.private_in_public(inner, span, item, item_reach);
             }
-            Ty::Result(ok, err) => {
+            Ty::Result(ok, err) | Ty::HashMap(ok, err) => {
                 return self
                     .private_in_public(ok, span, item, item_reach)
                     .or_else(|| self.private_in_public(err, span, item, item_reach));
@@ -200,7 +200,7 @@ impl Symbols {
     pub(super) fn hidden_type(&self, ty: &Ty, item_reach: ModuleId) -> Option<(String, ModuleId)> {
         let (name, module, is_pub) = match ty {
             Ty::Option(inner) | Ty::Vec(inner) => return self.hidden_type(inner, item_reach),
-            Ty::Result(ok, err) => {
+            Ty::Result(ok, err) | Ty::HashMap(ok, err) => {
                 return self
                     .hidden_type(ok, item_reach)
                     .or_else(|| self.hidden_type(err, item_reach));

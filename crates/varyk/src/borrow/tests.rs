@@ -4,8 +4,10 @@ use varyk_syntax::{FileId, SourceFile, Span};
 
 use super::analyze;
 use crate::diagnostics::{Diagnostic, codes};
-use crate::hir::{HirFunction, HirProgram, LocalId, Origin, PlaceInfo, StringRepr};
-use crate::resolve::resolve;
+use crate::hir::{
+    HirExprKind, HirFunction, HirProgram, LocalId, LocalKind, Origin, PlaceInfo, StringRepr,
+};
+use crate::resolve::{StructId, resolve};
 use crate::types::typecheck;
 
 // --- Helpers ----------------------------------------------------------------
@@ -366,40 +368,60 @@ fn assert_v0304(d: &Diagnostic, span: Span, names: &str) {
     assert!(has_note(d, "in Rust terms"), "{d:#?}");
 }
 
-#[test]
-fn returning_a_parameter_is_v0304_naming_it() {
-    let (d, sources) = one_error(&with_p("fn f(user: P) -> P {\n    user\n}\n"));
-    assert_v0304(&d, part_of(&sources, "    user\n}", "user"), "`user`");
-
-    let (d, sources) = one_error(&with_p("fn f(user: P) -> P {\n    return user;\n}\n"));
-    assert_v0304(&d, part_of(&sources, "return user", "user"), "`user`");
-
-    let (d, sources) = one_error("fn f(s: string) -> string {\n    s\n}\nfn main() {}\n");
-    assert_v0304(&d, part_of(&sources, "    s\n}", "s"), "`s`");
+/// The name of the parameter the borrowed return of `function_name` is
+/// rooted at (M4 spec 3.1).
+fn ret_root(program: &HirProgram, function_name: &str) -> Option<String> {
+    let f = function(program, function_name);
+    f.ret_root
+        .map(|root| f.locals[root.0 as usize].name.clone())
 }
 
 #[test]
-fn returning_a_field_is_v0304_naming_the_struct() {
-    let (d, sources) = one_error(&with_p("fn f(user: P) -> string {\n    user.name\n}\n"));
-    assert_v0304(&d, span_of(&sources, "user.name"), "`P`");
+fn returning_a_parameter_is_a_borrowed_return_rooted_at_it() {
+    let program = ok(&with_p("fn f(user: P) -> P {\n    user\n}\n"));
+    assert_eq!(ret_root(&program, "f").as_deref(), Some("user"));
+
+    let program = ok(&with_p("fn f(user: P) -> P {\n    return user;\n}\n"));
+    assert_eq!(ret_root(&program, "f").as_deref(), Some("user"));
+
+    let program = ok("fn f(s: string) -> string {\n    s\n}\nfn main() {}\n");
+    assert_eq!(ret_root(&program, "f").as_deref(), Some("s"));
+}
+
+#[test]
+fn returning_a_field_is_a_borrowed_return_and_of_a_local_v0304() {
+    let program = ok(&with_p("fn f(user: P) -> string {\n    user.name\n}\n"));
+    assert_eq!(ret_root(&program, "f").as_deref(), Some("user"));
 
     let (d, sources) = one_error(&format!(
         "{P}fn f() -> string {{\n    let local = P {{ x: 1, name: \"a\" }};\n    local.name\n}}\n{MAIN}"
     ));
-    assert_v0304(&d, span_of(&sources, "local.name"), "`P`");
+    assert_v0304(&d, span_of(&sources, "local.name"), "`local`");
+    assert!(
+        d.message.contains("ends when this function returns"),
+        "{d:#?}"
+    );
 }
 
 #[test]
 fn a_binding_of_a_borrowed_place_keeps_its_origin() {
-    let (d, sources) = one_error(&with_p(
+    let program = ok(&with_p(
         "fn f(user: P) -> string {\n    let n = user.name;\n    n\n}\n",
     ));
-    assert_v0304(&d, part_of(&sources, "    n\n}", "n"), "`P`");
+    assert_eq!(ret_root(&program, "f").as_deref(), Some("user"));
+    assert_eq!(
+        place(function(&program, "f"), "n").origin,
+        Some(Origin::Struct(StructId(0)))
+    );
 
-    let (d, sources) = one_error(&with_p(
+    let program = ok(&with_p(
         "fn f(user: P) -> P {\n    let u = user;\n    u\n}\n",
     ));
-    assert_v0304(&d, part_of(&sources, "    u\n}", "u"), "`user`");
+    assert_eq!(ret_root(&program, "f").as_deref(), Some("user"));
+    assert_eq!(
+        place(function(&program, "f"), "u").origin,
+        Some(Origin::Param(LocalId(0)))
+    );
 }
 
 #[test]
@@ -730,8 +752,15 @@ fn representation_of_each_string_table_row() {
 
 #[test]
 fn assigning_a_borrowed_place_to_an_owned_let_is_v0304() {
-    let (d, sources) = one_error(&with_strs(
+    // Returned, the `let` is part of `p` (M4 spec 3.1): a `&str`.
+    let program = ok(&with_strs(
         "fn f(p: P) -> string {\n    let mut s = \"x\";\n    s = p.name;\n    s\n}\n",
+    ));
+    assert_eq!(ret_root(&program, "f").as_deref(), Some("p"));
+    assert_eq!(repr(function(&program, "f"), "s"), Some(StringRepr::Str));
+    // Given new text too, it must own its text.
+    let (d, sources) = one_error(&with_strs(
+        "fn f(p: P) -> string {\n    let mut s = \"x\";\n    s = p.name;\n    s = mk();\n    s\n}\n",
     ));
     assert_v0304(&d, span_of(&sources, "p.name"), "`P`");
     assert!(d.message.contains("`s`"), "{d:#?}");
@@ -789,7 +818,9 @@ fn a_mixed_let_already_rejected_by_its_use_gets_one_code() {
     let (d, sources) = one_error(&with_strs(
         "fn f(c: bool, p: P) -> string {\n    let s = if c {\n        p.name\n    } else {\n        mk()\n    };\n    s\n}\n",
     ));
-    assert_v0304(&d, part_of(&sources, "    s\n}", "s"), "`P`");
+    // Returned, `s` is part of `p`; the `let` itself is the one mistake.
+    assert_v0304(&d, span_of(&sources, "p.name"), "`P`");
+    assert!(d.message.contains("cannot be kept in `s`"), "{d:#?}");
 }
 
 // --- V0304: text that is sometimes new and sometimes borrowed -------------
@@ -2069,7 +2100,9 @@ fn using_the_receiver_inside_a_changing_call_is_v0306() {
 
 #[test]
 fn a_v0304_on_a_string_value_carries_the_clone_fix_it() {
-    let (d, sources) = one_error(&with_p("fn f(user: P) -> string {\n    user.name\n}\n"));
+    let (d, sources) = one_error(&with_p(
+        "fn f(user: P) -> Vec<string> {\n    vec![user.name]\n}\n",
+    ));
     assert_eq!(d.code, codes::V0304, "{d:#?}");
     let end = span_of(&sources, "user.name").end;
     let fix = d.fix_it.as_ref().expect("a `.clone()` fix-it");
@@ -2077,7 +2110,7 @@ fn a_v0304_on_a_string_value_carries_the_clone_fix_it() {
     assert_eq!(fix.replacement, ".clone()");
 
     // Not for a struct value, which has no `clone`.
-    let (d, _) = one_error(&with_p("fn f(user: P) -> P {\n    user\n}\n"));
+    let (d, _) = one_error(&with_p("fn f(user: P) -> Vec<P> {\n    vec![user]\n}\n"));
     assert_eq!(d.code, codes::V0304, "{d:#?}");
     assert!(d.fix_it.is_none(), "{d:#?}");
 }
@@ -2875,4 +2908,1303 @@ fn a_type_name_starting_with_a_vowel_takes_an() {
     assert_eq!(super::article("User"), "a");
     assert_eq!(super::article("Unit"), "a");
     assert_eq!(super::article("Item"), "an");
+}
+
+// --- Milestone 4: nested patterns, `if let`, `while let`, string heads -----
+
+const SHAPES: &str = "enum Shape {\n    Circle(f64),\n    Named(string),\n}\nfn mko() -> Option<Shape> {\n    None\n}\n";
+
+fn with_shapes(body: &str) -> String {
+    format!("{P}{STRS}{SHAPES}{body}{MAIN}")
+}
+
+#[test]
+fn a_move_inside_a_while_let_body_is_v0305_the_next_time_round() {
+    let (d, sources) = one_error(&with_shapes(
+        "fn f() {\n    let mut v: Vec<i32> = vec![1];\n    let a = P { x: 1, name: \"a\" };\n    while let Some(n) = v.pop() {\n        let b = a;\n    }\n}\n",
+    ));
+    let at = part_of(&sources, "let b = a", "a");
+    assert_v0305(&d, at, at, "a");
+    assert!(
+        has_note(&d, "it was given away the previous time through the loop"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn nested_bindings_on_a_place_are_aliases_and_on_a_temporary_own_their_values() {
+    let program = ok(&with_shapes(
+        "fn f(o: Option<Shape>) {\n    match o {\n        Some(Shape::Named(n)) => read(n),\n        Some(Shape::Circle(r)) => {}\n        None => {}\n    }\n    if let Some(Shape::Named(t)) = mko() {\n        read(t);\n    }\n    let mut q: Vec<i32> = vec![];\n    while let Some(k) = q.pop() {\n    }\n}\n",
+    ));
+    let f = function(&program, "f");
+    let n = place(f, "n");
+    assert!(n.borrowed && !n.mutable, "{n:?}");
+    assert_eq!(n.origin, Some(Origin::Param(LocalId(0))));
+    assert!(!place(f, "r").borrowed);
+    assert!(!place(f, "t").borrowed);
+    assert_eq!(repr(f, "t"), Some(StringRepr::Owned));
+    assert!(!place(f, "k").borrowed);
+}
+
+#[test]
+fn a_string_binding_of_a_string_head_is_a_str_whatever_the_head() {
+    let program = ok(&with_shapes(
+        "fn f(s: string) {\n    let owned = mk();\n    match owned {\n        \"a\" => {}\n        other => read(other),\n    }\n    match mk() {\n        whole => read(whole),\n    }\n    if let \"b\" = s {\n    }\n}\n",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(repr(f, "other"), Some(StringRepr::Str));
+    assert_eq!(repr(f, "whole"), Some(StringRepr::Str));
+    assert!(place(f, "whole").borrowed);
+}
+
+#[test]
+fn keeping_a_string_binding_of_a_temporary_string_head_is_v0304() {
+    // Returned, from a `match` with a literal arm.
+    let (d, sources) = one_error(&with_shapes(
+        "fn g() -> string {\n    match mk() {\n        \"a\" => \"x\",\n        other => other,\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "=> other", "other"));
+    // Stored, from a `match` with no literal arm.
+    let (d, sources) = one_error(&with_shapes(
+        "fn g() {\n    let mut v: Vec<string> = vec![];\n    match mk() {\n        other => v.push(other),\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "push(other)", "other"));
+    // A copy can be kept.
+    ok(&with_shapes(
+        "fn g() {\n    let mut v: Vec<string> = vec![];\n    match mk() {\n        other => v.push(other.clone()),\n    }\n}\n",
+    ));
+}
+
+// --- Table rows (M4 spec 2.7, 3.5) --------------------------------------------
+
+#[test]
+fn read_arguments_of_the_table_take_a_parameter_or_alias_and_leave_a_let_borrowed() {
+    let program = ok(&with_p(
+        "fn f(p: P, s: string, sep: string, w: Vec<string>, m: HashMap<string, i32>) {
+    let alias = p.name;
+    let lit = \"x\";
+    let a = s.contains(s);
+    let b = s.contains(alias);
+    let c = s.replace(sep, alias);
+    let d = w.join(sep);
+    let e = m.contains_key(s);
+    let g = m.contains_key(alias);
+    let h = s.starts_with(lit);
+    let i = w.contains(alias);
+    let j = s.contains(lit);
+}
+",
+    ));
+    let f = function(&program, "f");
+    assert!(place(f, "alias").borrowed);
+    assert_eq!(repr(f, "lit"), Some(StringRepr::Str));
+}
+
+#[test]
+fn push_str_makes_its_receivers_let_owned() {
+    let program = ok(&with_p(
+        "fn f(p: P) {
+    let mut s = \"a\";
+    s.push_str(p.name);
+    let mut t = \"b\";
+    t.push_str(\"c\");
+}
+",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(repr(f, "s"), Some(StringRepr::Owned));
+    assert_eq!(repr(f, "t"), Some(StringRepr::Owned));
+}
+
+#[test]
+fn text_made_by_the_table_rows_is_an_owned_let() {
+    let program = ok(&with_p(
+        "fn f(s: string, mut w: Vec<string>) {
+    let a = s.to_uppercase();
+    let b = s.replace(\"a\", \"b\");
+    let c = w.join(\",\");
+    let d = w.remove(0);
+}
+",
+    ));
+    let f = function(&program, "f");
+    for name in ["a", "b", "c", "d"] {
+        assert_eq!(repr(f, name), Some(StringRepr::Owned), "{name}");
+    }
+}
+
+#[test]
+fn an_owned_argument_of_the_table_is_an_owned_slot() {
+    for body in [
+        "fn f(s: string, mut w: Vec<string>) {\n    w.insert(0, s);\n}\n",
+        "fn f(s: string, mut m: HashMap<string, i32>) {\n    m.insert(s, 1);\n}\n",
+    ] {
+        let (d, _) = one_error(&with_p(body));
+        assert_eq!(d.code, codes::V0304, "{body}: {d:#?}");
+    }
+}
+
+#[test]
+fn a_hash_map_moves_like_a_vec() {
+    let (d, _) = one_error(&with_p(
+        "fn f() {\n    let m: HashMap<i32, i32> = HashMap::new();\n    let m2 = m;\n    let n = m.len();\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+}
+
+// --- Taking rows (M4 spec 3.4) --------------------------------------------------
+
+#[test]
+fn a_taking_row_uses_up_a_temporary() {
+    ok(&with_p(
+        "fn mk_o() -> Option<string> {\n    None\n}\nfn mk_r() -> Result<string, string> {\n    Ok(\"a\")\n}\nfn f() -> Result<string, string> {\n    let a = mk_o().unwrap_or(\"x\");\n    let b = mk_r().ok();\n    let c = mk_r().unwrap_or(\"y\");\n    let d = mk_o().ok_or(\"none\")?;\n    Ok(d)\n}\n",
+    ));
+}
+
+#[test]
+fn a_taking_row_gives_away_an_owned_local() {
+    for (body, reused) in [
+        (
+            "let o: Option<string> = None;\n    let a = o.unwrap_or(\"x\");\n    let b = o.unwrap_or(\"y\");",
+            "o.unwrap_or(\"y\")",
+        ),
+        (
+            "let r: Result<string, string> = Ok(\"a\");\n    let a = r.ok();\n    let b = r.ok();",
+            "r.ok();\n}",
+        ),
+        (
+            "let o: Option<string> = None;\n    let a = o.ok_or(\"none\");\n    let b = o.is_some();",
+            "o.is_some()",
+        ),
+    ] {
+        let (d, sources) = one_error(&with_p(&format!("fn f() {{\n    {body}\n}}\n")));
+        assert_eq!(d.code, codes::V0305, "{body}: {d:#?}");
+        assert_eq!(
+            d.span,
+            part_of(&sources, reused, reused.split('.').next().unwrap_or("")),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_stored_receiver_copy_in_rust_is_copied_out() {
+    ok(&with_p(
+        "struct H {\n    o: Option<i32>,\n    r: Result<i32, bool>,\n}\nfn f(o: Option<i32>, h: H, v: Vec<Option<i32>>) -> i32 {\n    let a = o.unwrap_or(0);\n    let b = h.o.unwrap_or(1);\n    let c = h.r.ok();\n    let d = h.r.unwrap_or(2);\n    let e = v[0].ok_or(false);\n    let g = o.unwrap_or(3);\n    a + b + d + g\n}\n",
+    ));
+}
+
+#[test]
+fn a_stored_receiver_with_contents_not_copy_is_v0304_match_on_it_instead() {
+    for (params, call) in [
+        ("r: Result<i32, string>", "r.unwrap_or(0)"),
+        ("o: Option<string>", "o.unwrap_or(\"x\")"),
+        ("p: P, v: Vec<Option<P>>", "v[0].ok_or(1)"),
+        ("r: Result<string, bool>", "r.ok()"),
+    ] {
+        let (d, sources) = one_error(&with_p(&format!(
+            "fn f({params}) {{\n    let x = {call};\n}}\n"
+        )));
+        assert_eq!(d.code, codes::V0304, "{call}: {d:#?}");
+        let receiver = &call[..call.find('.').unwrap_or(call.len())];
+        assert_eq!(d.span, part_of(&sources, call, receiver), "{call}");
+        assert!(d.message.contains("used up by"), "{d:#?}");
+        assert!(
+            d.notes
+                .iter()
+                .any(|note| note.contains("match on it instead")),
+            "{d:#?}"
+        );
+    }
+}
+
+// --- Looked-into rows (M4 spec 2.8) -----------------------------------------------
+
+#[test]
+fn a_looked_into_get_head_binds_an_alias_of_the_vec() {
+    let program = ok(&with_p(
+        "fn f(lines: Vec<string>, ps: Vec<P>) {
+    let mut v = vec![\"a\"];
+    match v.get(0) {
+        Some(first) => read(first),
+        None => {}
+    }
+    if let Some(second) = lines.get(1) {
+        read(second);
+    }
+    let mut i: usize = 0;
+    while let Some(p) = ps.get(i) {
+        read(p.name);
+        i = i + 1;
+    }
+    v.push(\"b\");
+}
+fn read(s: string) {}
+",
+    ));
+    let f = function(&program, "f");
+    let v = local_id(f, "v");
+    let lines = local_id(f, "lines");
+    let ps = local_id(f, "ps");
+    assert_eq!(
+        place(f, "first"),
+        PlaceInfo {
+            borrowed: true,
+            mutable: false,
+            origin: Some(Origin::Local(v)),
+        }
+    );
+    assert_eq!(place(f, "second").origin, Some(Origin::Param(lines)));
+    assert_eq!(place(f, "p").origin, Some(Origin::Param(ps)));
+    assert!(place(f, "second").borrowed && place(f, "p").borrowed);
+}
+
+#[test]
+fn a_looked_into_get_anywhere_but_a_head_is_v0208() {
+    for (body, at) in [
+        ("let x = v.get(0);", "v.get(0)"),
+        ("take(v.get(0));", "v.get(0)"),
+        ("let b = v.get(0).is_some();", "v.get(0)"),
+        ("let n = m.get(\"k\");", "m.get(\"k\")"),
+    ] {
+        let (d, sources) = one_error(&with_p(&format!(
+            "fn take(o: Option<string>) {{}}\nfn f(v: Vec<string>, m: HashMap<string, P>) {{\n    {body}\n}}\n"
+        )));
+        assert_eq!(d.code, codes::V0208, "{body}: {d:#?}");
+        assert_eq!(d.span, span_of(&sources, at), "{body}");
+        assert!(
+            d.message.contains("`match` or `if let`") || d.message.contains("or `match`"),
+            "{d:#?}"
+        );
+    }
+    for (ret, body) in [
+        ("Option<string>", "return v.get(0);"),
+        ("Option<string>", "v.get(0)"),
+        ("Option<string>", "let x = v.get(0)?;\n    None"),
+    ] {
+        let (d, _) = one_error(&with_p(&format!(
+            "fn f(v: Vec<string>) -> {ret} {{\n    {body}\n}}\n"
+        )));
+        assert_eq!(d.code, codes::V0208, "{body}: {d:#?}");
+    }
+}
+
+#[test]
+fn a_whole_binding_of_a_looked_into_get_is_v0208() {
+    let (d, _) = one_error(&with_p(
+        "fn f(v: Vec<string>) {\n    match v.get(0) {\n        whole => {}\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0208, "{d:#?}");
+}
+
+#[test]
+fn a_looked_into_binding_used_after_its_vec_changes_is_v0307() {
+    let (d, sources) = one_error(&with_p(
+        "fn read(s: string) {}\nfn f() {\n    let mut v = vec![\"a\"];\n    if let Some(first) = v.get(0) {\n        v.push(\"b\");\n        read(first);\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "v.push", "v"), "{d:#?}");
+}
+
+#[test]
+fn a_looked_into_get_on_a_value_made_right_there_is_v0001() {
+    let (d, sources) = one_error(&with_p(
+        "fn mk() -> Vec<string> {\n    vec![\"a\"]\n}\nfn f() {\n    if let Some(x) = mk().get(0) {}\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0001, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "mk().get", "mk()"), "{d:#?}");
+    assert!(d.message.contains("store it with `let` first"), "{d:#?}");
+}
+
+#[test]
+fn a_get_of_a_copy_payload_is_a_plain_option_whatever_the_receiver() {
+    ok(&with_p(
+        "fn mk() -> Vec<i32> {\n    vec![1]\n}\nfn mk_m() -> HashMap<string, i32> {\n    HashMap::new()\n}\nfn f(v: Vec<i32>, m: HashMap<string, i32>) -> Option<i32> {\n    let a = v.get(0);\n    let b = mk().get(0).unwrap_or(0);\n    let c = mk_m().get(\"k\").is_some();\n    let d = m.get(\"k\")?;\n    let mut w = vec![1];\n    let e = w.get(0);\n    w.push(2);\n    e\n}\n",
+    ));
+}
+
+#[test]
+fn a_get_keyed_by_a_parameter_or_alias_leaves_a_let_borrowed() {
+    let program = ok(&with_p(
+        "fn f(p: P, word: string, counts: HashMap<string, i32>, people: HashMap<string, P>) -> i32 {
+    let alias = p.name;
+    let a = counts.get(word).unwrap_or(0);
+    let b = counts.get(alias).unwrap_or(0);
+    if let Some(found) = people.get(alias) {
+        let n = found.x;
+    }
+    a + b
+}
+",
+    ));
+    let f = function(&program, "f");
+    assert!(place(f, "alias").borrowed);
+    assert!(place(f, "found").borrowed);
+}
+
+// --- Borrowed returns at the call (M4 spec 3.1) ------------------------------
+
+/// A struct with getters that are borrowed returns, and the helpers the
+/// tests below call.
+const GETTERS: &str = "struct Obj {
+    name: string,
+    tags: Vec<string>,
+    status: Status,
+    n: i32,
+}
+enum Status {
+    On(string),
+    Off,
+}
+impl Obj {
+    fn name_ref(self) -> string {
+        self.name
+    }
+    fn display_name(self) -> string {
+        if self.name.is_empty() { self.name } else { self.name }
+    }
+    fn tags(self) -> Vec<string> {
+        self.tags
+    }
+    fn status(self) -> Status {
+        self.status
+    }
+    fn change(mut self) {
+        self.n = self.n + 1;
+    }
+}
+fn mk() -> Obj {
+    Obj { name: \"o\", tags: vec![\"t\"], status: Status::Off, n: 0 }
+}
+fn trimmed(text: string) -> string {
+    text.trim()
+}
+fn read(s: string) {}
+fn show(o: Obj) {}
+fn first(objs: Vec<Obj>) -> Obj {
+    objs[0]
+}
+";
+
+fn with_getters(body: &str) -> String {
+    format!("{GETTERS}{body}{MAIN}")
+}
+
+#[test]
+fn a_let_of_a_borrowed_return_is_an_alias_of_the_argument() {
+    let program = ok(&with_getters(
+        "fn f(p: Obj) {\n    let mut user = mk();\n    let n = user.name_ref();\n    read(n);\n    user.change();\n    read(user.name_ref());\n}\n",
+    ));
+    let f = function(&program, "f");
+    assert!(place(f, "n").borrowed);
+    assert!(!place(f, "n").mutable);
+
+    let (d, sources) = one_error(&with_getters(
+        "fn f() {\n    let mut user = mk();\n    let n = user.name_ref();\n    user.change();\n    read(n);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "user.change", "user"));
+    assert!(
+        d.message.contains("`n` is another name for part of `user`"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_borrowed_return_into_an_owned_slot_is_v0304_with_clone() {
+    let (d, sources) = one_error(&with_getters(
+        "fn f(user: Obj) {\n    let mut v = vec![\"a\"];\n    v.push(user.name_ref());\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "user.name_ref()"));
+    let fix = d.fix_it.as_ref().expect("a `.clone()` fix-it");
+    assert_eq!(fix.replacement, ".clone()");
+}
+
+#[test]
+fn a_rooted_argument_made_right_there_is_v0001_but_a_literal_is_fine() {
+    let (d, sources) = one_error(&with_getters(
+        "fn g() -> string {\n    \"  x \"\n}\nfn f() {\n    read(trimmed(g()));\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0001, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "trimmed(g())", "g()"));
+    assert!(d.message.contains("store it with `let` first"), "{d:#?}");
+    let (d, sources) = one_error(&with_getters("fn f() {\n    read(mk().name_ref());\n}\n"));
+    assert_eq!(d.code, codes::V0001, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "read(mk()", "mk()"));
+    assert!(d.message.contains("this `Obj`"), "{d:#?}");
+
+    ok(&with_getters("fn f() {\n    read(trimmed(\"  x \"));\n}\n"));
+}
+
+#[test]
+fn heads_on_a_borrowed_return_bind_aliases_rooted_at_its_argument() {
+    let program = ok(&with_getters(
+        "fn f(obj: Obj) {\n    match obj.status() {\n        Status::On(s) => read(s),\n        Status::Off => {}\n    }\n    for t in obj.tags() {\n        read(t);\n    }\n    match obj.tags().get(0) {\n        Some(first) => read(first),\n        None => {}\n    }\n}\n",
+    ));
+    let f = function(&program, "f");
+    for name in ["s", "t", "first"] {
+        assert!(place(f, name).borrowed, "{name}");
+        assert_eq!(
+            place(f, name).origin,
+            Some(Origin::Param(LocalId(0))),
+            "{name}"
+        );
+    }
+
+    let (d, sources) = one_error(&with_getters(
+        "fn f() {\n    let mut obj = mk();\n    for t in obj.tags() {\n        obj.change();\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "obj.change", "obj"));
+    let (d, _) = one_error(&with_getters(
+        "fn f() {\n    let mut obj = mk();\n    match obj.status() {\n        Status::On(s) => {\n            obj.change();\n            read(s);\n        }\n        Status::Off => {}\n    }\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+}
+
+#[test]
+fn trim_is_part_of_its_receiver() {
+    // On a place: an alias of it.
+    let (d, sources) = one_error(&with_getters(
+        "fn f() {\n    let mut text = \"  a \".clone();\n    let t = text.trim();\n    text.push_str(\"b\");\n    read(t);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "text.push_str", "text"));
+    let (d, sources) = one_error(&with_getters(
+        "fn f(text: string) {\n    let mut v = vec![\"a\"];\n    v.push(text.trim());\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(
+        d.span,
+        part_of(&sources, "push(text.trim())", "text.trim()")
+    );
+    assert!(d.fix_it.is_some(), "{d:#?}");
+    // On a literal: rootless, so returning it copies nothing.
+    let (d, sources) = one_error(&with_getters(
+        "fn f() -> string {\n    \"  a \".trim()\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "\"  a \".trim()"));
+    // On a call result: V0001.
+    let (d, sources) = one_error(&with_getters(
+        "fn g() -> string {\n    \"a\"\n}\nfn f() {\n    read(g().trim());\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0001, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "g().trim", "g()"));
+}
+
+#[test]
+fn borrowed_text_chains_and_binds_as_str() {
+    let program = ok(&with_getters(
+        "fn f(user: Obj) {\n    let s = \"  x \".clone();\n    let t = s.trim();\n    let owned = mk();\n    let n = owned.display_name();\n    let c = user.name_ref().trim();\n    let mut m = \"x\";\n    m = owned.name_ref();\n    read(t);\n    read(n);\n    read(c);\n    read(m);\n}\n",
+    ));
+    let f = function(&program, "f");
+    for name in ["t", "n", "c", "m"] {
+        assert_eq!(repr(f, name), Some(StringRepr::Str), "{name}");
+    }
+    assert_eq!(repr(f, "s"), Some(StringRepr::Owned));
+    // A chained result is still part of the first receiver.
+    let (d, _) = one_error(&with_getters(
+        "fn f() {\n    let mut user = mk();\n    let c = user.name_ref().trim();\n    user.change();\n    read(c);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+}
+
+#[test]
+fn a_function_whose_returns_are_in_error_is_reported_once_and_new_to_callers() {
+    let (d, sources) = one_error(&with_getters(
+        "fn pick(a: Obj, b: Obj, c: bool) -> string {\n    if c { a.name } else { b.name }\n}\nfn f(a: Obj, b: Obj) {\n    let n = pick(a, b, true);\n    let mut v = vec![\"x\"];\n    v.push(n);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0308, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "b.name"));
+    assert!(
+        d.message
+            .contains("part of `a` in one place and part of `b` in another"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_borrowed_return_on_a_local_of_a_block_is_gone_with_it() {
+    let (d, sources) = one_error(&with_getters(
+        "fn f() {\n    let n = {\n        let u = mk();\n        u.name_ref()\n    };\n    read(n);\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "u.name_ref()"));
+    let (d, sources) = one_error(&with_getters(
+        "fn f(c: bool) {\n    println!(\"{}\", if c {\n        let u = mk();\n        u.name_ref()\n    } else {\n        \"x\"\n    });\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "u.name_ref()"));
+    let (d, sources) = one_error(&with_getters(
+        "fn f(c: bool, o: Obj) {\n    show(if c {\n        let us = vec![mk()];\n        first(us)\n    } else {\n        o\n    });\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "first(us)"));
+}
+
+#[test]
+fn a_let_mut_of_a_borrowed_return_cannot_be_changed_whatever_its_mut() {
+    for (body, code) in [
+        ("n = \"x\";", codes::V0301),
+        ("let mut v = vec![\"a\"];\n    fill(n);", codes::V0302),
+    ] {
+        let (d, _) = one_error(&with_getters(&format!(
+            "fn fill(mut s: string) {{}}\nfn f() {{\n    let mut user = mk();\n    let mut n = user.name_ref();\n    {body}\n    read(n);\n}}\n"
+        )));
+        assert_eq!(d.code, code, "{d:#?}");
+        assert!(
+            d.message.contains("`n` is another name for part of `user`"),
+            "{d:#?}"
+        );
+        assert!(!d.message.contains("without `mut`"), "{d:#?}");
+        assert!(d.fix_it.is_none(), "{d:#?}");
+        assert!(has_note(&d, ".clone()"), "{d:#?}");
+    }
+}
+
+#[test]
+fn a_changed_borrowed_return_says_so_before_blaming_a_missing_mut() {
+    // Neither the root nor the result is `mut`: adding either would not
+    // help, so the read-only result is the one diagnostic.
+    let first = "fn first(v: Vec<string>) -> string {\n    v[0]\n}\n";
+    for (body, root) in [
+        (
+            "fn f() {\n    let v = vec![\"a\"];\n    let q = first(v);\n    q.push_str(\"y\");\n}\n",
+            "v",
+        ),
+        (
+            "fn f(v: Vec<string>) {\n    let q = first(v);\n    q.push_str(\"y\");\n}\n",
+            "v",
+        ),
+        (
+            "fn f() {\n    let mut v = vec![\"a\"];\n    let q = first(v);\n    q.push_str(\"y\");\n}\n",
+            "v",
+        ),
+    ] {
+        let (d, _) = one_error(&format!("{first}{body}fn main() {{}}\n"));
+        assert_eq!(d.code, codes::V0301, "{d:#?}");
+        assert!(
+            d.message.contains(&format!(
+                "`q` is another name for part of `{root}`, given by a call"
+            )),
+            "{d:#?}"
+        );
+        assert!(d.fix_it.is_none(), "{d:#?}");
+        assert!(has_note(&d, ".clone()"), "{d:#?}");
+    }
+    // A field of the result, `mut` or not, changed or assigned.
+    let first = "struct U {\n    name: string,\n    tags: Vec<string>,\n}\nfn first(v: Vec<U>) -> U {\n    v[0]\n}\n";
+    for change in [
+        "let mut q = first(v).name;\n    q.push_str(\"y\");",
+        "let q = first(v).name;\n    q.push_str(\"y\");",
+        "let mut q = first(v).tags;\n    q.push(\"z\");",
+        "let mut q = first(v).name;\n    q = \"z\";",
+    ] {
+        let body = format!(
+            "fn f() {{\n    let mut v = vec![U {{ name: \"a\", tags: vec![\"t\"] }}];\n    {change}\n}}\n"
+        );
+        let (d, _) = one_error(&format!("{first}{body}fn main() {{}}\n"));
+        let root = "v";
+        assert_eq!(d.code, codes::V0301, "{d:#?}");
+        assert!(
+            d.message.contains(&format!(
+                "`q` is another name for part of `{root}`, given by a call"
+            )),
+            "{d:#?}"
+        );
+        assert!(d.fix_it.is_none(), "{d:#?}");
+        assert!(has_note(&d, ".clone()"), "{d:#?}");
+    }
+}
+
+// --- Closures (M4 spec 2.2, 3.2) -------------------------------------------
+
+/// A function `f` with an owned `name`, a literal `lit`, and a Copy `k`
+/// to capture, around `body`.
+fn with_captures(body: &str) -> String {
+    format!(
+        "struct P {{\n    s: string,\n}}\nfn mk() -> string {{\n    \"made\"\n}}\nfn mk_o() -> Option<P> {{\n    Some(P {{ s: mk() }})\n}}\nfn read(s: string) {{}}\nfn fill(mut s: string) {{}}\nfn f(o: Option<i32>) {{\n    let mut name = mk();\n    let lit = \"lit\";\n    let mut k = 1;\n    {body}\n    read(name);\n    read(lit);\n}}\nfn main() {{}}\n"
+    )
+}
+
+#[test]
+fn a_captured_local_keeps_its_representation_and_stays_usable() {
+    let program = ok(&with_captures(
+        "let a = o.map(|n| {\n        read(name);\n        read(lit);\n        let y = name;\n        read(y);\n        n + k\n    });\n    let b = o.map(|n| name == lit);",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(repr(f, "name"), Some(StringRepr::Owned));
+    assert_eq!(repr(f, "lit"), Some(StringRepr::Str));
+    // `let y = name;` inside the closure is another name for `name`.
+    let y = place(f, "y");
+    assert!(y.borrowed, "{y:?}");
+    assert!(!y.mutable, "{y:?}");
+    let name = f
+        .locals
+        .iter()
+        .position(|l| l.name == "name")
+        .expect("name");
+    assert_eq!(y.origin, Some(Origin::Captured(LocalId(name as u32))));
+    assert_eq!(repr(f, "y"), Some(StringRepr::RefOwned));
+    // The parameter is an owned copy of the payload.
+    assert!(!place(f, "n").borrowed);
+}
+
+#[test]
+fn changing_a_captured_name_is_v0301_or_v0303_worded_for_a_closure() {
+    let cases = [
+        ("name = \"z\";", "name = \"z\"", codes::V0301),
+        ("k = 2;", "k = 2", codes::V0301),
+        ("fill(name);", "name);", codes::V0303),
+        ("fill(lit);", "lit);", codes::V0303),
+    ];
+    for (stmt, at, code) in cases {
+        let (d, sources) = one_error(&with_captures(&format!(
+            "let a = o.map(|n| {{\n        {stmt}\n        n\n    }});"
+        )));
+        assert_eq!(d.code, code, "{stmt}: {d:#?}");
+        let at = span_of(&sources, at);
+        assert_eq!(d.span.start, at.start, "{stmt}: {d:#?}");
+        assert!(
+            d.message
+                .contains("inside a closure a name from outside can only be read"),
+            "{stmt}: {d:#?}"
+        );
+        assert!(d.fix_it.is_none(), "{stmt}: {d:#?}");
+    }
+}
+
+#[test]
+fn a_captured_name_kept_in_an_owned_slot_is_v0304() {
+    let (d, sources) = one_error(&with_captures(
+        "let a = o.map(|n| {\n        let mut v: Vec<string> = Vec::new();\n        v.push(name);\n        n\n    });",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "v.push(name)", "name"));
+    assert!(
+        d.message
+            .starts_with("`name` belongs to the function around this closure"),
+        "{d:#?}"
+    );
+    assert_eq!(
+        d.fix_it.as_ref().map(|f| f.replacement.as_str()),
+        Some(".clone()")
+    );
+}
+
+#[test]
+fn changing_a_closure_parameter_is_v0301_or_v0303_with_the_copy_fix_it() {
+    let (d, _) = one_error(&with_captures(
+        "let a = o.map(|n| {\n        n = 2;\n        n\n    });",
+    ));
+    assert_eq!(d.code, codes::V0301, "{d:#?}");
+    assert!(
+        d.message.contains(
+            "`n` is a closure's parameter, so it cannot be changed; to change it, first make a \
+             changeable copy with `let mut n = n;`"
+        ),
+        "{d:#?}"
+    );
+    let fix = d.fix_it.as_ref().expect("a fix-it");
+    assert_eq!(fix.replacement, " let mut n = n;");
+    let (d, _) = one_error(&with_captures("let a = mk_o().map(|p| fill(p.s));"));
+    assert_eq!(d.code, codes::V0303, "{d:#?}");
+    assert!(d.message.contains("`p` is a closure's parameter"), "{d:#?}");
+}
+
+#[test]
+fn an_option_map_closure_returning_part_of_something_is_v0304_or_v0308() {
+    let (d, sources) = one_error(&with_captures("let a = o.map(|n| name);"));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "|n| name", "name"));
+    assert!(
+        d.message
+            .starts_with("`name` belongs to the function around this closure"),
+        "{d:#?}"
+    );
+    assert_eq!(
+        d.fix_it.as_ref().map(|f| f.replacement.as_str()),
+        Some(".clone()")
+    );
+    let (d, sources) = one_error(&with_captures("let a = mk_o().map(|p| p.s);"));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "p.s"));
+    assert!(d.message.contains("`p`"), "{d:#?}");
+    let (d, _) = one_error(&with_captures(
+        "let a = o.map(|n| if n > 0 { name } else { lit });",
+    ));
+    assert_eq!(d.code, codes::V0308, "{d:#?}");
+    let (d, _) = one_error(&with_captures(
+        "let a = o.map(|n| if n > 0 { name } else { mk() });",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    // Something new is fine: a copy, a call result, the parameter itself.
+    ok(&with_captures(
+        "let a = o.map(|n| name.clone());\n    let b = mk_o().map(|p| p);\n    let c = mk_o().map(|p| p.s.clone());",
+    ));
+}
+
+#[test]
+fn a_string_literal_if_body_gives_an_owned_string() {
+    let program = ok(&with_captures(
+        "let a = o.map(|n| if n > 5 { \"big\" } else { \"small\" });\n    let b: Option<string> = a;",
+    ));
+    let f = function(&program, "f");
+    assert_eq!(
+        f.locals
+            .iter()
+            .find(|l| l.name == "a")
+            .map(|l| l.ty.clone()),
+        Some(crate::types::Ty::Option(Box::new(crate::types::Ty::String)))
+    );
+}
+
+// --- Chains (M4 spec 2.3, 3.3) ----------------------------------------------
+
+/// A function `f` over a `Vec<i32>` `v`, a `Vec<string>` `names`, a
+/// `Vec<U>` `users`, a `HashMap<string, i32>` `m`, a `U` `other`, a text
+/// `text`, and a parameter `p`, around `body`.
+fn with_chains(body: &str) -> String {
+    format!(
+        "struct U {{\n    name: string,\n    age: i32,\n    tags: Vec<string>,\n}}\nimpl U {{\n    fn tags_of(self) -> Vec<string> {{\n        self.tags\n    }}\n    fn name_of(self) -> string {{\n        self.name\n    }}\n}}\nfn mk_u() -> U {{\n    U {{ name: \"u\", age: 1, tags: vec![\"t\"] }}\n}}\nfn mk_vs() -> Vec<string> {{\n    vec![\"a\"]\n}}\nfn mk_m() -> HashMap<string, i32> {{\n    HashMap::new()\n}}\nfn mk_s() -> string {{\n    \"a b\"\n}}\nfn read(s: string) {{}}\nfn read_u(u: U) {{}}\nfn f(c: bool, p: U) {{\n    let mut v = vec![1, 2];\n    let mut names = vec![\"a\", \"b\"];\n    let mut users = vec![mk_u()];\n    let mut m: HashMap<string, i32> = HashMap::new();\n    let mut other = mk_u();\n    let text = \"a b\";\n    {body}\n}}\nfn main() {{}}\n"
+    )
+}
+
+/// The item table of a function (see `PlacesOutput::items`).
+type ItemTable = std::collections::HashMap<Span, (super::chains::ItemKind, Option<StringRepr>)>;
+
+/// The item table of `f` in `text`, which must pass the checker.
+fn chain_items(text: &str) -> (ItemTable, HirProgram, Vec<SourceFile>) {
+    let mut sources = Vec::new();
+    let entry = SourceFile::new(FileId(0), "dummy/test.vr", text);
+    let hir = resolve(entry, &mut sources)
+        .and_then(|resolved| typecheck(resolved, &sources))
+        .unwrap_or_else(|d| panic!("{d:#?}"));
+    let (mut hir, diagnostics) = super::analyze_unchecked(hir, &sources);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    let signatures = super::signatures(&hir);
+    let cx = super::Context {
+        signatures: &signatures,
+        imported: &hir.imported,
+        structs: &hir.structs,
+        enums: &hir.enums,
+        sources: &sources,
+    };
+    let mut functions = hir.functions.clone();
+    let index = functions
+        .iter()
+        .position(|f| f.name == "f")
+        .expect("a function `f`");
+    let mut classified = super::returns::classify(&cx, &mut functions);
+    let items = classified.swap_remove(index).places.items;
+    hir.functions = functions;
+    (items, hir, sources)
+}
+
+/// The `deref` of the closure parameter `name` in `function`.
+fn deref(function: &HirFunction, name: &str) -> bool {
+    match function.locals[local_id(function, name).0 as usize].kind {
+        LocalKind::ClosureParam { deref } => deref,
+        LocalKind::Plain => panic!("{name} is not a closure's parameter"),
+    }
+}
+
+#[test]
+fn a_source_on_a_value_made_right_there_is_v0001() {
+    for (body, at) in [
+        ("let a = mk_vs().iter().count();", "mk_vs()"),
+        ("let a = mk_m().keys().count();", "mk_m()"),
+        ("let a = mk_m().values().count();", "mk_m()"),
+        ("let a = mk_s().split(\" \").count();", "mk_s()"),
+    ] {
+        let (d, sources) = one_error(&with_chains(body));
+        assert_eq!(d.code, codes::V0001, "{body}: {d:#?}");
+        assert_eq!(d.span, part_of(&sources, body, at), "{body}");
+        assert!(d.message.contains("store it with `let` first"), "{d:#?}");
+    }
+    // A literal lives for the whole program, and a borrowed return is a
+    // place of its argument.
+    ok(&with_chains(
+        "let a = \"x y\".split(\" \").count();\n    let b = p.tags_of().iter().count();\n    let d = p.name_of().split(\" \").count();",
+    ));
+}
+
+#[test]
+fn a_source_decides_its_items() {
+    use super::chains::ItemKind;
+    let text = with_chains(
+        "let a = names.iter().count();\n    let b = v.iter().count();\n    let d = text.split(\" \").count();\n    let e = m.keys().count();\n    let g = m.values().count();\n    let h = p.tags.iter().count();",
+    );
+    let (items, program, sources) = chain_items(&text);
+    let f = function(&program, "f");
+    let item = |at: &str| {
+        items
+            .get(&span_of(&sources, at))
+            .cloned()
+            .unwrap_or_else(|| panic!("no items at {at}"))
+    };
+    assert_eq!(
+        item("names.iter()"),
+        (
+            ItemKind::Borrowed(vec![local_id(f, "names")]),
+            Some(StringRepr::RefOwned)
+        )
+    );
+    assert_eq!(item("v.iter()"), (ItemKind::Copy, None));
+    assert_eq!(
+        item("text.split(\" \")"),
+        (
+            ItemKind::Borrowed(vec![local_id(f, "text")]),
+            Some(StringRepr::Str)
+        )
+    );
+    assert_eq!(
+        item("m.keys()"),
+        (
+            ItemKind::Borrowed(vec![local_id(f, "m")]),
+            Some(StringRepr::RefOwned)
+        )
+    );
+    assert_eq!(item("m.values()"), (ItemKind::Copy, None));
+    assert_eq!(
+        item("p.tags.iter()").0,
+        ItemKind::Borrowed(vec![local_id(f, "p")])
+    );
+}
+
+#[test]
+fn closure_parameters_take_the_item_as_their_row_hands_it() {
+    let text = with_chains(
+        "let a = names.iter().filter(|w1| w1.len() > 1).map(|w2| w2).any(|w3| w3.len() > 2);\n    let b = v.iter().filter(|n1| n1 > 1).map(|n2| n2 + 1).all(|n3| n3 > 0);\n    let d = names.iter().map(|s0| s0.clone()).filter(|s1| s1.len() > 0).map(|s2| s2).any(|s3| s3.len() > 0);\n    let e = text.split(\" \").filter(|t1| t1.len() > 0).map(|t2| t2).count();",
+    );
+    let (_, program, _) = chain_items(&text);
+    let f = function(&program, "f");
+    let names = local_id(f, "names");
+    // Borrowed items: `filter` looks through one more reference.
+    for (name, deref_) in [("w1", true), ("w2", false), ("w3", false)] {
+        assert_eq!(deref(f, name), deref_, "{name}");
+        let info = place(f, name);
+        assert!(info.borrowed && !info.mutable, "{name}: {info:?}");
+        assert_eq!(info.origin, Some(Origin::Local(names)), "{name}");
+    }
+    assert_eq!(repr(f, "w1"), Some(StringRepr::RefOwned));
+    assert_eq!(repr(f, "w2"), Some(StringRepr::RefOwned));
+    // A part `map` gives on is a `&str`.
+    assert_eq!(repr(f, "w3"), Some(StringRepr::Str));
+    // Copies: `.copied()` makes them plain values, and `filter` still
+    // looks through one reference.
+    for (name, deref_) in [("n1", true), ("n2", false), ("n3", false)] {
+        assert_eq!(deref(f, name), deref_, "{name}");
+        assert!(!place(f, name).borrowed, "{name}");
+    }
+    // Owned items: `filter` looks at one without a root, `map` and `any`
+    // own it.
+    assert!(!deref(f, "s1"));
+    assert!(place(f, "s1").borrowed);
+    assert_eq!(place(f, "s1").origin, None);
+    assert_eq!(repr(f, "s1"), Some(StringRepr::RefOwned));
+    for name in ["s2", "s3"] {
+        assert!(!deref(f, name), "{name}");
+        assert!(!place(f, name).borrowed, "{name}");
+        assert_eq!(repr(f, name), Some(StringRepr::Owned), "{name}");
+    }
+    // Pieces of text are `&str`.
+    assert!(deref(f, "t1"));
+    assert_eq!(repr(f, "t1"), Some(StringRepr::Str));
+    assert_eq!(repr(f, "t2"), Some(StringRepr::Str));
+}
+
+#[test]
+fn a_map_returning_part_of_its_item_gives_borrowed_items() {
+    use super::chains::ItemKind;
+    let text = with_chains(
+        "let a = users.iter().map(|u| u.name).count();\n    let b = users.iter().map(|u| u.name.len()).count();\n    let d = users.iter().map(|u| u.name.clone()).count();\n    let e = v.iter().map(|x| other.name).count();\n    let g = users.iter().map(|u| u.name_of()).count();",
+    );
+    let (items, program, sources) = chain_items(&text);
+    let f = function(&program, "f");
+    let item = |at: &str| {
+        items
+            .get(&span_of(&sources, at))
+            .cloned()
+            .unwrap_or_else(|| panic!("no items at {at}"))
+    };
+    assert_eq!(
+        item("users.iter().map(|u| u.name)"),
+        (
+            ItemKind::Borrowed(vec![local_id(f, "users")]),
+            Some(StringRepr::Str)
+        )
+    );
+    assert_eq!(item("users.iter().map(|u| u.name.len())").0, ItemKind::Copy);
+    assert_eq!(
+        item("users.iter().map(|u| u.name.clone())"),
+        (ItemKind::Owned, Some(StringRepr::Owned))
+    );
+    assert_eq!(
+        item("v.iter().map(|x| other.name)"),
+        (
+            ItemKind::Borrowed(vec![local_id(f, "other")]),
+            Some(StringRepr::Str)
+        )
+    );
+    assert_eq!(
+        item("users.iter().map(|u| u.name_of())").0,
+        ItemKind::Borrowed(vec![local_id(f, "users")])
+    );
+}
+
+#[test]
+fn a_map_returning_part_of_an_owned_item_is_v0304() {
+    let (d, sources) = one_error(&with_chains(
+        "let a = users.iter().map(|u| mk_u()).map(|w| w.name).count();",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "w.name"));
+    assert!(
+        d.message
+            .contains("part of `w`, the closure's parameter, which ends when the closure returns"),
+        "{d:#?}"
+    );
+    assert_eq!(
+        d.fix_it.as_ref().map(|f| f.replacement.as_str()),
+        Some(".clone()")
+    );
+}
+
+#[test]
+fn a_map_returning_parts_of_two_names_is_v0308() {
+    let (d, sources) = one_error(&with_chains(
+        "let a = users.iter().map(|x| if c { x.name } else { other.name }).count();",
+    ));
+    assert_eq!(d.code, codes::V0308, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "other.name"));
+    assert!(
+        d.message
+            .contains("part of `x` in one place and part of `other` in another"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_find_over_items_made_from_a_capture_is_rooted_at_the_capture() {
+    let (d, sources) = one_error(&with_chains(
+        "if let Some(n) = v.iter().map(|x| other.name).find(|n| n.len() > 0) {\n        other.name = \"z\";\n        read(n);\n    }",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(
+        d.span,
+        part_of(&sources, "other.name = \"z\"", "other"),
+        "{d:#?}"
+    );
+    // A capture that is itself another name for an element: its own root.
+    let (d, sources) = one_error(&with_chains(
+        "let first = users[0];\n    if let Some(n) = v.iter().map(|x| first.name).find(|n| n.len() > 0) {\n        users.push(mk_u());\n        read(n);\n    }",
+    ));
+    assert_eq!(d.code, codes::V0307, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "users.push", "users"), "{d:#?}");
+    // Unchanged, both are fine.
+    ok(&with_chains(
+        "let first = users[0];\n    if let Some(n) = v.iter().map(|x| first.name).find(|n| n.len() > 0) {\n        read(n);\n    }\n    users.push(mk_u());",
+    ));
+}
+
+#[test]
+fn collect_of_borrowed_items_is_v0304_with_the_copy_hint() {
+    for (body, root) in [
+        ("let a = names.iter().collect();", "`names`"),
+        ("let a = text.split(\" \").collect();", "`text`"),
+        ("let a = users.iter().map(|u| u.name).collect();", "`users`"),
+    ] {
+        let (d, sources) = one_error(&with_chains(body));
+        assert_eq!(d.code, codes::V0304, "{body}: {d:#?}");
+        let chain = &body["let a = ".len()..body.len() - ";".len()];
+        let receiver = chain.strip_suffix(".collect()").expect("a collect");
+        let whole = span_of(&sources, chain);
+        let end = whole.start + receiver.len() as u32;
+        assert_eq!(d.span, Span::new(FileId(0), end, whole.end), "{body}");
+        assert!(d.message.contains(root), "{body}: {d:#?}");
+        assert!(d.message.contains(".map(|w| w.clone())"), "{body}: {d:#?}");
+        let fix = d.fix_it.as_ref().expect("a fix-it");
+        assert_eq!(fix.span, Span::new(FileId(0), end, end));
+        assert_eq!(fix.replacement, ".map(|w| w.clone())");
+    }
+    // Owned items and copies make a `Vec` of their own.
+    ok(&with_chains(
+        "let a = v.iter().collect();\n    let b = names.iter().map(|w| w.clone()).collect();\n    let d = users.iter().map(|u| u.age).collect();",
+    ));
+}
+
+#[test]
+fn a_find_on_borrowed_items_is_looked_into() {
+    let program = ok(&with_chains(
+        "if let Some(w) = names.iter().find(|n| n.len() > 0) {\n        read(w);\n    }\n    match text.split(\" \").find(|t| t.len() > 0) {\n        Some(piece) => read(piece),\n        None => {}\n    }\n    let a = v.iter().find(|n| n > 1);\n    let b = names.iter().map(|s| s.clone()).find(|s| s.len() > 0);",
+    ));
+    let f = function(&program, "f");
+    let w = place(f, "w");
+    assert!(w.borrowed && !w.mutable, "{w:?}");
+    assert_eq!(w.origin, Some(Origin::Local(local_id(f, "names"))));
+    assert_eq!(repr(f, "w"), Some(StringRepr::RefOwned));
+    assert_eq!(repr(f, "piece"), Some(StringRepr::Str));
+    let looked_into = |index: usize| {
+        let expr = match &f.body.stmts[index] {
+            crate::hir::HirStmt::Let { value, .. } => value,
+            crate::hir::HirStmt::Expr { expr, .. } => expr,
+            other => panic!("statement {index} is {other:?}"),
+        };
+        let head = match &expr.kind {
+            HirExprKind::IfLet { value, .. } => &**value,
+            HirExprKind::Match { scrutinee, .. } => &**scrutinee,
+            _ => expr,
+        };
+        match &head.kind {
+            HirExprKind::MethodCall { looked_into, .. } => *looked_into,
+            other => panic!("a method call, got {other:?}"),
+        }
+    };
+    let first = 6;
+    assert!(looked_into(first));
+    assert!(looked_into(first + 1));
+    // Copies and owned items make a plain `Option`.
+    assert!(!looked_into(first + 2));
+    assert!(!looked_into(first + 3));
+    assert_eq!(
+        f.locals[local_id(f, "b").0 as usize].ty,
+        crate::types::Ty::Option(Box::new(crate::types::Ty::String))
+    );
+}
+
+#[test]
+fn a_stored_find_on_borrowed_items_is_v0208() {
+    for body in [
+        "let x = names.iter().find(|n| n.len() > 0);",
+        "let b = names.iter().find(|n| n.len() > 0).is_some();",
+    ] {
+        let (d, sources) = one_error(&with_chains(body));
+        assert_eq!(d.code, codes::V0208, "{body}: {d:#?}");
+        assert_eq!(
+            d.span,
+            span_of(&sources, "names.iter().find(|n| n.len() > 0)"),
+            "{body}"
+        );
+        assert!(d.message.contains("part of `names`"), "{d:#?}");
+    }
+}
+
+#[test]
+fn a_parameter_that_only_looks_at_an_item_cannot_be_kept() {
+    for body in [
+        "let a = names.iter().filter(|w| {\n        let k = vec![w];\n        true\n    }).count();",
+        "let a = names.iter().any(|w| {\n        let k = vec![w];\n        true\n    });",
+        "let a = names.iter().map(|s| s.clone()).find(|w| {\n        let k = vec![w];\n        true\n    });",
+        "let a = names.iter().map(|s| s.clone()).any(|w| {\n        let k = vec![w];\n        true\n    });",
+        "let a = names.iter().map(|s| s.clone()).all(|w| {\n        let k = w;\n        true\n    });",
+    ] {
+        let (d, sources) = one_error(&with_chains(body));
+        assert_eq!(d.code, codes::V0304, "{body}: {d:#?}");
+        let at = if body.contains("vec![w]") {
+            part_of(&sources, "vec![w]", "w")
+        } else {
+            part_of(&sources, "let k = w", "w")
+        };
+        assert_eq!(d.span, at, "{body}: {d:#?}");
+    }
+    // Read, it is fine.
+    ok(&with_chains(
+        "let a = names.iter().map(|s| s.clone()).any(|w| {\n        read(w);\n        let k = w.len();\n        w.len() > 0\n    });",
+    ));
+}
+
+#[test]
+fn changing_the_source_inside_a_closure_of_its_chain_is_v0301() {
+    let (d, sources) = one_error(&with_chains(
+        "let a = v.iter().map(|x| {\n        v.push(1);\n        x\n    }).count();",
+    ));
+    assert_eq!(d.code, codes::V0301, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "v.push(1)", "v"));
+    assert!(
+        d.message
+            .contains("inside a closure a name from outside can only be read"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_chain_inside_a_closure_over_a_captured_vec_works() {
+    let program = ok(&with_chains(
+        "let a = Some(1).map(|x| names.iter().filter(|n| n.len() > 0).count());\n    let b = Some(2).map(|x| users.iter().map(|u| u.name).any(|k| k.len() > 0));\n    names.push(\"c\");",
+    ));
+    let f = function(&program, "f");
+    assert!(deref(f, "n"));
+    assert_eq!(
+        place(f, "k").origin,
+        Some(Origin::Captured(local_id(f, "users")))
+    );
+}
+
+// --- `for` over a chain (M4 spec 2.3, 3.3) -----------------------------------
+
+#[test]
+fn a_for_variable_over_a_chain_is_bound_as_its_items_are() {
+    let program = ok(&with_chains(
+        "for w in names.iter().filter(|n| n.len() > 0) {\n        read(w);\n    }\n    for x in v.iter() {\n        let y = x + 1;\n    }\n    for s in names.iter().map(|n| n.clone()) {\n        read(s);\n    }\n    for piece in text.split(\" \") {\n        read(piece);\n    }\n    for k in users.iter().map(|u| other.name) {\n        read(k);\n    }",
+    ));
+    let f = function(&program, "f");
+    let names = local_id(f, "names");
+    assert_eq!(
+        place(f, "w"),
+        PlaceInfo {
+            borrowed: true,
+            mutable: false,
+            origin: Some(Origin::Local(names)),
+        }
+    );
+    assert_eq!(repr(f, "w"), Some(StringRepr::RefOwned));
+    assert!(!place(f, "x").borrowed);
+    assert!(!place(f, "s").borrowed);
+    assert_eq!(repr(f, "s"), Some(StringRepr::Owned));
+    assert!(place(f, "piece").borrowed);
+    assert_eq!(repr(f, "piece"), Some(StringRepr::Str));
+    assert_eq!(
+        place(f, "k").origin,
+        Some(Origin::Local(local_id(f, "other")))
+    );
+    assert_eq!(repr(f, "k"), Some(StringRepr::Str));
+}
+
+#[test]
+fn changing_the_source_of_a_for_over_a_chain_is_v0307() {
+    let (d, sources) = one_error(&with_chains(
+        "for w in names.iter().filter(|n| n.len() > 0) {\n        names.push(\"c\");\n    }",
+    ));
+    assert_held(
+        &d,
+        part_of(&sources, "names.push", "names"),
+        span_of(&sources, "names.iter().filter(|n| n.len() > 0)"),
+        "names",
+    );
+    assert!(
+        d.message
+            .contains("this loop goes over `names`, so `names` cannot be changed inside it"),
+        "{d:#?}"
+    );
+    // Over copies, the loop still holds what it goes over.
+    let (d, sources) = one_error(&with_chains(
+        "for x in v.iter() {\n        v.push(x);\n    }",
+    ));
+    assert_held(
+        &d,
+        part_of(&sources, "v.push", "v"),
+        span_of(&sources, "v.iter()"),
+        "v",
+    );
+}
+
+/// The body may not change or give away what the head reads besides its
+/// source: the source's argument and every capture of the head's
+/// closures, numbers included, an alias's own roots too (M4 spec 3.3).
+#[test]
+fn changing_what_the_head_of_a_for_over_a_chain_reads_is_v0307() {
+    for (body, changed, root) in [
+        (
+            "let mut seen: Vec<string> = vec![];\n    for w in names.iter().filter(|w| seen.contains(w)) {\n        seen.push(w.clone());\n        read(w);\n    }",
+            "seen.push",
+            "seen",
+        ),
+        (
+            "let mut limit = 1;\n    for n in v.iter().filter(|n| n < limit) {\n        limit = limit + 1;\n    }",
+            "limit = limit",
+            "limit",
+        ),
+        (
+            "let mut sep = mk_s();\n    for w in text.split(sep) {\n        sep.push_str(w);\n    }",
+            "sep.push_str",
+            "sep",
+        ),
+        (
+            "let first = names[0];\n    for u in users.iter().filter(|u| u.name == first) {\n        names.push(\"c\");\n    }",
+            "names.push",
+            "names",
+        ),
+        (
+            "let sep = other.name;\n    for w in text.split(sep) {\n        other.name = \"x\";\n    }",
+            "other.name = ",
+            "other",
+        ),
+        (
+            "let owner = mk_u();\n    for w in names.iter().filter(|w| owner.age > 0) {\n        let kept = owner;\n        break;\n    }",
+            "kept = owner",
+            "owner",
+        ),
+    ] {
+        let (d, sources) = errors(&with_chains(body));
+        assert_eq!(d.len(), 1, "{body}: {d:#?}");
+        let d = &d[0];
+        let head_start = body.find(" in ").expect("a for") + " in ".len();
+        let head_end = body.find(" {\n        ").expect("a body");
+        assert_held(
+            d,
+            part_of(&sources, changed, root),
+            span_of(&sources, &body[head_start..head_end]),
+            root,
+        );
+        assert!(
+            d.message.contains(&format!(
+                "this loop's head reads `{root}`, so `{root}` cannot be"
+            )),
+            "{body}: {d:#?}"
+        );
+    }
+}
+
+/// The head's captures hold only while the loop runs: a copy of the loop
+/// variable taken out of the loop does not inherit them, and outside a
+/// `for` a chain's closures die at its terminal (M4 spec 3.3).
+#[test]
+fn what_the_head_of_a_for_over_a_chain_reads_is_free_after_the_loop() {
+    ok(&with_chains(
+        "let mut limit: usize = 1;\n    let mut best = \"\";\n    for w in names.iter().filter(|w| w.len() > limit) {\n        best = w;\n    }\n    limit = 0;\n    read(best);",
+    ));
+    ok(&with_chains(
+        "let mut sep = mk_s();\n    let mut best = \"\";\n    for w in text.split(sep) {\n        best = w;\n    }\n    sep.push_str(\"x\");\n    read(best);",
+    ));
+    ok(&with_chains(
+        "let mut limit = 1;\n    let c = v.iter().filter(|n| n < limit).count();\n    limit = 2;\n    let mut seen: Vec<string> = vec![];\n    let d = names.iter().filter(|w| seen.contains(w)).count();\n    seen.push(\"x\");",
+    ));
+}
+
+/// A head reading a mutable alias holds its root as the alias does: the
+/// body cannot even read it (M4 spec 3.3).
+#[test]
+fn reading_what_a_mutable_alias_the_head_reads_changes_is_v0307() {
+    let (d, sources) = one_error(&with_chains(
+        "let mut a = users[0];\n    for w in names.iter().filter(|w| a.age > 0) {\n        let k = users.len();\n    }",
+    ));
+    assert_held(
+        &d,
+        part_of(&sources, "users.len()", "users"),
+        span_of(&sources, "names.iter().filter(|w| a.age > 0)"),
+        "users",
+    );
+    assert!(
+        d.message.contains(
+            "this loop's head reads `a`, which can change `users`, so `users` cannot be used inside it"
+        ),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn changing_a_vec_of_numbers_inside_a_for_over_it_is_v0307() {
+    // The variable is a copy, yet the loop holds the `Vec` until it ends.
+    let (d, sources) = one_error(&with_chains("for n in v {\n        v.push(n);\n    }"));
+    assert_held(
+        &d,
+        part_of(&sources, "v.push", "v"),
+        part_of(&sources, "in v {", "v"),
+        "v",
+    );
 }

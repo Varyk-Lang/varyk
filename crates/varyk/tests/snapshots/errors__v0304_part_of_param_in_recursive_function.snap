@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `name_of` calls itself, directly or through other functions, so it cannot return part of `user`; return a copy instead, with `.clone()`
+ --> crates/varyk/tests/fixtures/errors/v0304_part_of_param_in_recursive_function/main.vr:9:5
+  |
+9 |     user.name
+  |     ^^^^^^^^^ `name_of` calls itself, directly or through other functions, so it cannot return part of `user`; return a copy instead, with `.clone()`
+  |
+  = note: Varyk works out what a function returns before the functions that call it, which it cannot do for functions that call each other
+help: insert `.clone()` after `name`

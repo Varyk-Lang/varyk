@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0205]: a string literal can only be the whole pattern of a `match`, `if let`, or `while let` on a string; bind this position to a name and compare it with `==` in the arm
+ --> crates/varyk/tests/fixtures/errors/v0205_nested_string_literal/main.vr:3:14
+  |
+3 |         Some("yes") => true,
+  |              ^^^^^ a string literal can only be the whole pattern of a `match`, `if let`, or `while let` on a string; bind this position to a name and compare it with `==` in the arm
+  |
+  = note: in Rust terms, a `String` inside another value only matches a string literal through `.as_str()`

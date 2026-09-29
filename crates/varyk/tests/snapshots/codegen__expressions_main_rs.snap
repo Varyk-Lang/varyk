@@ -1,0 +1,52 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn double(x: i32) -> Result<i32, String> {
+    let n = Ok::<i32, String>(x)?;
+    let m = Ok::<i32, String>(n * 2)?;
+    Ok(m)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn lookup(x: i32) -> Option<i32> {
+    let n = Some(x)?;
+    Some(n)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn first(x: i32) -> Option<i32> {
+    let found: Option<i32> = lookup(x);
+    let n = found?;
+    Some(n + 1)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let a = 300;
+    let big = 5000000000i64;
+    let small = (a as u8);
+    let negative = (-1i32 as u8);
+    let braced = (({
+        300i32
+    }) as u8);
+    let doubled = (--1i32 as u8);
+    let negated = (-({
+        1i32
+    }) as u8);
+    let count = (a as i64) < big;
+    let scaled = (a as i32) * 2;
+    let total = ((a + 1i32) as i64);
+    let mut sum = 0;
+    for i in 1..=3 {
+        sum = sum + i;
+    }
+    ::std::println!("{} {} {} {} {} {}", big, small, negative, count, scaled, total);
+    ::std::println!("{} {} {}", braced, doubled, negated);
+    ::std::println!("{}", sum);
+    match first(1) {
+        Some(n) => ::std::println!("{}", n),
+        None => ::std::println!("none"),
+    }
+}

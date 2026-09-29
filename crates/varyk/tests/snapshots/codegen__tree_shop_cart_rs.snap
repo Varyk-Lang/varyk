@@ -5,6 +5,7 @@ expression: "file(&krate, \"src/shop/cart.rs\")"
 pub mod item;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 pub struct Cart {
     pub total: i32,
 }

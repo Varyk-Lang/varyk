@@ -7,8 +7,8 @@ use std::ops::Range;
 
 use quote::ToTokens;
 use syn::{
-    Fields, FnArg, ImplItem, Item, ItemImpl, ReceiverKind, ReturnType, Safety, Signature, UseTree,
-    Visibility,
+    Fields, FnArg, ImplItem, Item, ItemImpl, ReceiverKind, ReturnType, Safety, Signature, Type,
+    UseTree, Visibility,
 };
 
 use super::signatures::{Names, map_param_type, map_return_type, map_value};
@@ -17,6 +17,7 @@ use super::{
     ImportedStruct, ImportedVariant, REEXPORT, RustPath, RustTy, SelfMode, StructKind, TEST,
     ident_name, tidy_signature,
 };
+use crate::types::Derives;
 
 /// Builds one [`ImportedFn`] per top-level free `pub fn` item in `items`
 /// (plain `pub`, not `pub(crate)`/`pub(super)`/`pub(in ...)`), and one
@@ -114,6 +115,7 @@ pub(super) fn import_items(items: Vec<Item>, names: &Names, text: &str) -> Impor
                     restricted_methods: Vec::new(),
                     generic: !generics.params.is_empty() || generics.where_clause.is_some(),
                     unfit: unfit_struct(&item),
+                    derives: derives(&item.attrs),
                     kind,
                     span: name_range(&item.ident, text),
                 });
@@ -186,6 +188,7 @@ pub(super) fn import_items(items: Vec<Item>, names: &Names, text: &str) -> Impor
                     variants,
                     generic: !generics.params.is_empty() || generics.where_clause.is_some(),
                     opaque,
+                    derives: derives(&item.attrs),
                     span: name_range(&item.ident, text),
                     methods: Vec::new(),
                 });
@@ -324,6 +327,44 @@ fn unfit_struct(item: &syn::ItemStruct) -> Option<&'static str> {
     unsized_.then_some("it has no fixed size: its last field is a slice, `str`, or `dyn` type")
 }
 
+/// Which of `Clone` and `PartialEq` the `#[derive(..)]` lists among
+/// `attrs` name, each as a bare name (M4 spec 2.12); nothing else is read,
+/// and a hand-written `impl` is not seen.
+fn derives(attrs: &[syn::Attribute]) -> Derives {
+    let mut derives = Derives::default();
+    for attr in attrs {
+        if !super::path_is(attr.path(), "derive") {
+            continue;
+        }
+        let Ok(list) = attr.meta.require_list() else {
+            continue;
+        };
+        // Each entry between commas; only one that is a bare name counts,
+        // so a path such as `other::Clone` is not taken for the trait.
+        let mut entry: Vec<proc_macro2::TokenTree> = Vec::new();
+        let tokens = list.tokens.clone().into_iter().map(Some).chain([None]);
+        for tree in tokens {
+            match tree {
+                Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == ',' => {}
+                Some(tree) => {
+                    entry.push(tree);
+                    continue;
+                }
+                None => {}
+            }
+            if let [proc_macro2::TokenTree::Ident(ident)] = entry.as_slice() {
+                match ident_name(ident).as_str() {
+                    "Clone" => derives.clone = true,
+                    "PartialEq" => derives.eq = true,
+                    _ => {}
+                }
+            }
+            entry.clear();
+        }
+    }
+    derives
+}
+
 /// Why a signature is not imported at all, in words for a note: `unsafe`,
 /// `const`, `async`, or `extern`; `None` when it is.
 fn why_not_imported(sig: &Signature) -> Option<&'static str> {
@@ -391,16 +432,23 @@ fn import_fn(sig: &Signature, owner: Option<&str>, names: &Names) -> Option<Impo
     }
     let signature = sig.to_token_stream().to_string();
     let generics = &sig.generics;
-    let ret = if !generics.params.is_empty() || generics.where_clause.is_some() {
+    let generic = !generics.params.is_empty() || generics.where_clause.is_some();
+    let root = if generic {
+        None
+    } else {
+        elided_root(sig, receiver, owner.is_some())
+    };
+    let ret = if generic {
         // Varyk cannot name a type argument, so a generic function is
         // never callable; an opaque return type says so.
         RustTy::Opaque(signature.clone())
     } else {
         match &sig.output {
             ReturnType::Default => RustTy::Unit,
-            ReturnType::Type(_, ty) => map_return_type(ty, names),
+            ReturnType::Type(_, ty) => map_return_type(ty, names, root.is_some()),
         }
     };
+    let ret_root = root.filter(|_| matches!(ret, RustTy::Str | RustTy::Ref(_)));
     Some(ImportedFn {
         name: ident_name(&sig.ident),
         params,
@@ -408,7 +456,40 @@ fn import_fn(sig: &Signature, owner: Option<&str>, names: &Names) -> Option<Impo
         receiver,
         owner: owner.map(str::to_string),
         signature,
+        ret_root,
     })
+}
+
+/// The parameter position (0 for `self`) a reference return is rooted at
+/// where lifetime elision makes it certain (M4 spec 2.12): a `&self`
+/// method's `self`, or the one parameter of a free function that is a
+/// reference, which is `&T` and not `&mut T`. `None` when the signature
+/// writes a lifetime anywhere, or for any other shape.
+fn elided_root(sig: &Signature, receiver: Option<SelfMode>, in_impl: bool) -> Option<usize> {
+    if sig.to_token_stream().to_string().contains('\'') {
+        return None;
+    }
+    match (receiver, in_impl) {
+        (Some(SelfMode::Shared), _) => Some(0),
+        (Some(_), _) | (None, true) => None,
+        (None, false) => {
+            let mut refs = sig
+                .inputs
+                .iter()
+                .enumerate()
+                .filter_map(|(at, arg)| match arg {
+                    FnArg::Typed(typed) => match typed.ty.as_ref() {
+                        Type::Reference(reference) => Some((at, reference.mutability.is_some())),
+                        _ => None,
+                    },
+                    FnArg::Receiver(_) => None,
+                });
+            match (refs.next(), refs.next()) {
+                (Some((at, false)), None) => Some(at),
+                _ => None,
+            }
+        }
+    }
 }
 
 /// Why an enum with a named-field variant is opaque (spec 4.3): Varyk

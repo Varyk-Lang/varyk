@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: a `HashMap` key must be of an integer type, `bool`, or `string`
+ --> crates/varyk/tests/fixtures/errors/v0101_hash_map_float_key/main.vr:2:25
+  |
+2 |     let prices: HashMap<f64, i32> = HashMap::new();
+  |                         ^^^ a `HashMap` key must be of an integer type, `bool`, or `string`
+  |
+  = note: a key is compared and hashed to find its value; in Rust terms, the key type must implement `Eq` and `Hash`, which floats and Varyk's own types do not

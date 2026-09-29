@@ -3,6 +3,7 @@ source: crates/varyk/tests/codegen.rs
 expression: "main_rs(\"struct User {\\n    name: string,\\n}\\n\\nfn show(user: User) {\\n    let n = user.name;\\n    println!(\\\"{}\\\", n);\\n}\\n\\nfn main() {\\n    let user = User { name: \\\"Ann\\\" };\\n    let n = user.name;\\n    println!(\\\"{}\\\", n);\\n    show(user);\\n}\\n\")"
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
 struct User {
     name: String,
 }

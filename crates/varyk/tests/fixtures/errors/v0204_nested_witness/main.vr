@@ -1,0 +1,15 @@
+enum Shape {
+    Circle(f64),
+    Point,
+}
+
+fn size(shape: Option<Shape>) -> f64 {
+    match shape {
+        Some(Shape::Circle(r)) => r,
+        None => 0.0,
+    }
+}
+
+fn main() {
+    println!("{}", size(Some(Shape::Point)));
+}

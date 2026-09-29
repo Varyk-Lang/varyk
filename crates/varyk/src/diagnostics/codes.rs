@@ -61,6 +61,10 @@ pub const V0206: &str = "V0206";
 /// A value whose type cannot be worked out where it is written (`None`,
 /// an empty `vec![]`, `Ok`, `Err`); the type must be written.
 pub const V0207: &str = "V0207";
+/// A value that must be used where it is made: an `Option` holding part of
+/// a stored value (`get`) stored, passed, returned, used with `?`, or
+/// given any method (M4 spec 2.8).
+pub const V0208: &str = "V0208";
 /// Mutation through a non-`mut` parameter.
 pub const V0300: &str = "V0300";
 /// Assignment to an immutable `let` binding.
@@ -79,6 +83,8 @@ pub const V0306: &str = "V0306";
 /// A place changed or given away while another name for part of it is
 /// still used later.
 pub const V0307: &str = "V0307";
+/// A function returning part of more than one parameter (M4 spec 3.1).
+pub const V0308: &str = "V0308";
 /// The package's edition is not 2024.
 pub const V0400: &str = "V0400";
 /// `workspace = true` in the manifest, or a target-specific dependency
@@ -97,3 +103,38 @@ pub const V0403: &str = "V0403";
 /// first (spec 5). An error or warning in a copied `.rs` module is the
 /// user's own Rust and is not this code: it passes through at their file.
 pub const V0900: &str = "V0900";
+
+/// Every code, the syntax codes first, in order: what the reference test
+/// checks `docs/language.md` against.
+pub const ALL: &[&str] = &[
+    V0001, V0002, V0003, V0010, V0011, V0012, V0100, V0101, V0102, V0103, V0104, V0105, V0106,
+    V0107, V0108, V0109, V0110, V0111, V0200, V0201, V0202, V0203, V0204, V0205, V0206, V0207,
+    V0208, V0300, V0301, V0302, V0303, V0304, V0305, V0306, V0307, V0308, V0400, V0401, V0402,
+    V0403, V0900,
+];
+
+#[cfg(test)]
+mod tests {
+    use super::ALL;
+
+    /// `ALL` names every `pub const` of this file and every code of its
+    /// `pub use` line, and nothing else.
+    #[test]
+    fn all_lists_every_code_of_this_file() {
+        let text = include_str!("codes.rs");
+        let mut expected: Vec<&str> = Vec::new();
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("pub use varyk_syntax::{") {
+                let names = rest.trim_end_matches("};");
+                expected.extend(names.split(", "));
+            } else if let Some((name, _)) = line
+                .strip_prefix("pub const ")
+                .and_then(|rest| rest.split_once(':'))
+                .filter(|(name, _)| *name != "ALL")
+            {
+                expected.push(name);
+            }
+        }
+        assert_eq!(ALL, expected.as_slice());
+    }
+}

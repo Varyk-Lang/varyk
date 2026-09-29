@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: this value is made right here, but looking inside the result of this call needs a value stored in a name, because the names the pattern makes are parts of it; store it with `let` first, then look inside that
+ --> crates/varyk/tests/fixtures/errors/v0001_get_on_a_call_result/main.vr:6:25
+  |
+6 |     if let Some(line) = lines().get(1) {
+  |                         ^^^^^^^ this value is made right here, but looking inside the result of this call needs a value stored in a name, because the names the pattern makes are parts of it; store it with `let` first, then look inside that
+  |
+  = note: the names a pattern binds inside this `Option` are other names for parts of the value it is called on, and Varyk only lets them name parts of a value stored in a `let`

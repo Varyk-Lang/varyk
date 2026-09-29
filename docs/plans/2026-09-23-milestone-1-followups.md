@@ -21,7 +21,8 @@ rule, the reserved names, and the `.clone()` fix-it for V0304.
 
 ## Diagnostics wording
 
-- `/* */`, `1e5`, `1u8`, and `as` get generic messages.
+- `/* */`, `1e5`, and `1u8` get generic messages. (`as` is a real
+  expression since milestone 4.)
 - When a mixed-text `if` is passed to a `mut string` parameter, the
   "not changeable" check is skipped for the whole argument, so a three-way
   `if` with two read-only parameters reports one error instead of two. The
@@ -82,8 +83,8 @@ Programs `check` handles wrongly or harshly:
 - `f()?;` where `f` returns a `Result` whose value is itself a `Result`
   drops the inner error with only rustc's `unused_must_use` warning, which
   the generated crate silences.
-- `Ok(x)?` written directly is V0207, since the operand of `?` has no
-  expected type.
+- ~~`Ok(x)?` written directly is V0207~~ (closed in milestone 4: the
+  expected type flows through `?`; only `Err(e)?;` stays V0207).
 - Over-strict, never unsound: a `let mut` once assigned a borrowed place
   keeps that root for the whole function; a `for` over a place holds its
   root, so writing a different field inside a `mut self` method is V0307;

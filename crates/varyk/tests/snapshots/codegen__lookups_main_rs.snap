@@ -1,0 +1,58 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+enum Shape {
+    Circle(f64),
+    Square(f64),
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn area(r: f64) -> f64 {
+    r * r
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn or_zero(o: &Option<i32>) -> i32 {
+    o.unwrap_or(0)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn code(text: &str) -> Result<i32, String> {
+    let parsed: Option<i32> = text.parse::<i32>().ok();
+    let n = parsed.ok_or("not a number".to_string())?;
+    Ok(n)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let words: Vec<String> = ::std::vec!["to".to_string(), "be".to_string(), "or".to_string(), "not".to_string(), "to".to_string(), "be".to_string()];
+    let mut counts: ::std::collections::HashMap<String, i32> = ::std::collections::HashMap::new();
+    for word in &words {
+        let n = counts.get(word.as_str()).copied().unwrap_or(0);
+        counts.insert(word.clone(), n + 1);
+    }
+    ::std::println!("{}", counts.get("to").copied().unwrap_or(0));
+    let lines: Vec<String> = ::std::vec!["first".to_string(), "second".to_string()];
+    if let Some(line) = lines.get(1usize) {
+        ::std::println!("second: {}", line);
+    }
+    let shapes: Vec<Shape> = ::std::vec![Shape::Circle(1.5), Shape::Square(2.0)];
+    match shapes.get(0usize) {
+        Some(Shape::Circle(r)) => {
+            let r = *r;
+            ::std::println!("{}", area(r))
+        }
+        Some(Shape::Square(s)) => {
+            let s = *s;
+            ::std::println!("{}", s)
+        }
+        None => {
+        }
+    }
+    let stored: Option<i32> = Some(4);
+    ::std::println!("{} {}", or_zero(&stored), stored.unwrap_or(1));
+    ::std::println!("{}", code("12").ok().unwrap_or(0));
+}
