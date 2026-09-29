@@ -84,9 +84,9 @@ A Rust developer sees:
 
 An AI coding agent sees:
 
-- Rust syntax, so what a model learned from Rust transfers, minus the parts of
-  Rust that models most often get wrong: which `&` to write at a call site,
-  `&mut` versus `&`, lifetime annotations, `String` versus `&str`;
+- a small language with one way to do each thing, so agent output looks like
+  the code around it and a review is about what the service does;
+- concrete code, with few abstractions to see through;
 - no `unsafe` in the surface language, so every generated program is checked
   by rustc;
 - structured, machine-readable diagnostics with codes and fix-its, so a
@@ -94,8 +94,8 @@ An AI coding agent sees:
 - diagnostics that recognize Rust habits (`&user`, `user: &User`, `String`,
   `<'a>`) and say exactly what to change;
 - a language reference short enough to fit in a prompt;
-- one way to do each thing; `varyk check` for surface errors without invoking
-  cargo, `varyk build` for the full check.
+- `varyk check` for surface errors without invoking cargo, `varyk build` for
+  the full check.
 
 Someone writing their first program sees:
 
@@ -862,7 +862,7 @@ Recorded, deliberately unanswered.
 | Concurrency | Rust async, JavaScript surface, built-in runtime | ecosystem is already async |
 | License | MIT or Apache-2.0 | Rust ecosystem convention |
 | Learnability | designed to be learnable without a programming background; plain-word diagnostics | the audience Varyk is meant to grow, not only Rust or JavaScript developers |
-| AI agents | first-class writers, humans win on conflicts | Rust knowledge transfers; the removed syntax is where models fail; structured diagnostics close the loop |
+| AI agents | first-class writers, humans win on conflicts | agents already write good code and the slow part is reviewing it; a small, concrete language with one way to do each thing keeps agent output reviewable, rustc checks its safety, and structured diagnostics close the loop |
 | Milestone 2 scope | language core only; packages, closures, and tooling later (2026-09-25) | four independent areas do not fit one MVP; the full log is section 9 of `2026-09-25-milestone-2-design.md` |
 | String copy | `s.clone()`, strings only (2026-09-25) | Rust's own spelling; the cost is visible at the call |
 | Borrowed returns | deferred to milestone 4; `.clone()` is the milestone 2 answer (2026-09-25) | a performance feature, not a capability; kept out of the MVP |

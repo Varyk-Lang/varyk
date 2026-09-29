@@ -107,7 +107,7 @@ generated Rust have no stability guarantee before 1.0.
 | Concurrency | Rust async, JavaScript surface, built-in runtime | the Rust ecosystem is already async |
 | License | MIT or Apache-2.0 | Rust ecosystem convention |
 | Learnability | designed to be learnable by a developer building services who has never written Rust; plain-word diagnostics | backend developers coming from Go, TypeScript, or Python come first, then developers coming from Rust, then AI agents |
-| AI agents | first-class writers, humans win on conflicts | Rust knowledge transfers; the removed syntax is where models fail; structured diagnostics close the loop |
+| AI agents | first-class writers, humans win on conflicts | agents already write good code and the slow part is reviewing it; a small, concrete language with one way to do each thing keeps agent output reviewable, rustc checks its safety, and structured diagnostics close the loop |
 | Milestone 2 scope | language core only; packages, closures, and tooling later | four independent areas do not fit one MVP; a real program needs enums and collections before it needs dependencies |
 | MVP cuts | borrowed returns, struct variants, nested and literal patterns, `Option`/`Result` methods, most `Vec` and `string` methods, `..=`, `?` on `Option`, and field `pub` (added in milestone 3) deferred | no example needs them; `match` is the one way to look inside an `Option` or `Result`; one-level patterns make exhaustiveness exact |
 | String copy | `s.clone()`, strings only | Rust's own spelling; the cost is visible at the call; no implicit clone anywhere |
