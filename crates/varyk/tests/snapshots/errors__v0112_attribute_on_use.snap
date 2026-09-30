@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[skip]` cannot go on a `use` line
+ --> crates/varyk/tests/fixtures/errors/v0112_attribute_on_use/main.vr:3:1
+  |
+3 | #[skip]
+  | ^^^^^^^ `#[skip]` cannot go on a `use` line
+  |
+  = note: `#[skip]` goes before a struct field

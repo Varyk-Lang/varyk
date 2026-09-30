@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[test]` takes no value
+ --> crates/varyk/tests/fixtures/errors/v0112_test_with_value/main.vr:1:1
+  |
+1 | #[test(1)]
+  | ^^^^^^^^^^ `#[test]` takes no value
+  |
+  = note: write `#[test]`

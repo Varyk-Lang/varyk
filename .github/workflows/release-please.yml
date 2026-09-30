@@ -33,6 +33,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Publish varyk-std
+        run: cargo publish -p varyk-std
+
       - name: Publish varyk-syntax
         run: cargo publish -p varyk-syntax
 

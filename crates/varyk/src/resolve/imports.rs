@@ -15,8 +15,9 @@ use crate::types::Ty;
 
 use super::signatures::Mapper;
 use super::{
-    Callee, DropCause, EnumDef, EnumId, FieldDef, ImportedFnId, ImportedSig, Module, ModuleId,
-    ModuleKind, StructDef, StructId, Symbols, Unusable, UserType, VariantDef, VariantFieldsDef,
+    Callee, DropCause, EnumDef, EnumId, FieldAttrs, FieldDef, ImportedFnId, ImportedSig, Module,
+    ModuleId, ModuleKind, StructDef, StructId, Symbols, Unusable, UserType, VariantDef,
+    VariantFieldsDef,
 };
 
 /// Marks the enums an `impl Drop` in any `.rs` file is for (see
@@ -234,6 +235,7 @@ pub(super) fn register(
                     ty,
                     is_pub: field.vis == FieldVis::Pub,
                     unusable,
+                    attrs: FieldAttrs::default(),
                     span: Span::new(file, field.span.start as u32, field.span.end as u32),
                 }
             })
@@ -304,6 +306,7 @@ pub(super) fn register(
                 VariantDef {
                     name: v.name,
                     fields: VariantFieldsDef::Tuple(payload),
+                    rename: None,
                 }
             })
             .collect();

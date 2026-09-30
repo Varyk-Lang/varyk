@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0404]: `Cargo.lock` holds an older `varyk-std` than this compiler
+ --> crates/varyk/tests/fixtures/errors/v0404_std_stale_lock/Cargo.toml:9:1
+  |
+9 | varyk-std = "[version]"
+  | ^^^^^^^^^ `Cargo.lock` holds an older `varyk-std` than this compiler
+  |
+  = note: run `cargo update -p varyk-std`

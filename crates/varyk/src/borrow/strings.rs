@@ -447,7 +447,9 @@ impl Flows<'_> {
                     self.owned_slot(value);
                 }
             }
-            HirExprKind::Unary { operand, .. } | HirExprKind::Cast { expr: operand, .. } => {
+            HirExprKind::Unary { operand, .. }
+            | HirExprKind::Cast { expr: operand, .. }
+            | HirExprKind::Assert { cond: operand, .. } => {
                 self.expr(operand);
             }
             HirExprKind::Binary { lhs, rhs, .. } => {
@@ -462,7 +464,9 @@ impl Flows<'_> {
                     self.block(else_);
                 }
             }
-            HirExprKind::Println { args, .. } | HirExprKind::Format { args, .. } => {
+            HirExprKind::Println { args, .. }
+            | HirExprKind::Log { args, .. }
+            | HirExprKind::Format { args, .. } => {
                 for arg in args {
                     self.expr(arg);
                 }

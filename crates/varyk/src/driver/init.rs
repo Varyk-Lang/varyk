@@ -57,9 +57,10 @@ pub fn files(name: &str, lib: bool) -> Vec<(PathBuf, String)> {
     files
 }
 
-/// `Cargo.toml`: `name`, version `0.1.0`, edition 2024, an empty
-/// `[dependencies]`, and no `[workspace]` table (spec 2.5, so plain
-/// `cargo build` never treats the package as its own workspace root).
+/// `Cargo.toml`: `name`, version `0.1.0`, edition 2024, `[dependencies]`
+/// with `varyk-std` at the compiler's full version (M5a spec 5.2), and no
+/// `[workspace]` table (spec 2.5, so plain `cargo build` never treats the
+/// package as its own workspace root).
 fn cargo_toml(name: &str) -> String {
     format!(
         "[package]\n\
@@ -67,7 +68,9 @@ fn cargo_toml(name: &str) -> String {
          version = \"0.1.0\"\n\
          edition = \"2024\"\n\
          \n\
-         [dependencies]\n"
+         [dependencies]\n\
+         varyk-std = \"{}\"\n",
+        env!("CARGO_PKG_VERSION")
     )
 }
 

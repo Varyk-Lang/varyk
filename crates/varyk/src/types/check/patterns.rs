@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use varyk_syntax::{Block, Expr, Ident, Literal, MatchArm, Path, Pattern, Span};
 
 use super::{
-    FnChecker, Scope, exhaustive, expr_diverges, int_range, is_builtin_variant, opaque_variant,
+    FnChecker, Scope, exhaustive, expr_diverges, is_builtin_variant, opaque_variant,
     unfinished_chain,
 };
 use crate::diagnostics::{Diagnostic, codes};
@@ -743,7 +743,7 @@ impl FnChecker<'_> {
         kind: IntKind,
         span: Span,
     ) -> Option<i128> {
-        let (min, max) = int_range(kind);
+        let (min, max) = kind.range();
         let value = text
             .replace('_', "")
             .parse::<u128>()

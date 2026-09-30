@@ -1,0 +1,36 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+enum Color {
+    Red,
+    Blue,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct P {
+    s: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn name() -> String {
+    "ann".to_string()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[test]
+fn checks() {
+    let p = P { s: "ann".to_string() };
+    ::std::assert!(p.s == "ann", "assertion failed at test.vr:19");
+    match (&(name()), &(p.s)) { (varyk_left, varyk_right) => ::std::assert!(*varyk_left == *varyk_right, "assertion failed at test.vr:20: left is {}, right is {}", varyk_left, varyk_right) };
+    match (&(p.s), &("ann")) { (varyk_left, varyk_right) => ::std::assert!(*varyk_left == *varyk_right, "assertion failed at test.vr:21: left is {}, right is {}", varyk_left, varyk_right) };
+    match (&(Color::Red), &(Color::Red)) { (varyk_left, varyk_right) => ::std::assert!(*varyk_left == *varyk_right, "assertion failed at test.vr:22") };
+    match (&(1 + 1), &(2)) { (varyk_left, varyk_right) => ::std::assert!(*varyk_left == *varyk_right, "assertion failed at test.vr:23: left is {}, right is {}", varyk_left, varyk_right) };
+}

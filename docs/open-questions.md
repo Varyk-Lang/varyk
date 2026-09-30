@@ -10,7 +10,8 @@ Recorded, deliberately unanswered.
   Rust.
 - Should mutation be inferred from the body instead of declared on parameters?
 - What syntax should explicit ownership transfer use for Varyk-declared
-  functions? `move` is a candidate. The async runtime decision depends on it.
+  functions? `move` is a candidate. The async runtime decision depends on it. Moved
+  to 5b1.
 - How should owned versus borrowed return values be expressed and inferred?
   Answered in milestone 4: inferred from the body, never written; every
   return is new, or every return is part of one read-only parameter.
@@ -24,13 +25,17 @@ Recorded, deliberately unanswered.
 - How should Rust traits, generics, and attributes map into Varyk while
   keeping Go-like simplicity?
 - Should serde derivation be automatic for every struct, or declared with
-  attribute syntax? Milestone 5 (batteries) is gated on this.
+  attribute syntax? Answered in milestone 5a: derived by the compiler only
+  for the types a `json` or `env` call reaches; the attributes adjust
+  names, defaults, and skipping, never whether to derive.
 - Multi-threaded or current-thread async runtime, and how do `Send` and `Sync`
-  failures surface to a writer who never sees those bounds?
+  failures surface to a writer who never sees those bounds? Moved to 5b1.
 - Which Rust spellings, such as `&x` at a call site, should be accepted with a
   warning as a transition aid rather than rejected? Milestone 1 rejects them
   with a fix-it.
 - What error-handling ergonomics beyond `Result` and `?` are worth adding?
+  Partly answered in 5a: one built-in `Error` with a message. Whether it
+  should carry a kind or a cause is open, below.
 - Should Rust enums and generic types from `.rs` modules be imported
   automatically, as structs will be in milestone 3? Half-answered in
   milestone 3: enums are imported automatically; generic types remain open.
@@ -59,9 +64,11 @@ Recorded, deliberately unanswered.
   of built-in calls.
 - Should serde derivation follow milestone 4's rule for `Clone` and
   `PartialEq`, automatic wherever the fields allow, or be declared? The
-  serde question above, with milestone 4 as an input.
+  serde question above, with milestone 4 as an input. Answered in 5a as
+  above.
 - Should `parse` return a `Result` once milestone 5 has a shared error
-  type, so `?` works on it directly? Milestone 4 returns an `Option`.
+  type, so `?` works on it directly? Milestone 4 returned an `Option`.
+  Answered in 5a: yes, `parse` returns `Result<T, Error>`.
 - Should an `Option` of a borrowed value ever be a first-class value, so
   `get` and `find` could be stored and passed? Milestone 4 opens it only in
   the head of a `match`, `if let`, or `while let`, and copies a number or
@@ -72,3 +79,11 @@ Recorded, deliberately unanswered.
   added without a compiler change and a facade author can declare shapes
   the importer cannot infer? The milestone-4 spec (section 2.7) says why the
   table exists; where it lives is a later choice.
+- Should JSON support enums with data, and in which shape? Milestone 5a
+  refuses them and points to a `type` field written explicitly.
+- Should `Error` carry a kind or a cause, and should other error types
+  convert into it automatically at `?`? Milestone 5a has a message only,
+  and no conversions.
+- Should Varyk grow more attributes, and should they ever be namespaced?
+  Milestone 5a's four are unprefixed because only the compiler defines
+  attributes.

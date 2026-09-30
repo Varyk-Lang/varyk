@@ -13,8 +13,8 @@ use varyk_syntax::{BinaryOp, UnaryOp};
 use super::rust::{item_path, rust_type, struct_path};
 use crate::builtins::{Owner, Receiver, ResultKind, Shape};
 use crate::hir::{
-    HirArm, HirBlock, HirExpr, HirExprKind, HirFunction, HirLiteral, HirPattern, HirProgram,
-    LocalId, LocalKind, MethodRef, StringRepr, VariantRef, declared_inside, field_root,
+    AssertKind, HirArm, HirBlock, HirExpr, HirExprKind, HirFunction, HirLiteral, HirPattern,
+    HirProgram, LocalId, LocalKind, MethodRef, StringRepr, VariantRef, declared_inside, field_root,
     is_block_like, is_looked_into, leaves, matched_in_place, rooted_argument,
 };
 use crate::resolve::{Callee, ModuleId, UserType, VariantFieldsDef};
@@ -354,7 +354,14 @@ impl<'a> FnEmitter<'a> {
             HirExprKind::String(text) => format!("\"{text}\""),
             HirExprKind::Local(id) => self.local_name(*id).to_string(),
             HirExprKind::Call { callee, args, .. } => {
-                let (path, modes) = self.callee(*callee);
+                let (mut path, modes) = self.callee(*callee);
+                // `json::parse` and `env::parse` name the type they read (M5a spec 7.5).
+                if let (Callee::Builtin(id), Ty::Result(read, _)) = (callee, &expr.ty) {
+                    if matches!(id.get().owner, Owner::Json | Owner::Env) {
+                        let read = rust_type(self.program, read, self.module);
+                        path = format!("{path}::<{read}>");
+                    }
+                }
                 format!("{path}({})", self.args(args, &modes, indent))
             }
             HirExprKind::MethodCall {
@@ -392,42 +399,22 @@ impl<'a> FnEmitter<'a> {
                 format!("{op}{}", self.operand(operand, None, Need::Value, indent))
             }
             HirExprKind::Binary { op, lhs, rhs } => {
-                // The operands of `==` and `!=` on a struct, an enum, or a
-                // container are brought to one reference depth (M4 spec
-                // 5): both borrowed when either already is a reference or
-                // is block-like (read by reference, so no branch is
-                // moved), else both as they are, which Rust compares in
-                // place without moving.
-                let by_ref = |operand: &HirExpr| {
-                    is_block_like(operand) || matches!(self.have(operand), Have::Ref { .. })
-                };
-                let shared = lhs.ty.is_compound() && (by_ref(lhs) || by_ref(rhs));
-                // String operands (of `==` and `!=`) are normalized to
-                // `&str` only as needed: a `String` and a `&str` compare
-                // in any mix, a `&String` or a block-like one does not.
-                let need = |operand: &HirExpr| {
-                    if shared {
-                        Need::Shared { binding: false }
-                    } else if operand.ty != Ty::String {
-                        Need::Value
-                    } else if is_block_like(operand)
-                        || matches!(self.have(operand), Have::Ref { .. })
-                    {
-                        Need::Str
-                    } else {
-                        Need::AsIs
-                    }
-                };
-                format!(
-                    "{} {} {}",
-                    self.operand(lhs, Some((*op, false)), need(lhs), indent),
-                    op.as_str(),
-                    self.operand(rhs, Some((*op, true)), need(rhs), indent)
-                )
+                let (lhs, rhs) = self.binary_operands(*op, lhs, rhs, indent);
+                format!("{lhs} {} {rhs}", op.as_str())
             }
+            HirExprKind::Assert {
+                cond,
+                location,
+                kind,
+            } => self.assert_call(cond, location, *kind, indent),
             HirExprKind::Println { format, args } => {
                 self.format_call("println", format, args, indent)
             }
+            HirExprKind::Log {
+                level,
+                format,
+                args,
+            } => self.log_call(level, format, args, indent),
             HirExprKind::Format { format, args } => {
                 self.format_call("format", format, args, indent)
             }
@@ -767,8 +754,8 @@ impl<'a> FnEmitter<'a> {
     /// has `clone` spelled `.to_string()`, since cloning a `&str` copies
     /// only the reference (spec 3.5). A read `string` argument is a
     /// `&str`, a read `T` a `&T`, and every other argument its value (M4
-    /// spec 2.7); `parse` is `.parse::<T>().ok()`, and `contains` on a
-    /// `Vec<string>` compares each element with the argument at one
+    /// spec 2.7); `parse` is `::varyk_std::parse::<T>(&s)`, and `contains`
+    /// on a `Vec<string>` compares each element with the argument at one
     /// reference depth, since `Vec<String>::contains` wants a `&String`.
     /// `get` on a Copy payload is followed by `.copied()`, and an `if` or
     /// block receiver of a taking row is taken by value.
@@ -873,10 +860,19 @@ impl<'a> FnEmitter<'a> {
             // a `string` receiver can be a `&str` (`is_str`) and reach this
             // arm.
             ("clone", _) if is_str => format!("{receiver}.to_string()"),
-            ("parse", Ty::Option(read)) => format!(
-                "{receiver}.parse::<{}>().ok()",
-                rust_type(self.program, read, self.module)
-            ),
+            // `varyk-std`'s `parse`, whose error says what the text is not
+            // (M5a spec 2.8); it reads a `&str`.
+            ("parse", Ty::Result(read, _)) => {
+                let text = if is_str {
+                    receiver
+                } else {
+                    format!("&{receiver}")
+                };
+                format!(
+                    "::varyk_std::parse::<{}>({text})",
+                    rust_type(self.program, read, self.module)
+                )
+            }
             _ => format!("{receiver}.{name}({args})"),
         }
     }
@@ -900,18 +896,112 @@ impl<'a> FnEmitter<'a> {
         )
     }
 
+    /// The operands of `lhs op rhs` as written around `op`: those of
+    /// `==` and `!=` brought to a form Rust compares (M4 spec 5).
+    fn binary_operands(
+        &self,
+        op: BinaryOp,
+        lhs: &HirExpr,
+        rhs: &HirExpr,
+        indent: usize,
+    ) -> (String, String) {
+        // The operands of `==` and `!=` on a struct, an enum, or a
+        // container are brought to one reference depth (M4 spec 5): both
+        // borrowed when either already is a reference or is block-like
+        // (read by reference, so no branch is moved), else both as they
+        // are, which Rust compares in place without moving.
+        let by_ref = |operand: &HirExpr| {
+            is_block_like(operand) || matches!(self.have(operand), Have::Ref { .. })
+        };
+        let shared = lhs.ty.is_compound() && (by_ref(lhs) || by_ref(rhs));
+        // String operands (of `==` and `!=`) are normalized to `&str`
+        // only as needed: a `String` and a `&str` compare in any mix, a
+        // `&String` or a block-like one does not.
+        let need = |operand: &HirExpr| {
+            if shared {
+                Need::Shared { binding: false }
+            } else if operand.ty != Ty::String {
+                Need::Value
+            } else if is_block_like(operand) || matches!(self.have(operand), Have::Ref { .. }) {
+                Need::Str
+            } else {
+                Need::AsIs
+            }
+        };
+        (
+            self.operand(lhs, Some((op, false)), need(lhs), indent),
+            self.operand(rhs, Some((op, true)), need(rhs), indent),
+        )
+    }
+
+    /// `assert(cond)` or `assert_eq(a, b)` (M5a spec 7.5) as
+    /// `::std::assert!`, by its full path like every std macro, with a
+    /// message naming the Varyk `location`. `assert_eq` evaluates each
+    /// operand once, before anything else, as Rust's own `assert_eq!`
+    /// does: it matches on references to both and compares what they
+    /// point to, written as `==` writes it; the message shows both values
+    /// when they print with `{}` (Varyk types have no `Debug`).
+    fn assert_call(
+        &self,
+        cond: &HirExpr,
+        location: &str,
+        kind: AssertKind,
+        indent: usize,
+    ) -> String {
+        let message = format_literal(&format!("assertion failed at {location}"));
+        let (AssertKind::Eq { show }, HirExprKind::Binary { op, lhs, rhs }) = (kind, &cond.kind)
+        else {
+            let cond = self.expr(cond, Need::Value, indent);
+            return format!("::std::assert!({cond}, \"{message}\")");
+        };
+        let (lhs, rhs) = self.binary_operands(*op, lhs, rhs, indent);
+        let shown = if show {
+            ": left is {}, right is {}\", varyk_left, varyk_right"
+        } else {
+            "\""
+        };
+        format!(
+            "match (&({lhs}), &({rhs})) {{ (varyk_left, varyk_right) => \
+             ::std::assert!(*varyk_left == *varyk_right, \"{message}{shown}) }}"
+        )
+    }
+
     /// `println!` or `format!` (`name`): every argument as it is, since
     /// the format machinery borrows it. Every std macro is written by its
     /// full path, `::std::println!`: a bare name could be a
     /// `#[macro_export]` macro of a `.rs` module of the package.
     fn format_call(&self, name: &str, format: &str, args: &[HirExpr], indent: usize) -> String {
-        let mut out = format!("::std::{name}!(\"{format}\"");
+        let mut out = format!("{}!(\"{format}\"", macro_path(name));
         for arg in args {
             out.push_str(", ");
             out.push_str(&self.expr(arg, Need::AsIs, indent));
         }
         out.push(')');
         out
+    }
+
+    /// `log::<level>(..)` (M5a spec 2.6) as tracing's macro. tracing reads
+    /// its arguments only when the level is on, while a Varyk call reads
+    /// them as `println!` does, whatever `LOG` says: each argument is
+    /// evaluated first, once, by matching on references to all of them,
+    /// and the macro formats what they point to.
+    fn log_call(&self, level: &str, format: &str, args: &[HirExpr], indent: usize) -> String {
+        let name = format!("tracing::{level}");
+        if args.is_empty() {
+            return self.format_call(&name, format, args, indent);
+        }
+        let values: Vec<String> = args
+            .iter()
+            .map(|arg| format!("&({})", self.expr(arg, Need::AsIs, indent)))
+            .collect();
+        let names: Vec<String> = (0..args.len()).map(|i| format!("varyk_{i}")).collect();
+        format!(
+            "match ({},) {{ ({},) => {}!(\"{format}\", {}) }}",
+            values.join(", "),
+            names.join(", "),
+            macro_path(&name),
+            names.join(", ")
+        )
     }
 
     /// An operator operand, parenthesized when it is a binary expression
@@ -1029,8 +1119,27 @@ impl<'a> FnEmitter<'a> {
             Callee::Builtin(id) if id.get().owner == Owner::HashMap => {
                 (format!("::std::collections::{}", id.path()), id.modes())
             }
+            // Absolute, so that no module of the program named `varyk_std`
+            // can shadow it (M5a spec 7.5).
+            Callee::Builtin(id)
+                if matches!(
+                    id.get().owner,
+                    Owner::Error | Owner::Json | Owner::Env | Owner::Log
+                ) =>
+            {
+                (format!("::varyk_std::{}", id.path()), id.modes())
+            }
             Callee::Builtin(id) => (id.path(), id.modes()),
         }
+    }
+}
+
+/// The full path of the macro `name`: `tracing::info` lives in
+/// `varyk-std`, the others in `std`.
+fn macro_path(name: &str) -> String {
+    match name.strip_prefix("tracing::") {
+        Some(level) => format!("::varyk_std::tracing::{level}"),
+        None => format!("::std::{name}"),
     }
 }
 
@@ -1068,4 +1177,11 @@ fn precedence(op: BinaryOp) -> u8 {
         BinaryOp::Add | BinaryOp::Sub => 4,
         BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => 5,
     }
+}
+
+/// `text` as the inside of a Rust string literal used as a format string:
+/// escaped as Rust writes it, with `{` and `}` doubled.
+fn format_literal(text: &str) -> String {
+    let escaped = format!("{:?}", text.replace('{', "{{").replace('}', "}}"));
+    escaped[1..escaped.len() - 1].to_string()
 }

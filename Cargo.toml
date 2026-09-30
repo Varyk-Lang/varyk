@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/varyk-syntax", "crates/varyk"]
+members = ["crates/varyk-syntax", "crates/varyk", "crates/varyk-std"]
 # So plain `cargo build` on a package `varyk init` wrote under either
 # directory (test fixture copies land in `target/`; `examples/packages`
 # holds committed example packages) never "believes it's in a workspace":

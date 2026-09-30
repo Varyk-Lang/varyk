@@ -16,6 +16,10 @@ use crate::error::{FixIt, SyntaxError, V0001, V0002};
 use crate::span::{FileId, Span};
 use crate::token::{Token, TokenKind};
 
+/// The message for a `#` where no attribute can go (M5a spec 2.2).
+pub(super) const STRAY_HASH: &str = "an attribute (`#[..]`) can only go before a struct field, an enum variant, or a \
+     top-level function";
+
 /// Parses a whole token stream for a single file into a [`Program`] plus
 /// every syntax error found. On the first `V0002` (or an unrecoverable
 /// `V0001`, such as a reserved keyword where an item is expected), parsing
@@ -182,14 +186,24 @@ impl<'a> Parser<'a> {
             .push(SyntaxError::new(span, code, message).with_fix_it(fix_it));
     }
 
+    /// Records `V0002` at the current token, "expected `what`", or
+    /// [`STRAY_HASH`] when that token is a `#`.
+    fn push_expected(&mut self, what: &str) {
+        let span = self.current_span();
+        if self.peek() == Some(&TokenKind::Hash) {
+            self.push_error(V0002, span, STRAY_HASH);
+        } else {
+            self.push_error(V0002, span, format!("expected {what}"));
+        }
+    }
+
     /// Consumes the current token if its kind equals `expected`, recording
     /// `V0002` and returning `Err` otherwise.
     fn expect(&mut self, expected: TokenKind, what: &str) -> Result<Token, ()> {
         if self.peek() == Some(&expected) {
             Ok(self.bump().expect("peek just confirmed a token is present"))
         } else {
-            let span = self.current_span();
-            self.push_error(V0002, span, format!("expected {what}"));
+            self.push_expected(what);
             Err(())
         }
     }
@@ -274,8 +288,7 @@ impl<'a> Parser<'a> {
                 })
             }
             _ => {
-                let span = self.current_span();
-                self.push_error(V0002, span, format!("expected {what}"));
+                self.push_expected(what);
                 Err(())
             }
         }

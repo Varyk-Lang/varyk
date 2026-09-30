@@ -8,8 +8,10 @@ project coherent, and where to find everything else.
 
 Varyk is an experimental programming language for backend services that
 compiles to Rust. The compiler is a Rust workspace: `crates/varyk-syntax`
-(lexer, parser, AST) and `crates/varyk` (diagnostics, resolver, type
-checker, borrow analysis, Rust backend, cargo driver, CLI). The design lives
+(lexer, parser, AST), `crates/varyk` (diagnostics, resolver, type
+checker, borrow analysis, Rust backend, cargo driver, CLI), and
+`crates/varyk-std` (the runtime that generated programs call: errors,
+JSON, configuration, logging). The design lives
 in `docs/specs/`; read the current spec before changing what the language
 accepts or how it compiles.
 
@@ -83,7 +85,8 @@ concern per commit: squash-merge a single-concern pull request under a
 conventional title, rebase-merge a multi-concern one with a conventional
 commit per concern. release-please turns the history on `main` into a
 release pull request; merging that is the release decision: it tags
-`varyk-vX.Y.Z` and `varyk-syntax-vX.Y.Z` and publishes both crates, with no
+`varyk-vX.Y.Z`, `varyk-syntax-vX.Y.Z`, and `varyk-std-vX.Y.Z` and publishes
+the three crates, with no
 further approval. Never create release tags by hand. Details and the
 full prefix table are in `CONTRIBUTING.md`.
 

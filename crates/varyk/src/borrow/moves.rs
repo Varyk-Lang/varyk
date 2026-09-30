@@ -534,7 +534,9 @@ impl<R: Rule> Walker<'_, R> {
                     self.expr(value, Access::Move);
                 }
             }
-            HirExprKind::Unary { operand, .. } | HirExprKind::Cast { expr: operand, .. } => {
+            HirExprKind::Unary { operand, .. }
+            | HirExprKind::Cast { expr: operand, .. }
+            | HirExprKind::Assert { cond: operand, .. } => {
                 self.expr(operand, Access::Read);
             }
             HirExprKind::Binary { lhs, rhs, .. } => {
@@ -609,7 +611,9 @@ impl<R: Rule> Walker<'_, R> {
                 self.block(body, Access::Move);
                 self.closures.pop();
             }
-            HirExprKind::Println { args, .. } | HirExprKind::Format { args, .. } => {
+            HirExprKind::Println { args, .. }
+            | HirExprKind::Log { args, .. }
+            | HirExprKind::Format { args, .. } => {
                 for arg in args {
                     self.expr(arg, Access::Read);
                 }

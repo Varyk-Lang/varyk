@@ -481,8 +481,7 @@ impl<'a> Parser<'a> {
             }
 
             _ => {
-                let span = self.current_span();
-                self.push_error(V0002, span, "expected an expression");
+                self.push_expected("an expression");
                 Err(())
             }
         }

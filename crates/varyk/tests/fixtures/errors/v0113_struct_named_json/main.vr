@@ -1,0 +1,11 @@
+struct json {
+    id: i32,
+}
+
+impl json {
+    fn parse(self) -> i32 {
+        self.id
+    }
+}
+
+fn main() {}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[rename]` cannot go on an enum
+ --> crates/varyk/tests/fixtures/errors/v0112_attribute_on_enum/main.vr:1:1
+  |
+1 | #[rename("role")]
+  | ^^^^^^^^^^^^^^^^^ `#[rename]` cannot go on an enum
+  |
+  = note: `#[rename]` goes before a struct field or a variant that carries no data

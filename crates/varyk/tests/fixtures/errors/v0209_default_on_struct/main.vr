@@ -1,0 +1,10 @@
+struct Address {
+    city: string,
+}
+
+struct User {
+    #[default("x")]
+    address: Address,
+}
+
+fn main() {}

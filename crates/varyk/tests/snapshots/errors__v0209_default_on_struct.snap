@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: `#[default]` cannot go on a field of type `Address`
+ --> crates/varyk/tests/fixtures/errors/v0209_default_on_struct/main.vr:6:5
+  |
+6 |     #[default("x")]
+  |     ^^^^^^^^^^^^^^^ `#[default]` cannot go on a field of type `Address`
+  |
+  = note: a default goes on a field that is a number, a `string`, or a `bool`

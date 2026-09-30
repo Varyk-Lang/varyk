@@ -136,7 +136,7 @@ generated Rust have no stability guarantee before 1.0.
 | Items | borrowed, copies, or owned, decided at the source and by `map`; `collect` needs owned or copies | mirrors `for` and `match` on places and temporaries; a `Vec` of borrowed values has no Varyk type |
 | Look-inside results | `get` and `find` on borrowed items open only in a `match`/`if let`/`while let` head; on a number or `bool` payload they are a plain `Option` of a copy | an `Option<&T>` has no Varyk spelling; the bindings are aliases exactly as in a `match` on what the payload is part of, so nothing new is needed; numbers copy everywhere else |
 | Number items | a chain over stored numbers or `bool` copies them at the source | the same copy `for` and `match` already make; downstream closures take plain values |
-| `parse` | returns `Option<T>`, `T` from the expected type | Rust's error type has no Varyk name and no more information; `ok_or` gives the `Result` |
+| `parse` | returns `Option<T>`, `T` from the expected type (amended in 5a: returns `Result<T, Error>`) | Rust's error type has no Varyk name and no more information; `ok_or` gives the `Result` |
 | `unwrap`, `expect` | never added, a principle rather than a cut | a call that stops the program on an absent value defeats the purpose of a language for services; `match`, `if let`, `?`, `unwrap_or` cover every use |
 | Derives | `Clone` and `PartialEq` automatic where every field allows, `Debug` not | zero run-time cost, `.clone()` stays the one visible copy, `==` on enums is everyday code; `{:?}` does not exist |
 | `HashMap` | in the table; `get` and `insert`, no indexing, no direct `for` | Rust's map cannot be assigned through an index; pairs need tuples |
@@ -144,3 +144,17 @@ generated Rust have no stability guarantee before 1.0.
 | Reachability | a useless arm is an error | the check is free once exhaustiveness is exact; rustc's warning is silenced in generated code and an unreachable arm is a bug |
 | Chars | no `char` type, no `chars()` | services split and trim strings; a character type is its own design |
 | Standard calls | a table of declared signatures, never pass-through of unknown Rust methods and never signatures read from `std` | Varyk must know each call's type, receiver mode, borrow, and allocation to write the Rust and keep plain-word errors; `std` signatures need generics and traits to read; a facade is the pass-through |
+| Milestone 5 split (5a) | 5a data, config, logging, tests; 5b1 async; 5b2 HTTP and database | three subsystems; each slice testable on its own |
+| Standard surface | rows in the standard table, `varyk-std` as the implementation | the calls are generic or format-checked, which the importer cannot read; one existing mechanism |
+| Crate access | `varyk-std` reached without a facade; every other crate still through one | the M3 rule stays meaningful; the standard modules are Varyk's own |
+| Names | `json::parse` and `json::stringify` | JavaScript's names; `parse` already means text into a value |
+| Error | one built-in `Error` with a message | `?` across every standard call without conversions, as Go and JavaScript have one error type |
+| Serde derivation | derived only where a `json` or `env` call reaches, per direction | no serde in programs that do not use it; the error lands at the call |
+| Attributes | `#[rename]`, `#[default]`, `#[skip]`, `#[test]`, unprefixed, a fixed list | real APIs need renamed and keyword keys, config needs defaults, secrets need skipping; only the compiler defines attributes |
+| Enums in JSON | unit-only, as strings; data enums refused | a designer writes a `type` field explicitly; no Rust-shaped format leaks into APIs |
+| Configuration | `env::parse` into a struct; environment, then `.env`, then default | Node dotenv's order; one mechanism with JSON; `.env` never written to the process |
+| Logging | four calls in `println!` form on tracing; `LOG`, `LOG_FORMAT=json` | readable in a terminal, ingestible in production, no code change between them |
+| Tests | `#[test]` functions in place; `assert` only in tests | maps to Rust's `#[test]` and `cargo test`; stopping the program is for tests only |
+| Versioning | a version range in `Cargo.toml`, minor and lock checked by `varyk check` | upgrades are `cargo update`; a mismatch is a diagnostic, never a rustc error |
+| Single files | depend on `varyk-std` at the compiler's exact version | there is no manifest to respect |
+| TOML | not in 5a | nothing on the golden path needs it; the same machinery adds it later |

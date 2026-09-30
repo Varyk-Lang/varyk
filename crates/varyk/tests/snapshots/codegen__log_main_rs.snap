@@ -1,0 +1,18 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn work(n: i32) {
+    match (&(n),) { (varyk_0,) => ::varyk_std::tracing::debug!("working on {}", varyk_0) };
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    ::varyk_std::start();
+    let e = ::varyk_std::Error::new("boom".to_string());
+    work(1);
+    ::varyk_std::tracing::info!("started");
+    match (&(1), &(2),) { (varyk_0, varyk_1,) => ::varyk_std::tracing::warn!("{} of {}", varyk_0, varyk_1) };
+    match (&(e),) { (varyk_0,) => ::varyk_std::tracing::error!("failed: {}", varyk_0) };
+}

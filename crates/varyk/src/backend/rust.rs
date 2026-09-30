@@ -12,11 +12,11 @@ use super::rust_expr::{FnEmitter, Need, Repr};
 use super::writer::Writer;
 use super::{Backend, CrateInfo, GeneratedCrate};
 use crate::hir::{
-    HirBlock, HirEnum, HirExprKind, HirForHead, HirFunction, HirModule, HirModuleKind, HirParam,
-    HirProgram, HirStmt, HirStruct, is_place_or_rooted,
+    HirBlock, HirDefault, HirEnum, HirExprKind, HirForHead, HirFunction, HirModule, HirModuleKind,
+    HirParam, HirProgram, HirStmt, HirStruct, is_place_or_rooted,
 };
-use crate::resolve::{ModuleId, StructId, UserType, VariantFieldsDef};
-use crate::types::{Derives, ParamMode, Ty};
+use crate::resolve::{FieldDef, ModuleId, StructId, UserType, VariantFieldsDef};
+use crate::types::{Derives, ParamMode, Serde, Ty};
 use varyk_syntax::Span;
 
 /// The item-level attribute every generated `fn`, `struct`, `enum`,
@@ -194,6 +194,7 @@ fn write_module_items(program: &HirProgram, module: ModuleId, writer: &mut Write
 fn emit_struct(program: &HirProgram, s: &HirStruct, writer: &mut Writer) {
     writer.line(0, ALLOW_ITEM, None);
     write_derives(s.derives, writer);
+    write_serde_derives(s.serde, s.span, writer);
     let vis = if s.is_pub { "pub " } else { "" };
     if s.fields.is_empty() {
         writer.line(0, &format!("{vis}struct {} {{}}", s.name), Some(s.span));
@@ -201,20 +202,97 @@ fn emit_struct(program: &HirProgram, s: &HirStruct, writer: &mut Writer) {
     }
     writer.line(0, &format!("{vis}struct {} {{", s.name), Some(s.span));
     for field in &s.fields {
+        if let Some(line) = field_serde(s, field) {
+            writer.line(1, &line, Some(field.span));
+        }
         let vis = if field.is_pub { "pub " } else { "" };
         let ty = rust_type(program, &field.ty, s.module);
         writer.line(1, &format!("{vis}{}: {ty},", field.name), Some(s.span));
     }
     writer.line(0, "}", None);
+    if !s.serde.deserialize {
+        return;
+    }
+    // The functions behind the `#[default]`s of a read struct, in an
+    // `impl` block beside it (M5a spec 7.5): serde calls each for a
+    // missing key. As associated functions they cannot collide across
+    // types, and no method of the program may start with `varyk_`.
+    let defaults: Vec<(&FieldDef, &HirDefault)> = s
+        .fields
+        .iter()
+        .filter_map(|field| field.attrs.default.as_ref().map(|d| (field, d)))
+        .collect();
+    if defaults.is_empty() {
+        return;
+    }
+    writer.line(0, "", None);
+    writer.line(0, ALLOW_ITEM, None);
+    writer.line(0, &format!("impl {} {{", s.name), None);
+    for (index, (field, default)) in defaults.into_iter().enumerate() {
+        let value = match default {
+            HirDefault::Int(value) => value.to_string(),
+            HirDefault::Float(value) => format!("{value:?}"),
+            // A literal placed into an owned slot: the one allocation the
+            // compiler inserts (M1 §4.3). The text is as written between
+            // the quotes, whose escapes are Rust's too.
+            HirDefault::Str(text) => format!("\"{text}\".to_string()"),
+            HirDefault::Bool(value) => value.to_string(),
+        };
+        let ty = rust_type(program, &field.ty, s.module);
+        if index > 0 {
+            writer.line(0, "", None);
+        }
+        writer.line(
+            1,
+            &format!("fn {}() -> {ty} {{", default_fn(field)),
+            Some(field.span),
+        );
+        writer.line(2, &value, Some(field.span));
+        writer.line(1, "}", None);
+    }
+    writer.line(0, "}", None);
+}
+
+/// The name of the associated function behind a `#[default]` of field
+/// `field`: `varyk_default_<field>`, a prefix no Varyk method may take
+/// (M5a spec 2.10).
+fn default_fn(field: &FieldDef) -> String {
+    format!("varyk_default_{}", field.name)
+}
+
+/// The `#[serde(..)]` line of a field of a struct a `json` call reaches:
+/// `rename`, `skip`, and, when the struct is read, `default`; `None` when
+/// it needs none, or no call reaches the struct (M5a spec 2.2).
+fn field_serde(s: &HirStruct, field: &FieldDef) -> Option<String> {
+    if !s.serde.any() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if field.attrs.skip {
+        parts.push("skip".to_string());
+    } else if let Some(key) = &field.attrs.rename {
+        parts.push(format!("rename = \"{key}\""));
+    }
+    if s.serde.deserialize && field.attrs.default.is_some() {
+        parts.push(format!("default = \"{}::{}\"", s.name, default_fn(field)));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!("#[serde({})]", parts.join(", ")))
 }
 
 fn emit_enum(program: &HirProgram, e: &HirEnum, writer: &mut Writer) {
     writer.line(0, ALLOW_ITEM, None);
     write_derives(e.derives, writer);
+    write_serde_derives(e.serde, e.span, writer);
     let vis = if e.is_pub { "pub " } else { "" };
     writer.line(0, &format!("{vis}enum {} {{", e.name), Some(e.span));
     for variant in &e.variants {
         let name = &variant.name;
+        if let (true, Some(key)) = (e.serde.any(), &variant.rename) {
+            writer.line(1, &format!("#[serde(rename = \"{key}\")]"), Some(e.span));
+        }
         let line = match &variant.fields {
             VariantFieldsDef::Tuple(types) if types.is_empty() => format!("{name},"),
             VariantFieldsDef::Tuple(types) => {
@@ -250,6 +328,24 @@ fn write_derives(derives: Derives, writer: &mut Writer) {
     }
 }
 
+/// The serde derives of a struct or enum a `json` call reaches (M5a spec
+/// 7.5), through `varyk-std`'s serde by its absolute path, so the program
+/// needs no serde of its own; nothing for a type no call reaches.
+fn write_serde_derives(serde: Serde, span: Span, writer: &mut Writer) {
+    let names: Vec<&str> = [
+        (serde.serialize, "::varyk_std::serde::Serialize"),
+        (serde.deserialize, "::varyk_std::serde::Deserialize"),
+    ]
+    .into_iter()
+    .filter_map(|(has, name)| has.then_some(name))
+    .collect();
+    if names.is_empty() {
+        return;
+    }
+    writer.line(0, &format!("#[derive({})]", names.join(", ")), None);
+    writer.line(0, "#[serde(crate = \"::varyk_std::serde\")]", Some(span));
+}
+
 /// The Rust spelling of a value of type `ty`, from `from`. A `string` is
 /// an owned `String` wherever a type is spelled: a field, a payload, a
 /// return, and inside `Option`, `Result`, `Vec`, and `HashMap`.
@@ -282,6 +378,9 @@ pub(super) fn rust_type(program: &HirProgram, ty: &Ty, from: ModuleId) -> String
             "impl ::std::iter::Iterator<Item = {}>",
             rust_type(program, item, from)
         ),
+        // In full, so that no module of the program can shadow it (M5a
+        // spec 7.5).
+        Ty::Error => "::varyk_std::Error".to_string(),
         Ty::Unit => "()".to_string(),
     }
 }
@@ -398,6 +497,10 @@ impl FnEmitter<'_> {
             (ty, None) => format!(" -> {}", rust_type(self.program, ty, self.module)),
         };
         let generics = if lifetime.is_some() { "<'a>" } else { "" };
+        // A test is run by `cargo test`'s harness (M5a spec 7.5).
+        if f.is_test {
+            writer.line(indent, "#[test]", None);
+        }
         writer.line(
             indent,
             &format!(
@@ -407,6 +510,14 @@ impl FnEmitter<'_> {
             ),
             Some(f.span),
         );
+        // A program that logs starts logging first thing (M5a spec 7.5).
+        if self.program.logs
+            && f.owner.is_none()
+            && f.module == self.program.entry
+            && f.name == "main"
+        {
+            writer.line(indent + 1, "::varyk_std::start();", Some(f.span));
+        }
         self.block_after(writer, &f.body, self.return_need(), indent);
     }
 

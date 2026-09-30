@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `varyk_x` starts with `varyk_`
+ --> crates/varyk/tests/fixtures/errors/v0113_varyk_prefix_method/main.vr:6:8
+  |
+6 |     fn varyk_x(self) -> i32 {
+  |        ^^^^^^^ the name `varyk_x` starts with `varyk_`
+  |
+  = note: names starting with `varyk_` are kept for what Varyk adds to the Rust it writes, so this needs another name

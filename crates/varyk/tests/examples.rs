@@ -9,8 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{example_dir, varyk, varyk_with_env};
-use varyk::backend::{Backend, CrateInfo, RustBackend};
+use common::{empty_dir, example_dir, std_config, varyk, varyk_run_with, varyk_with_env};
+use varyk::backend::{Backend, CrateInfo, RustBackend, StdDependency};
 use varyk_syntax::{FileId, SourceFile};
 
 fn stdout_of(output: &Output) -> String {
@@ -165,6 +165,183 @@ fn run_text() {
     );
 }
 
+/// `json::parse` and `json::stringify` (M5a spec 2.4): `#[rename]` on a
+/// field and a variant, a missing `Option` read as `None`, a `#[default]`
+/// used, a `#[skip]` field neither read nor written, and a number out of
+/// range for its type an `Error` printed with `{}`, not a panic.
+#[test]
+fn run_json() {
+    assert_runs(
+        "examples/json.vr",
+        "7 ann member\n2 tags, age 18, nickname: false\n\
+         {\"id\":7,\"userName\":\"ann\",\"role\":\"member\",\"nickname\":null,\"tags\":[\"a\",\"b\"],\"age\":18}\n\
+         error: invalid value: integer `300`, expected u8 at line 1 column 67\n",
+    );
+}
+
+/// `env::parse` (M5a spec 2.5) run in an empty directory, with the
+/// variables the program reads set or removed, and `LOG` and `LOG_FORMAT`
+/// removed, so a tester's own environment cannot change the output. The
+/// field left to its `#[default]` is `timeout_secs`.
+fn run_config_with(set: &[(&str, &str)], remove: &[&str]) -> Output {
+    let program = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/config.vr");
+    let program = program.to_string_lossy().into_owned();
+    let mut removed = vec!["LOG", "LOG_FORMAT"];
+    removed.extend(remove);
+    varyk_run_with(&["run", &program], &empty_dir("config"), set, &removed)
+}
+
+#[test]
+fn run_config() {
+    let output = run_config_with(
+        &[
+            ("PORT", "8080"),
+            ("DB_URL", "postgres://h/db?sslmode=require"),
+            ("MODE", "live"),
+        ],
+        &["TOKEN", "TIMEOUT_SECS"],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(
+        stdout_of(&output),
+        "port 8080\ndatabase postgres://h/db?sslmode=require\nmode live\n\
+         token set: false\ntimeout 30s\n"
+    );
+    assert_eq!(stderr_of(&output), "");
+}
+
+/// A variable that is not set, and a value that does not read, are an
+/// `Error` naming the variable, printed with `{}`.
+#[test]
+fn run_config_reports_what_it_cannot_read() {
+    let output = run_config_with(
+        &[("DB_URL", "x"), ("MODE", "live")],
+        &["PORT", "TOKEN", "TIMEOUT_SECS"],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "error: `PORT` is not set\n");
+    let output = run_config_with(
+        &[("PORT", "abc"), ("DB_URL", "x"), ("MODE", "live")],
+        &["TOKEN", "TIMEOUT_SECS"],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "error: `PORT` is not a number: `abc`\n");
+}
+
+/// The four `log` calls (M5a spec 2.6) with `LOG=debug` and `LOG_FORMAT`
+/// removed: every line on stderr, the time column dropped, and nothing on
+/// stdout.
+#[test]
+fn run_logging() {
+    let program = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/logging.vr");
+    let program = program.to_string_lossy().into_owned();
+    let output = varyk_run_with(
+        &["run", &program],
+        &empty_dir("logging"),
+        &[("LOG", "debug")],
+        &["LOG_FORMAT"],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "");
+    let lines: Vec<String> = stderr_of(&output)
+        .lines()
+        .map(|line| {
+            line.split_once(' ')
+                .map_or("", |(_, rest)| rest)
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "DEBUG starting with 3 workers",
+            "INFO listening on port 8080",
+            "WARN queue is 90 percent full",
+            "ERROR request failed: connection refused",
+        ]
+    );
+}
+
+/// A `log` call reads its arguments once whatever the level, as
+/// `println!` does (M5a spec 2.6): an argument that changes state runs
+/// with `LOG` unset (only `info` and above shown) and with `LOG=debug`.
+#[test]
+fn log_arguments_run_whatever_the_level() {
+    let dir = empty_dir("log-arguments");
+    fs::write(
+        dir.join("main.vr"),
+        "struct Counter { n: i32 }\n\
+         impl Counter { fn bump(mut self) -> i32 { self.n = self.n + 1; self.n } }\n\
+         fn main() {\n    let mut c = Counter { n: 0 };\n    \
+         log::debug(\"bumped to {}\", c.bump());\n    println!(\"n = {}\", c.n);\n}\n",
+    )
+    .expect("write main.vr");
+    for (set, logged) in [
+        (&[][..], ""),
+        (&[("LOG", "debug")][..], "DEBUG bumped to 1"),
+    ] {
+        let removed = if set.is_empty() {
+            vec!["LOG", "LOG_FORMAT"]
+        } else {
+            vec!["LOG_FORMAT"]
+        };
+        let output = varyk_run_with(&["run", "main.vr"], &dir, set, &removed);
+        assert!(output.status.success(), "{}", stderr_of(&output));
+        assert_eq!(stdout_of(&output), "n = 1\n");
+        let stderr = stderr_of(&output);
+        let line = stderr
+            .trim_end()
+            .split_once(' ')
+            .map_or("", |(_, rest)| rest);
+        assert_eq!(line, logged);
+    }
+}
+
+/// `users` (M5a spec 6) run from a copy, as its current directory, so its
+/// committed `.env` is the only source of configuration: every variable it
+/// reads, and `LOG_FORMAT`, is removed from the environment, and `LOG` is
+/// set by the `.env` itself. Stdout is the program's; stderr is the log,
+/// its time column dropped.
+#[test]
+fn run_users() {
+    let dir = example_dir("users");
+    assert!(dir.join(".env").is_file(), "the copy keeps the .env");
+    let output = varyk_run_with(
+        &["run"],
+        &dir,
+        &[],
+        &["PORT", "DB_URL", "LOG", "LOG_FORMAT"],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(
+        stdout_of(&output),
+        "added, 1 in the store\nadded, 2 in the store\nrejected: a user needs a name\n\
+         rejected: unknown variant `Root`, expected `Admin` or `member` at line 1 column 38\n\
+         [{\"id\":1,\"name\":\"ann\",\"role\":\"member\",\"email\":null,\"age\":18},\
+         {\"id\":2,\"name\":\"bo\",\"role\":\"Admin\",\"email\":\"bo@example.com\",\"age\":41}]\n"
+    );
+    let lines: Vec<String> = stderr_of(&output)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.split_once(' ')
+                .map_or("", |(_, rest)| rest)
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "INFO serving on port 8080 with postgres://localhost/users?sslmode=disable",
+            "INFO now 1 users",
+            "INFO now 2 users",
+            "WARN rejected a user: a user needs a name",
+            "WARN rejected a user: unknown variant `Root`, expected `Admin` or `member` at line 1 column 38",
+        ]
+    );
+    assert!(!package("users").join("target").exists());
+}
+
 /// The table rows and `HashMap` (M4 spec 2.7) run as written: a `HashMap`
 /// of counts, `parse` in each expected-type position, and `contains` on a
 /// `Vec<string>` whose argument is a local named `e`, the name the
@@ -175,6 +352,26 @@ fn run_table_rows() {
     assert_runs(
         "crates/varyk/tests/fixtures/codegen/tables/main.vr",
         "2 true\ntrue\n7\ntrue\nfalse\nfalse\n9 true false\nHELLO, YOU true\na+b\nfalse true\n",
+    );
+}
+
+/// A single file whose only mention of `varyk-std` is `Error` in a
+/// signature builds: its manifest gets the dependency (M5a spec 1, 5.2).
+#[test]
+fn run_a_single_file_naming_error_only_in_a_signature() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/codegen/error_signature/main.vr",
+        "true\n",
+    );
+}
+
+/// `Error::new`, `message`, `{}` and `==` on an `Error`, and `?` on
+/// `parse`, whose error names the text (M5a spec 2.3, 2.8).
+#[test]
+fn run_error_calls() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/codegen/error_calls/main.vr",
+        "literal stored\ntrue\n42\n`abc` is not a number\n",
     );
 }
 
@@ -207,7 +404,9 @@ fn the_readme_rust_sample_is_the_current_backend_output() {
     let entry = SourceFile::new(FileId(0), path, text);
     let program = varyk::check_file(entry, varyk::package::Kind::Binary, None, &mut sources)
         .unwrap_or_else(|diagnostics| panic!("borrowing should check: {diagnostics:#?}"));
-    let generated = RustBackend.generate(&program, &CrateInfo::single_file("borrowing".into()));
+    let std = StdDependency::for_program(program.uses_std);
+    let generated =
+        RustBackend.generate(&program, &CrateInfo::single_file("borrowing".into(), std));
     let main_rs = generated
         .files
         .iter()
@@ -537,6 +736,7 @@ fn package(name: &str) -> PathBuf {
 fn cargo_in(dir: &Path, args: &[&str]) -> Output {
     let output = Command::new(env!("CARGO"))
         .args(args)
+        .args(["--config", &std_config()])
         .current_dir(dir)
         .env("VARYK", env!("CARGO_BIN_EXE_varyk"))
         .output()
@@ -601,8 +801,9 @@ fn greeting_runs_the_same_through_varyk_and_through_cargo() {
     assert_eq!(stdout_of(&output), GREETING_OUTPUT);
 }
 
-/// `matcher` (spec 7.2) wraps `regex-lite` in a `.rs` facade; the one
-/// test that fetches from crates.io. The deliberate unused variable in
+/// `matcher` (spec 7.2) wraps `regex-lite` in a `.rs` facade, fetched
+/// from crates.io as `varyk-std`'s own dependencies are for every program
+/// that uses it (M5a spec 5.3). The deliberate unused variable in
 /// `text.rs` warns at the user's file, never at a generated path.
 #[test]
 fn matcher_runs_through_its_facade_and_shows_the_rust_warning() {
@@ -657,6 +858,7 @@ fn units_assembles_packages_and_serves_a_cargo_only_consumer() {
     let info = CrateInfo {
         name: package.name.clone(),
         manifest: package.isolated_manifest(),
+        std_dependency: None,
     };
     let generated = RustBackend.generate(&program, &info);
     let dest = varyk::driver::publish::assemble(&package, &generated).expect("assembles");

@@ -1,0 +1,6 @@
+struct User {
+    #[rename]
+    user_name: string,
+}
+
+fn main() {}

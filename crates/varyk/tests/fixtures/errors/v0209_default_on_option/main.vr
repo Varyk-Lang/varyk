@@ -1,0 +1,6 @@
+struct User {
+    #[default("anon")]
+    nickname: Option<string>,
+}
+
+fn main() {}

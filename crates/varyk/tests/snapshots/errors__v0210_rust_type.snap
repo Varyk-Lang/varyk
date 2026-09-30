@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0210]: `Session` cannot be turned into JSON
+  --> crates/varyk/tests/fixtures/errors/v0210_rust_type/main.vr:10:20
+   |
+ 5 |     handle: ext::Handle,
+   |     ------------------- `Handle` is a Rust type from a `.rs` module
+...
+10 |     println!("{}", json::stringify(session));
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^ `Session` cannot be turned into JSON
+   |
+   = note: only Varyk's own types go through JSON; copy what is needed into a Varyk struct

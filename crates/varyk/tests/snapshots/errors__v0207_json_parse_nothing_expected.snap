@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0207]: the type `json::parse` reads cannot be worked out here; write the type, as in `let u: User = json::parse(..)?;`
+ --> crates/varyk/tests/fixtures/errors/v0207_json_parse_nothing_expected/main.vr:6:16
+  |
+6 |     let user = json::parse("{\"name\": \"ann\"}");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the type `json::parse` reads cannot be worked out here; write the type, as in `let u: User = json::parse(..)?;`
+  |
+  = note: such a value takes its type from where it goes: a `let` with a written type, a parameter, a return value, a field, or a `vec!` element after one whose type is known; in Rust terms, the type cannot be inferred here

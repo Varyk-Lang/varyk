@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: `#[default]` cannot go on a field of type `Role`
+ --> crates/varyk/tests/fixtures/errors/v0209_default_on_enum/main.vr:7:5
+  |
+7 |     #[default(1)]
+  |     ^^^^^^^^^^^^^ `#[default]` cannot go on a field of type `Role`
+  |
+  = note: a default goes on a field that is a number, a `string`, or a `bool`

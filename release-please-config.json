@@ -1,17 +1,37 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "release-as": "0.2.0",
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
   "separate-pull-requests": false,
   "packages": {
+    "crates/varyk-std": {
+      "release-type": "rust",
+      "component": "varyk-std"
+    },
     "crates/varyk-syntax": {
       "release-type": "rust",
       "component": "varyk-syntax"
     },
     "crates/varyk": {
       "release-type": "rust",
-      "component": "varyk"
+      "component": "varyk",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "/examples/packages/greeting/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
+          "path": "/examples/packages/users/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
+          "path": "/crates/varyk/tests/fixtures/errors/v0404_std_stale_lock/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
+        }
+      ]
     }
   },
   "plugins": [
@@ -23,6 +43,7 @@
       "type": "linked-versions",
       "groupName": "varyk",
       "components": [
+        "varyk-std",
         "varyk-syntax",
         "varyk"
       ]

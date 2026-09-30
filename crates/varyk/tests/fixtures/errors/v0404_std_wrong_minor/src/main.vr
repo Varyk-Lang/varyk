@@ -1,0 +1,7 @@
+fn parse_age(text: string) -> Result<i32, Error> {
+    text.parse()
+}
+
+fn main() {
+    println!("{}", parse_age("30").is_ok());
+}

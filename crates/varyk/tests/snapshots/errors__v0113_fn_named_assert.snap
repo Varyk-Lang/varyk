@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `assert` is already taken by the standard check `assert`
+ --> crates/varyk/tests/fixtures/errors/v0113_fn_named_assert/main.vr:1:4
+  |
+1 | fn assert(ok: bool) {
+  |    ^^^^^^ the name `assert` is already taken by the standard check `assert`
+  |
+  = note: `assert` and `assert_eq` check results inside a `#[test]` function, so a function of your own needs another name

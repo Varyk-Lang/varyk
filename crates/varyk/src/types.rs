@@ -23,15 +23,19 @@ pub enum Ty {
     /// with no Varyk spelling, so it may only be the receiver of the next
     /// call of the chain (V0208 anywhere else).
     Chain(Box<Ty>),
+    /// `Error` (M5a spec 2.3): a message, made by `Error::new` and by every
+    /// failing `varyk-std` call. Neither Copy nor text: the ownership
+    /// rules treat it like a struct.
+    Error,
     Unit,
 }
 
 /// Every type name Varyk knows without a declaration: the primitives,
-/// `string`, and the four standard generic types. The reference test
+/// `string`, the four standard generic types, and `Error`. The reference test
 /// checks `docs/language.md` mentions each.
 pub const BUILTIN_TYPE_NAMES: &[&str] = &[
     "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "string",
-    "Option", "Result", "Vec", "HashMap",
+    "Option", "Result", "Vec", "HashMap", "Error",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,6 +72,21 @@ impl IntKind {
             IntKind::Usize => "usize",
         }
     }
+
+    /// The smallest and largest value of the type.
+    pub fn range(self) -> (i128, i128) {
+        match self {
+            IntKind::I8 => (i8::MIN.into(), i8::MAX.into()),
+            IntKind::I16 => (i16::MIN.into(), i16::MAX.into()),
+            IntKind::I32 => (i32::MIN.into(), i32::MAX.into()),
+            IntKind::I64 => (i64::MIN.into(), i64::MAX.into()),
+            IntKind::U8 => (0, u8::MAX.into()),
+            IntKind::U16 => (0, u16::MAX.into()),
+            IntKind::U32 => (0, u32::MAX.into()),
+            // Taken as 64 bits wide, as on every 64-bit target.
+            IntKind::U64 | IntKind::Usize => (0, u64::MAX.into()),
+        }
+    }
 }
 
 impl FloatKind {
@@ -100,7 +119,7 @@ impl Ty {
         }
     }
 
-    /// A struct, an enum, `Option`, `Result`, `Vec`, or `HashMap`: a value
+    /// A struct, an enum, `Option`, `Result`, `Vec`, `HashMap`, or `Error`: a value
     /// that is neither Copy nor text, and that the ownership rules treat
     /// like a struct.
     pub fn is_compound(&self) -> bool {
@@ -112,7 +131,19 @@ impl Ty {
                 | Ty::Result(..)
                 | Ty::Vec(_)
                 | Ty::HashMap(..)
+                | Ty::Error
         )
+    }
+
+    /// Whether `self` is or holds `Error`: a program naming it uses
+    /// `varyk-std` (M5a spec 1).
+    pub fn has_error(&self) -> bool {
+        match self {
+            Ty::Error => true,
+            Ty::Option(inner) | Ty::Vec(inner) | Ty::Chain(inner) => inner.has_error(),
+            Ty::Result(a, b) | Ty::HashMap(a, b) => a.has_error() || b.has_error(),
+            _ => false,
+        }
     }
 
     /// Whether `self` is or holds an unfinished chain.
@@ -166,4 +197,4 @@ mod check;
 mod derives;
 
 pub use check::typecheck;
-pub use derives::Derives;
+pub use derives::{Derives, Serde};

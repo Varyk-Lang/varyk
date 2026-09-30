@@ -1,0 +1,10 @@
+struct User {
+    #[rename("name")]
+    user_name: string,
+    name: string,
+}
+
+fn main() {
+    let user = User { user_name: "ann", name: "Ann" };
+    println!("{}", json::stringify(user));
+}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0114]: `assert` can only be used inside a `#[test]` function
+ --> crates/varyk/tests/fixtures/errors/v0114_assert_outside_test/main.vr:2:5
+  |
+2 |     assert(a >= 0);
+  |     ^^^^^^ `assert` can only be used inside a `#[test]` function
+  |
+  = note: a failed check stops the program, which has no place in service code; return an `Err` or handle the case instead

@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0203]: `Session` cannot be compared with `==`, because of its field `handle`
+  --> crates/varyk/tests/fixtures/errors/v0203_assert_eq_blocked/main.vr:14:5
+   |
+14 |     assert_eq(a, b);
+   |     ^^^^^^^^^^^^^^^ `Session` cannot be compared with `==`, because of its field `handle`
+   |
+   = note: `Handle` is a Rust type whose `.rs` file does not derive `PartialEq` for it; write `#[derive(PartialEq)]` above it there, or add `PartialEq` to its `#[derive(..)]` list (Varyk reads only `#[derive(..)]`, not a hand-written `impl`)
+   = note: in Rust terms, `==` and `!=` need the type to implement `PartialEq`, which Varyk derives for a struct or enum whose every field and payload has it, and reads from `#[derive(..)]` on a Rust type

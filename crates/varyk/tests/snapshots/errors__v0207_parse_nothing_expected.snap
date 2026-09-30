@@ -2,10 +2,10 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0207]: the type `parse()` reads cannot be worked out here; write the type, as in `let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?`
+error[V0207]: the type `parse()` reads cannot be worked out here; write the type, as in `let parsed: Result<i32, Error> = text.parse();` then `parsed.ok()`
  --> crates/varyk/tests/fixtures/errors/v0207_parse_nothing_expected/main.vr:3:13
   |
 3 |     let n = text.parse();
-  |             ^^^^^^^^^^^^ the type `parse()` reads cannot be worked out here; write the type, as in `let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?`
+  |             ^^^^^^^^^^^^ the type `parse()` reads cannot be worked out here; write the type, as in `let parsed: Result<i32, Error> = text.parse();` then `parsed.ok()`
   |
   = note: such a value takes its type from where it goes: a `let` with a written type, a parameter, a return value, a field, or a `vec!` element after one whose type is known; in Rust terms, the type cannot be inferred here

@@ -64,6 +64,13 @@ macro_rules! error_case {
     };
 }
 
+/// `text` with the compiler's version (and its `MAJOR.MINOR`) masked.
+fn without_version(text: &str) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let minor = version.rsplit_once('.').map_or(version, |(minor, _)| minor);
+    text.replace(version, "[version]").replace(minor, "[minor]")
+}
+
 /// One test per package case (a `Cargo.toml` and its root file, M3 spec
 /// 2.1, 2.2), checked through `$entry`, the root file.
 macro_rules! package_error_case {
@@ -71,7 +78,9 @@ macro_rules! package_error_case {
         #[test]
         fn $name() {
             let stderr = check_entry(stringify!($name), $entry, $code, false);
-            insta::assert_snapshot!(stderr);
+            // The compiler's version is in V0404's text; a release must not
+            // change the snapshot.
+            insta::assert_snapshot!(without_version(&stderr));
         }
     };
 }
@@ -173,6 +182,43 @@ error_case!(v0111_use_variant, "V0111", fix_it: false);
 error_case!(v0111_use_variant_in_module, "V0111", fix_it: false);
 error_case!(v0111_use_through_alias, "V0111", fix_it: false);
 error_case!(v0111_use_module_declared_elsewhere, "V0111", fix_it: false);
+error_case!(v0112_attribute_on_enum, "V0112", fix_it: false);
+error_case!(v0112_attribute_on_impl, "V0112", fix_it: false);
+error_case!(v0112_attribute_on_method, "V0112", fix_it: false);
+error_case!(v0112_attribute_on_mod, "V0112", fix_it: false);
+error_case!(v0112_attribute_on_struct, "V0112", fix_it: false);
+error_case!(v0112_attribute_on_use, "V0112", fix_it: false);
+error_case!(v0112_default_without_value, "V0112", fix_it: false);
+error_case!(v0112_derive_on_struct, "V0112", fix_it: false);
+error_case!(v0112_rename_on_data_variant, "V0112", fix_it: false);
+error_case!(v0112_rename_on_variant_field, "V0112", fix_it: false);
+error_case!(v0112_rename_without_value, "V0112", fix_it: false);
+error_case!(v0112_skip_on_variant, "V0112", fix_it: false);
+error_case!(v0112_skip_with_value, "V0112", fix_it: false);
+error_case!(v0112_test_on_field, "V0112", fix_it: false);
+error_case!(v0112_test_with_value, "V0112", fix_it: false);
+error_case!(v0112_twice, "V0112", fix_it: false);
+error_case!(v0112_unknown_on_field, "V0112", fix_it: false);
+error_case!(v0113_struct_named_error, "V0113", fix_it: false);
+error_case!(v0113_rs_struct_named_error, "V0113", fix_it: false);
+error_case!(v0113_fn_named_assert, "V0113", fix_it: false);
+error_case!(v0113_fn_named_assert_eq, "V0113", fix_it: false);
+error_case!(v0113_module_named_env, "V0113", fix_it: false);
+error_case!(v0113_module_named_json, "V0113", fix_it: false);
+error_case!(v0113_module_named_log, "V0113", fix_it: false);
+error_case!(v0113_struct_named_json, "V0113", fix_it: false);
+error_case!(v0113_enum_named_env, "V0113", fix_it: false);
+error_case!(v0113_use_json, "V0113", fix_it: false);
+error_case!(v0113_use_json_parse, "V0113", fix_it: false);
+error_case!(v0113_varyk_prefix_fn, "V0113", fix_it: false);
+error_case!(v0113_varyk_prefix_method, "V0113", fix_it: false);
+error_case!(v0113_varyk_prefix_module, "V0113", fix_it: false);
+error_case!(v0114_test_called, "V0114", fix_it: false);
+error_case!(v0114_test_used, "V0114", fix_it: false);
+error_case!(v0114_test_with_parameters, "V0114", fix_it: false);
+error_case!(v0114_test_with_return_type, "V0114", fix_it: false);
+error_case!(v0114_test_named_main, "V0114", fix_it: false);
+error_case!(v0114_assert_outside_test, "V0114", fix_it: false);
 error_case!(v0103_use_name_clash, "V0103", fix_it: false);
 error_case!(v0103_hash_map_declared, "V0103", fix_it: false);
 error_case!(v0103_duplicate_variant_field, "V0103", fix_it: false);
@@ -186,6 +232,7 @@ error_case!(v0202_placeholder_count, "V0202", fix_it: false);
 error_case!(v0203_print_struct, "V0203", fix_it: false);
 error_case!(v0203_clone_rust_field, "V0203", fix_it: false);
 error_case!(v0203_compare_blocked, "V0203", fix_it: false);
+error_case!(v0203_assert_eq_blocked, "V0203", fix_it: false);
 error_case!(v0204_missing_variant, "V0204", fix_it: false);
 error_case!(v0204_nested_witness, "V0204", fix_it: false);
 error_case!(v0204_number_without_catch_all, "V0204", fix_it: false);
@@ -202,6 +249,8 @@ error_case!(v0206_constructor_in_wrong_function, "V0206", fix_it: false);
 error_case!(v0207_none_needs_type, "V0207", fix_it: false);
 error_case!(v0207_vec_new_needs_type, "V0207", fix_it: false);
 error_case!(v0207_err_question_statement, "V0207", fix_it: false);
+error_case!(v0207_json_parse_nothing_expected, "V0207", fix_it: false);
+error_case!(v0207_env_parse_nothing_expected, "V0207", fix_it: false);
 error_case!(v0207_parse_nothing_expected, "V0207", fix_it: false);
 error_case!(v0207_parse_then_ok_or, "V0207", fix_it: false);
 error_case!(v0207_closure_body_none, "V0207", fix_it: false);
@@ -214,6 +263,24 @@ error_case!(v0208_chain_statement, "V0208", fix_it: false);
 error_case!(v0208_stored_find, "V0208", fix_it: false);
 error_case!(v0208_map_on_get, "V0208", fix_it: false);
 error_case!(v0208_chain_as_match_head, "V0208", fix_it: false);
+error_case!(v0209_default_on_enum, "V0209", fix_it: false);
+error_case!(v0209_default_on_option, "V0209", fix_it: false);
+error_case!(v0209_default_on_struct, "V0209", fix_it: false);
+error_case!(v0209_default_out_of_range, "V0209", fix_it: false);
+error_case!(v0209_default_wrong_kind, "V0209", fix_it: false);
+error_case!(v0209_rename_empty, "V0209", fix_it: false);
+error_case!(v0209_same_field_key, "V0209", fix_it: false);
+error_case!(v0209_env_same_variable, "V0209", fix_it: false);
+error_case!(v0209_same_variant_key, "V0209", fix_it: false);
+error_case!(v0209_skip_parsed_without_default, "V0209", fix_it: false);
+error_case!(v0210_enum_with_data, "V0210", fix_it: false);
+error_case!(v0210_error, "V0210", fix_it: false);
+error_case!(v0210_map_key, "V0210", fix_it: false);
+error_case!(v0210_env_nested_struct, "V0210", fix_it: false);
+error_case!(v0210_env_vec, "V0210", fix_it: false);
+error_case!(v0210_env_map, "V0210", fix_it: false);
+error_case!(v0210_rust_type, "V0210", fix_it: false);
+error_case!(v0209_rename_not_a_string, "V0209", fix_it: false);
 error_case!(v0300_change_through_param, "V0300", fix_it: true);
 error_case!(v0300_push_on_borrowed, "V0300", fix_it: true);
 error_case!(v0301_assign_immutable_let, "V0301", fix_it: true);
@@ -254,3 +321,6 @@ package_error_case!(v0403_missing_name, "V0403", "src/main.vr");
 package_error_case!(v0403_both_roots, "V0403", "src/main.vr");
 package_error_case!(v0403_invalid_name, "V0403", "src/main.vr");
 package_error_case!(v0403_program_name, "V0403", "src/main.vr");
+package_error_case!(v0404_std_missing, "V0404", "src/main.vr");
+package_error_case!(v0404_std_wrong_minor, "V0404", "src/main.vr");
+package_error_case!(v0404_std_stale_lock, "V0404", "src/main.vr");

@@ -20,8 +20,8 @@ use crate::diagnostics::{Diagnostic, codes};
 use super::visibility::check_visible;
 use super::{
     Callee, ENTRY_MODULE_NAME, LookupError, Module, ModuleId, ModuleKind, Symbols, UserType,
-    duplicate, no_parent, not_visible, path_text, reserved_type_name, reserved_value_name,
-    split_last,
+    duplicate, is_std_module, no_parent, not_visible, path_text, reserved_type_name,
+    reserved_value_name, split_last, std_fn_taken, std_module_taken, varyk_prefix_taken,
 };
 
 /// What a `use` name resolves to (spec 3.3): consulted by lookups before
@@ -137,6 +137,10 @@ pub(super) fn register(
             .collect();
         for item in &program.items {
             let Item::Use(decl) = item else { continue };
+            if let Some(diagnostic) = std_module_use(decl) {
+                diagnostics.push(diagnostic);
+                continue;
+            }
             if let Some(diagnostic) = through_alias(symbols, module.id, decl, &introduced) {
                 diagnostics.push(diagnostic);
                 continue;
@@ -149,6 +153,27 @@ pub(super) fn register(
                     continue;
                 }
             };
+            // rustc drops a `#[test]` item outside a test build, so a `use`
+            // of one would have nothing to point at (spec 2.7).
+            let test_fn = targets.iter().any(|target| match target {
+                UseTarget::Fn(Callee::Varyk(id)) => symbols.fns[id.0 as usize].is_test,
+                _ => false,
+            });
+            if test_fn {
+                let path = path_text(&decl.path);
+                diagnostics.push(
+                    Diagnostic::new(
+                        codes::V0114,
+                        decl.path.span,
+                        format!("`{path}` is a test and cannot be imported"),
+                    )
+                    .with_note(
+                        "`varyk test` runs each test on its own; put what the tests share in \
+                         a function without `#[test]` and import that",
+                    ),
+                );
+                continue;
+            }
             // The emitted `use` imports every namespace the name occupies
             // in its module (a function and a struct may share a name),
             // so each is an alias here, checked like any declaration: it
@@ -159,11 +184,14 @@ pub(super) fn register(
             // item or another `use` of this file (spec 2.1).
             let problem = targets.iter().find_map(|&target| {
                 let reserved = match target {
-                    UseTarget::Fn(_) => reserved_value_name(&local.name, local.span),
-                    UseTarget::Module(_) | UseTarget::Type(_) => {
-                        reserved_type_name(&local.name, local.span)
-                    }
-                };
+                    UseTarget::Fn(_) => reserved_value_name(&local.name, local.span)
+                        .or_else(|| std_fn_taken(&local.name, local.span)),
+                    UseTarget::Module(_) => reserved_type_name(&local.name, local.span)
+                        .or_else(|| std_module_taken(&local.name, local.span)),
+                    UseTarget::Type(_) => reserved_type_name(&local.name, local.span)
+                        .or_else(|| std_module_taken(&local.name, local.span)),
+                }
+                .or_else(|| varyk_prefix_taken(&local.name, local.span));
                 if reserved.is_some() {
                     return reserved;
                 }
@@ -212,6 +240,26 @@ pub(super) fn register(
             module_scope.use_order.push(targets[0]);
         }
     }
+}
+
+/// V0113 for a `use` whose path starts at `json`, `env`, or `log` (M5a
+/// spec 2.10): a standard module is reached only by its path at the call.
+fn std_module_use(decl: &UseDecl) -> Option<Diagnostic> {
+    let first = decl.path.segments.first()?;
+    if decl.path.leading != PathStart::None || !is_std_module(&first.name) {
+        return None;
+    }
+    let name = &first.name;
+    Some(
+        Diagnostic::new(
+            codes::V0113,
+            decl.path.span,
+            format!("`{name}` is a standard module and cannot be brought in with `use`"),
+        )
+        .with_note(format!(
+            "write the path where it is used, as in `{name}::..`, and remove this `use`"
+        )),
+    )
 }
 
 /// The local name a `use` introduces: its alias, else its last segment.

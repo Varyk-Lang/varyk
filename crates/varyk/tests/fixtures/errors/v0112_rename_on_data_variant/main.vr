@@ -1,0 +1,6 @@
+enum Shape {
+    #[rename("circle")]
+    Circle(f64),
+}
+
+fn main() {}

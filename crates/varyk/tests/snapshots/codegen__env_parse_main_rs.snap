@@ -1,0 +1,42 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+enum Mode {
+    Dev,
+    Live,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct Config {
+    #[serde(rename = "db_url")]
+    database: String,
+    mode: Mode,
+    #[serde(default = "Config::varyk_default_timeout")]
+    timeout: u32,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+impl Config {
+    fn varyk_default_timeout() -> u32 {
+        30
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn load() -> Result<Config, ::varyk_std::Error> {
+    let c = ::varyk_std::env::parse::<Config>()?;
+    Ok(c)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let r: Result<Config, ::varyk_std::Error> = load();
+}

@@ -1,0 +1,6 @@
+#[rename("role")]
+enum Role {
+    Admin,
+}
+
+fn main() {}

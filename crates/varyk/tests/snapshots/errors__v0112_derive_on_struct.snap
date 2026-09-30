@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: there is no attribute named `derive`
+ --> crates/varyk/tests/fixtures/errors/v0112_derive_on_struct/main.vr:1:1
+  |
+1 | #[derive(Clone)]
+  | ^^^^^^^^^^^^^^^^ there is no attribute named `derive`
+  |
+  = note: the attributes are `#[rename("key")]`, `#[default(value)]`, `#[skip]`, and `#[test]`
+  = note: `.clone()`, `==`, and JSON work without a derive: Varyk gives a type each of them when it can

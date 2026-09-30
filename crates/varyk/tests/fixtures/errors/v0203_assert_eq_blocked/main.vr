@@ -1,0 +1,15 @@
+mod ext;
+
+struct Session {
+    name: string,
+    handle: ext::Handle,
+}
+
+fn main() {}
+
+#[test]
+fn same_session() {
+    let a = Session { name: "a", handle: ext::open() };
+    let b = a.clone();
+    assert_eq(a, b);
+}

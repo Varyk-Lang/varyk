@@ -1,0 +1,6 @@
+struct User {
+    #[skip(true)]
+    password_hash: Option<string>,
+}
+
+fn main() {}

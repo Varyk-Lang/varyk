@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0207]: the type `env::parse` reads cannot be worked out here; write the type, as in `let c: Config = env::parse()?;`
+ --> crates/varyk/tests/fixtures/errors/v0207_env_parse_nothing_expected/main.vr:2:13
+  |
+2 |     let c = env::parse();
+  |             ^^^^^^^^^^^^ the type `env::parse` reads cannot be worked out here; write the type, as in `let c: Config = env::parse()?;`
+  |
+  = note: such a value takes its type from where it goes: a `let` with a written type, a parameter, a return value, a field, or a `vec!` element after one whose type is known; in Rust terms, the type cannot be inferred here

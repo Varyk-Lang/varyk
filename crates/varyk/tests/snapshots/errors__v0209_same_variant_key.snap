@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: two variants of `Role` have the key `Member`: `Admin` and `Member`
+ --> crates/varyk/tests/fixtures/errors/v0209_same_variant_key/main.vr:1:1
+  |
+1 | / enum Role {
+2 | |     #[rename("Member")]
+3 | |     Admin,
+4 | |     Member,
+5 | | }
+  | |_^ two variants of `Role` have the key `Member`: `Admin` and `Member`
+  |
+  = note: a variant's key is its name, or its `#[rename]`; each key of an enum must be different

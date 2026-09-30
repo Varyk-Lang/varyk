@@ -6,10 +6,13 @@
 //! varyk check [file.vr]                          parse and analyze; never runs cargo
 //! varyk build [file.vr] [--release] [--emit-rust] generate and build; prints the executable path
 //! varyk run   [file.vr] [--release] [-- args...]  build, then execute, forwarding the exit code
+//! varyk test  [file.vr]                          build the tests and run them, exiting with
+//!                                                  the first failing run's code (M5a spec 2.7)
 //! varyk emit  [file.vr] --out-dir DIR             check, then write the generated tree to DIR;
 //!                                                  never runs cargo (M3 spec 2.5)
 //! varyk init  [dir] [--lib]                       write a package that plain cargo build compiles
 //!                                                  (M3 spec 2.5)
+//! varyk add   [cargo add args]                   run cargo add in the package
 //! varyk publish [-- cargo args]                   check, assemble a plain Rust crate, and
 //!                                                  run cargo publish there, forwarding its
 //!                                                  exit code and output (M3 spec 2.6)
@@ -22,7 +25,8 @@
 //! diagnostics instead of the human renderer. Human diagnostics go to
 //! stderr; JSON diagnostics go to stdout, one object per line (spec
 //! section 6.6's output-streams paragraph), except under `run`, where
-//! stdout is the program's own, so they go to stderr.
+//! stdout is the program's own, so they go to stderr, and under `test`,
+//! whose stdout is the test runner's.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,7 +35,7 @@ use std::process::{Command as StdCommand, ExitCode};
 use clap::{Parser, Subcommand, ValueEnum};
 use varyk_syntax::{FileId, SourceFile};
 
-use crate::backend::{Backend, CrateInfo, RustBackend};
+use crate::backend::{Backend, CrateInfo, RustBackend, StdDependency, with_local_std};
 use crate::check_file;
 use crate::diagnostics::{Diagnostic, render_human, render_json};
 use crate::driver::{self, DriverError};
@@ -74,7 +78,8 @@ fn json_line(message_format: MessageFormat, line: &str) {
     }
 }
 
-/// The `check`, `build`, `run`, `emit`, `init`, and `publish` subcommands.
+/// The `check`, `build`, `run`, `test`, `emit`, `init`, `add`, and
+/// `publish` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Check the program for errors; never runs cargo.
@@ -104,6 +109,14 @@ pub enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Build the program's `#[test]` functions and run them.
+    ///
+    /// The output and exit code are the test runner's; a Rust error is
+    /// reported as under `build`.
+    Test {
+        /// The entry `.vr` file; without one, the package here.
+        file: Option<PathBuf>,
+    },
     /// Write the generated Rust to a directory; `build.rs` runs this under
     /// plain `cargo build`.
     ///
@@ -128,6 +141,16 @@ pub enum Command {
         /// Write a library (`src/lib.rs`/`src/lib.vr`) instead of a binary.
         #[arg(long)]
         lib: bool,
+    },
+    /// Add a dependency to the package's `Cargo.toml`.
+    ///
+    /// Runs `cargo add` with the arguments given, in the package found
+    /// upward from the current directory, and forwards its output and exit
+    /// code; Varyk interprets none of the arguments.
+    Add {
+        /// Arguments for `cargo add`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Publish the package to crates.io as a plain Rust crate.
     ///
@@ -165,8 +188,10 @@ pub fn run() -> ExitCode {
             release,
             args,
         } => run_run(file.as_deref(), release, &args, message_format),
+        Command::Test { file } => run_test(file.as_deref(), message_format),
         Command::Emit { file, out_dir } => run_emit(file.as_deref(), &out_dir, message_format),
         Command::Init { dir, lib } => run_init(dir.as_deref(), lib),
+        Command::Add { args } => run_add(&args),
         Command::Publish {
             assemble_only,
             args,
@@ -313,7 +338,17 @@ fn load(
         .map(|crates| crate::Dependencies { crates, dev });
 
     match check_file(entry, kind, dependencies, sources) {
-        Ok(program) => Ok((program, target)),
+        Ok(program) => {
+            let std_problems = target.package.as_ref().map_or_else(Vec::new, |package| {
+                package::check_std_dependency(package, program.uses_std, env!("CARGO_PKG_VERSION"))
+            });
+            if std_problems.is_empty() {
+                Ok((program, target))
+            } else {
+                emit_diagnostics(&std_problems, &target.sources, message_format);
+                Err(ExitCode::FAILURE)
+            }
+        }
         Err(diagnostics) => {
             emit_diagnostics(&diagnostics, sources, message_format);
             Err(ExitCode::FAILURE)
@@ -399,27 +434,47 @@ fn generate_and_build(
     message_format: MessageFormat,
 ) -> Result<Option<PathBuf>, ExitCode> {
     let (program, target) = load(target, message_format)?;
-    let path = &target.entry;
-
-    let (build_dir, cache_dir, lock) = match &target.package {
-        Some(package) => (
-            package.hidden_crate_dir(),
-            package.cache_dir(),
-            package.lock.as_deref(),
-        ),
-        None => (driver::build_dir_for(path), driver::cache_dir(), None),
-    };
-    let info = crate_info(&target);
+    let info = crate_info(&target, &program);
     let generated = RustBackend.generate(&program, &info);
 
     if emit_rust {
         print!("{}", driver::emit_rust(&generated));
     }
 
-    match driver::build(&generated, &build_dir, &cache_dir, lock, release) {
-        Ok((exe, messages)) => {
+    let (build_dir, cache_dir, lock) = build_dirs(&target);
+    let built = driver::build(&generated, &build_dir, &cache_dir, lock, release);
+    reported(built, &target, message_format)
+}
+
+/// Where `target` is built (M3 spec 2.4): the package's hidden crate, its
+/// cache directory, and its lock, or the single file's build directory
+/// and the shared cache, with no lock.
+fn build_dirs(target: &Target) -> (PathBuf, PathBuf, Option<&Path>) {
+    match &target.package {
+        Some(package) => (
+            package.hidden_crate_dir(),
+            package.cache_dir(),
+            package.lock.as_deref(),
+        ),
+        None => (
+            driver::build_dir_for(&target.entry),
+            driver::cache_dir(),
+            None,
+        ),
+    }
+}
+
+/// What a cargo run for `target` made, after printing its compiler
+/// messages; on failure, reports why and returns the exit code to use.
+fn reported<T>(
+    result: Result<(T, Vec<driver::Message>), DriverError>,
+    target: &Target,
+    message_format: MessageFormat,
+) -> Result<T, ExitCode> {
+    match result {
+        Ok((made, messages)) => {
             print_messages(messages, &target.sources, message_format, false);
-            Ok(exe)
+            Ok(made)
         }
         Err(DriverError::Cargo { stderr, messages }) => {
             let printed_error = print_messages(messages, &target.sources, message_format, true);
@@ -433,7 +488,7 @@ fn generate_and_build(
             Err(ExitCode::FAILURE)
         }
         Err(DriverError::Io(err)) => {
-            eprintln!("error: cannot build `{}`: {err}", path.display());
+            eprintln!("error: cannot build `{}`: {err}", target.entry.display());
             Err(ExitCode::FAILURE)
         }
         Err(DriverError::Spawn(err)) => {
@@ -443,17 +498,66 @@ fn generate_and_build(
     }
 }
 
+/// Runs `test` (M5a spec 2.7): checks and generates as `build` does,
+/// builds the tests with `cargo test --no-run`, then runs each test
+/// executable with this process's streams, exiting with the first
+/// non-zero code (1 for a run without one, e.g. on a signal), or 0 when
+/// every run passes.
+fn run_test(file: Option<&Path>, message_format: MessageFormat) -> ExitCode {
+    // The test runner's output owns stdout.
+    let message_format = match message_format {
+        MessageFormat::Json => MessageFormat::JsonToStderr,
+        other => other,
+    };
+    let loaded = locate(file, message_format).and_then(|target| load(target, message_format));
+    let (program, target) = match loaded {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    let info = crate_info(&target, &program);
+    let generated = RustBackend.generate(&program, &info);
+    let (build_dir, cache_dir, lock) = build_dirs(&target);
+    let built = driver::test(&generated, &build_dir, &cache_dir, lock);
+    let executables = match reported(built, &target, message_format) {
+        Ok(executables) => executables,
+        Err(code) => return code,
+    };
+    let mut result = ExitCode::SUCCESS;
+    let mut failed = false;
+    for exe in executables {
+        let code = match driver::run(&exe, &[]) {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(err) => {
+                eprintln!("error: cannot run `{}`: {err}", exe.display());
+                1
+            }
+        };
+        if code != 0 && !failed {
+            failed = true;
+            result = ExitCode::from(u8::try_from(code).unwrap_or(1));
+        }
+    }
+    result
+}
+
 /// The crate `target` generates into (M3 spec 2.4): the package's name
 /// and isolated manifest, or a generated name with a minimal manifest for
-/// a single file. Shared by `build`/`run` (which also build it) and `emit`
-/// (which only writes its tree).
-fn crate_info(target: &Target) -> CrateInfo {
+/// a single file, depending on `varyk-std` when `program` uses it (M5a
+/// spec 5.2). Under `VARYK_STD_PATH`, `varyk-std` is that directory (M5a
+/// spec 5.3); `varyk publish` writes the package's own manifest instead.
+/// Shared by `build`/`run` (which also build it) and `emit` (which only
+/// writes its tree).
+fn crate_info(target: &Target, program: &HirProgram) -> CrateInfo {
     match &target.package {
         Some(package) => CrateInfo {
             name: package.name.clone(),
-            manifest: package.isolated_manifest(),
+            manifest: with_local_std(package.isolated_manifest()),
+            std_dependency: None,
         },
-        None => CrateInfo::single_file(driver::package_name_for(&target.entry)),
+        None => CrateInfo::single_file(
+            driver::package_name_for(&target.entry),
+            StdDependency::for_program(program.uses_std),
+        ),
     }
 }
 
@@ -477,7 +581,7 @@ fn run_emit(file: Option<&Path>, out_dir: &Path, message_format: MessageFormat) 
             Ok(pair) => pair,
             Err(code) => return code,
         };
-    let info = crate_info(&target);
+    let info = crate_info(&target, &program);
     let generated = RustBackend.generate(&program, &info);
     let inputs = target
         .package
@@ -630,7 +734,7 @@ fn run_publish(assemble_only: bool, args: &[String], message_format: MessageForm
         Ok(pair) => pair,
         Err(code) => return code,
     };
-    let info = crate_info(&target);
+    let info = crate_info(&target, &program);
     let generated = RustBackend.generate(&program, &info);
     let dest = match driver::assemble(&package, &generated) {
         Ok(dest) => dest,
@@ -650,6 +754,34 @@ fn run_publish(assemble_only: bool, args: &[String], message_format: MessageForm
         .arg("publish")
         .args(args)
         .current_dir(&dest)
+        .status()
+    {
+        Ok(status) => match status.code() {
+            Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            None => ExitCode::FAILURE,
+        },
+        Err(err) => {
+            eprintln!("{}", cannot_run_cargo(&err));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Runs `add`: `cargo add` with `args` in the package found upward from
+/// the current directory, its output and exit code passed through.
+fn run_add(args: &[String]) -> ExitCode {
+    let Some(manifest) = manifest_here() else {
+        eprintln!("error: no Varyk package here; run `varyk add` inside a package");
+        return ExitCode::FAILURE;
+    };
+    let dir = match manifest.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    match StdCommand::new("cargo")
+        .arg("add")
+        .args(args)
+        .current_dir(dir)
         .status()
     {
         Ok(status) => match status.code() {

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[rename]` needs a value, as in `#[rename("userName")]`
+ --> crates/varyk/tests/fixtures/errors/v0112_rename_without_value/main.vr:2:5
+  |
+2 |     #[rename]
+  |     ^^^^^^^^^ `#[rename]` needs a value, as in `#[rename("userName")]`

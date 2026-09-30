@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: `#[default]` cannot go on an `Option` field
+ --> crates/varyk/tests/fixtures/errors/v0209_default_on_option/main.vr:2:5
+  |
+2 |     #[default("anon")]
+  |     ^^^^^^^^^^^^^^^^^^ `#[default]` cannot go on an `Option` field
+  |
+  = note: a missing value is already `None`

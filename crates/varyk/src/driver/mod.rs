@@ -140,15 +140,46 @@ pub fn build(
         .iter()
         .any(|file| file.path == "src/main.rs");
     let map = generated.source_map();
-    cargo::run_cargo(
+    let goal = cargo::Goal::Build { release };
+    let (stdout, stderr, messages) =
+        cargo::run_cargo(build_dir, target_dir, goal, &map, &generated.copied)?;
+    if !binary {
+        return Ok((None, messages));
+    }
+    match cargo::executable_from(stdout.lines(), &generated.package_name) {
+        Some(exe) => Ok((Some(PathBuf::from(exe)), messages)),
+        // Cargo exited 0 but named no binary artifact for this package: an
+        // anomaly, not a compile error, so `messages` (from the same
+        // successful run) are the only ones worth carrying.
+        None => Err(DriverError::Cargo {
+            stderr: format!("cargo produced no executable\n{stderr}"),
+            messages,
+        }),
+    }
+}
+
+/// Writes `generated` under `build_dir` as [`build`] does, builds its
+/// tests with `cargo test --no-run` into `target_dir` (M5a spec 2.7), and
+/// returns the test executables, read from cargo's `compiler-artifact`
+/// messages, alongside every classified compiler message; rustc's errors
+/// are mapped as for a build (M3 spec 5).
+pub fn test(
+    generated: &GeneratedCrate,
+    build_dir: &Path,
+    target_dir: &Path,
+    lock: Option<&Path>,
+) -> Result<(Vec<PathBuf>, Vec<Message>), DriverError> {
+    generate::write_files(build_dir, generated)?;
+    generate::sync_lock(lock, &build_dir.join("Cargo.lock"))?;
+    let map = generated.source_map();
+    let (stdout, _, messages) = cargo::run_cargo(
         build_dir,
         target_dir,
-        release,
-        &generated.package_name,
-        binary,
+        cargo::Goal::Test,
         &map,
         &generated.copied,
-    )
+    )?;
+    Ok((cargo::test_executables_from(stdout.lines()), messages))
 }
 
 /// Runs the built program with `args`, handing it this process's stdin,

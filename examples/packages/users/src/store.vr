@@ -1,0 +1,78 @@
+pub enum Role {
+    Admin,
+    #[rename("member")]
+    Member,
+}
+
+pub struct User {
+    pub id: u32,
+    pub name: string,
+    pub role: Role,
+    pub email: Option<string>,
+    #[default(18)]
+    pub age: u8,
+}
+
+pub struct Store {
+    users: Vec<User>,
+}
+
+impl Store {
+    pub fn new() -> Store {
+        Store { users: Vec::new() }
+    }
+
+    /// Parses a user from JSON and keeps it, giving the new count, or says
+    /// why it was refused.
+    pub fn add_json(mut self, body: string) -> Result<usize, Error> {
+        let user = parse_user(body)?;
+        self.users.push(user);
+        Ok(self.users.len())
+    }
+
+    pub fn len(self) -> usize {
+        self.users.len()
+    }
+
+    pub fn users(self) -> Vec<User> {
+        self.users
+    }
+}
+
+/// Parses one user from JSON and rejects one with no name.
+pub fn parse_user(body: string) -> Result<User, Error> {
+    let user: User = json::parse(body)?;
+    if user.name.is_empty() {
+        return Err(Error::new("a user needs a name"));
+    }
+    Ok(user)
+}
+
+#[test]
+fn parses_a_user_and_fills_the_default_age() {
+    match parse_user("{\"id\": 1, \"name\": \"ann\", \"role\": \"member\"}") {
+        Ok(u) => {
+            assert_eq(u.age, 18);
+            assert_eq(u.email.is_some(), false);
+        }
+        Err(e) => assert_eq(e.message(), "unexpected"),
+    }
+}
+
+#[test]
+fn rejects_a_user_with_no_name() {
+    match parse_user("{\"id\": 2, \"name\": \"\", \"role\": \"Admin\"}") {
+        Ok(u) => assert_eq(u.id, 0),
+        Err(e) => assert_eq(e.message(), "a user needs a name"),
+    }
+}
+
+#[test]
+fn a_store_counts_its_users() {
+    let mut store = Store::new();
+    assert_eq(store.len(), 0);
+    match store.add_json("{\"id\": 3, \"name\": \"bo\", \"role\": \"member\", \"age\": 30}") {
+        Ok(n) => assert_eq(n, 1),
+        Err(e) => assert_eq(e.message(), "unexpected"),
+    }
+}

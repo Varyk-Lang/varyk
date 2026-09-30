@@ -11,7 +11,10 @@ use varyk_syntax::{FileId, Item, ModDecl, SourceFile, Span};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::interop::{ImportError, ImportedModule, import_rust_module_in};
 
-use super::{Dependencies, Module, ModuleId, ModuleKind, duplicate, parse, reserved_type_name};
+use super::{
+    Dependencies, Module, ModuleId, ModuleKind, duplicate, error_name_taken, parse,
+    reserved_type_name, std_module_taken, varyk_prefix_taken,
+};
 
 /// Loads the file behind every `mod` declared in every `.vr` module of
 /// `modules` (the entry module first), appending each child to `modules`
@@ -134,7 +137,10 @@ fn check_name<'d>(
         );
         return false;
     }
-    if let Some(diagnostic) = reserved_type_name(name, decl.name.span) {
+    let reserved = reserved_type_name(name, decl.name.span)
+        .or_else(|| std_module_taken(name, decl.name.span))
+        .or_else(|| varyk_prefix_taken(name, decl.name.span));
+    if let Some(diagnostic) = reserved {
         diagnostics.push(diagnostic);
         return false;
     }
@@ -261,6 +267,18 @@ fn load_one(
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
+            // `Error` is the standard error type's name (M5a spec 2.10).
+            let types = imported
+                .structs
+                .iter()
+                .map(|s| (&s.name, &s.span))
+                .chain(imported.enums.iter().map(|e| (&e.name, &e.span)));
+            for (name, span) in types {
+                if name == "Error" {
+                    let span = Span::new(file, span.start as u32, span.end as u32);
+                    diagnostics.push(error_name_taken(span));
+                }
+            }
             imports.push((ModuleId(id as u32), imported));
             Loaded::Module(ModuleKind::Rust(source.text.clone()), file)
         }

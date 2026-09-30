@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[rename]` cannot go on a variant that carries data
+ --> crates/varyk/tests/fixtures/errors/v0112_rename_on_data_variant/main.vr:2:5
+  |
+2 |     #[rename("circle")]
+  |     ^^^^^^^^^^^^^^^^^^^ `#[rename]` cannot go on a variant that carries data
+  |
+  = note: `#[rename]` goes before a struct field or a variant that carries no data

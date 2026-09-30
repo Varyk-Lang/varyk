@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[test]` cannot go on a method
+ --> crates/varyk/tests/fixtures/errors/v0112_attribute_on_method/main.vr:6:5
+  |
+6 |     #[test]
+  |     ^^^^^^^ `#[test]` cannot go on a method
+  |
+  = note: `#[test]` goes before a top-level function

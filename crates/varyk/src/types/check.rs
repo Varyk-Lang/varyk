@@ -19,18 +19,18 @@ use varyk_syntax::{
 use crate::builtins::Owner;
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
-    HirBlock, HirEnum, HirExpr, HirExprKind, HirForHead, HirFunction, HirModule, HirModuleKind,
-    HirParam, HirProgram, HirStmt, HirStruct, HirUse, LocalId, LocalInfo, LocalKind, MethodRef,
-    PlaceInfo, is_place,
+    AssertKind, HirBlock, HirEnum, HirExpr, HirExprKind, HirForHead, HirFunction, HirModule,
+    HirModuleKind, HirParam, HirProgram, HirStmt, HirStruct, HirUse, LocalId, LocalInfo, LocalKind,
+    MethodRef, PlaceInfo, is_place,
 };
 use crate::interop::tidy_signature;
 use crate::package::Kind;
 use crate::resolve::{
     Callee, FnId, FnSig, ImportedSig, LookupError, ModuleId, ModuleKind, Resolved, StructDef,
-    StructId, Symbols, Unusable, UserType, display_path, is_visible, no_parent, not_visible,
-    path_text, reserved_value_name, split_last,
+    StructId, Symbols, Unusable, UserType, VariantFieldsDef, display_path, is_visible, no_parent,
+    not_visible, path_text, reserved_value_name, split_last,
 };
-use crate::types::derives::{self, Blocker, Judged};
+use crate::types::derives::{self, Blocker, Judged, Medium, Reached};
 use crate::types::{FloatKind, IntKind, ParamMode, Ty};
 
 /// Type-checks every Varyk function and lowers the program to HIR, or
@@ -44,6 +44,14 @@ pub fn typecheck(
     let mut diagnostics = Vec::new();
     let mut functions = Vec::new();
     let derives = derives::compute(&symbols.structs, &symbols.enums);
+    let base = location_base(&resolved, sources);
+    // Whether a `varyk-std` call is made; naming `Error` is found below.
+    let mut uses_std = false;
+    let mut logs = false;
+    // The structs and enums the `json` calls reach (M5a spec 2.4).
+    let mut reached = Reached::new(symbols.structs.len(), symbols.enums.len());
+    // And those the `env` calls reach (M5a spec 2.5).
+    let mut env_reached = Reached::new(symbols.structs.len(), symbols.enums.len());
 
     for (index, sig) in symbols.fns.iter().enumerate() {
         let id = FnId(index as u32);
@@ -60,13 +68,37 @@ pub fn typecheck(
             loop_depth: 0,
             closures: Vec::new(),
             range_vars: Vec::new(),
-            result_try_operand: None,
+            option_try_operand: None,
+            uses_std: false,
+            logs: false,
+            is_test: sig.is_test,
+            base: &base,
+            reached: &mut reached,
+            env_reached: &mut env_reached,
             diagnostics: &mut diagnostics,
         };
-        if let Some(function) = checker.function(id, sig, decl) {
+        let function = checker.function(id, sig, decl);
+        uses_std |= checker.uses_std;
+        logs |= checker.logs;
+        if let Some(function) = function {
             functions.push(function);
         }
     }
+    diagnostics.extend(derives::reached_checks(
+        &symbols.structs,
+        &symbols.enums,
+        &reached,
+        Medium::Json,
+        str::to_string,
+    ));
+    // A variable is named in upper case (M5a spec 2.5).
+    diagnostics.extend(derives::reached_checks(
+        &symbols.structs,
+        &symbols.enums,
+        &env_reached,
+        Medium::Env,
+        str::to_uppercase,
+    ));
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
@@ -87,6 +119,7 @@ pub fn typecheck(
             imported: def.imported,
             fields: def.fields.clone(),
             derives: derives.of_struct(id),
+            serde: reached.structs[id].or(env_reached.structs[id]),
             span: def.span,
         })
         .collect();
@@ -102,6 +135,7 @@ pub fn typecheck(
             variants: def.variants.clone(),
             drops: def.drops.clone(),
             derives: derives.of_enum(id),
+            serde: reached.enums[id].or(env_reached.enums[id]),
             span: def.span,
         })
         .collect();
@@ -156,6 +190,8 @@ pub fn typecheck(
         .collect();
 
     Ok(HirProgram {
+        uses_std: uses_std || names_error(symbols, &functions),
+        logs,
         modules,
         functions,
         structs,
@@ -163,6 +199,29 @@ pub fn typecheck(
         imported,
         entry: resolved.entry,
     })
+}
+
+/// Whether the program names `Error` (M5a spec 1): in a signature, a
+/// field, a variant's payload, or a local's type, which is where every
+/// written type argument ends up.
+fn names_error(symbols: &Symbols, functions: &[HirFunction]) -> bool {
+    let fields = symbols
+        .structs
+        .iter()
+        .flat_map(|def| def.fields.iter().map(|field| &field.ty));
+    let payloads = symbols
+        .enums
+        .iter()
+        .flat_map(|def| def.variants.iter())
+        .flat_map(|variant| match &variant.fields {
+            VariantFieldsDef::Tuple(types) => types.iter().collect::<Vec<_>>(),
+            VariantFieldsDef::Named(fields) => fields.iter().map(|(_, ty)| ty).collect(),
+        });
+    let locals = functions.iter().flat_map(|function| {
+        let ret = std::iter::once(&function.ret);
+        ret.chain(function.locals.iter().map(|local| &local.ty))
+    });
+    fields.chain(payloads).chain(locals).any(Ty::has_error)
 }
 
 /// `decl`, the `order`-th `use` declared in `module` (source order):
@@ -182,10 +241,47 @@ fn hir_use(symbols: &Symbols, module: ModuleId, order: usize, decl: &UseDecl) ->
     }
 }
 
+/// The directory an `assert`'s location is relative to (M5a spec 2.7),
+/// so the generated Rust is the same wherever `varyk` runs: a package's
+/// root, the directory of its `Cargo.toml` (`src/store.vr`), or a single
+/// file's own directory (`main.vr`).
+fn location_base(resolved: &Resolved, sources: &[SourceFile]) -> std::path::PathBuf {
+    let manifest = sources.iter().find(|source| {
+        source
+            .path
+            .file_name()
+            .is_some_and(|name| name == "Cargo.toml")
+    });
+    let entry = resolved
+        .modules
+        .iter()
+        .find(|module| module.parent.is_none())
+        .and_then(|module| sources.get(module.file.0 as usize));
+    manifest
+        .or(entry)
+        .and_then(|source| source.path.parent())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default()
+}
+
+/// `path` relative to `base`, its parts joined with `/` on every
+/// platform; the file name alone if it is not under `base`.
+fn location_path(path: &std::path::Path, base: &std::path::Path) -> String {
+    let relative = match path.strip_prefix(base) {
+        Ok(relative) => relative,
+        Err(_) => path.file_name().map_or(path, std::path::Path::new),
+    };
+    relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Module `id`'s generated file under `src/` (spec 2.3): `main.rs` for
-/// a binary's entry, `lib.rs` for a library's; else its ancestors' names as directories and its own as the
-/// file, `shop/cart.rs`, or `shop/mod.rs` for a module read from
-/// `shop/mod.vr`.
+/// a binary's entry, `lib.rs` for a library's; else its ancestors' names
+/// as directories and its own as the file, `shop/cart.rs`, or
+/// `shop/mod.rs` for a module read from `shop/mod.vr`.
 fn tree_path(resolved: &Resolved, id: ModuleId, sources: &[SourceFile]) -> String {
     let module = &resolved.modules[id.0 as usize];
     let Some(parent) = module.parent else {
@@ -244,9 +340,23 @@ struct FnChecker<'a> {
     /// on one (its type is its range's).
     range_vars: Vec<LocalId>,
     /// The span of the operand of a `?` being checked in a function
-    /// returning `Result`, so that `parse()?` there is V0206 rather than a
-    /// mismatch (M4 spec 2.6, 2.7).
-    result_try_operand: Option<Span>,
+    /// returning `Option`, so that `parse()?` there is V0206 rather than a
+    /// mismatch (M4 spec 2.6, M5a spec 2.8).
+    option_try_operand: Option<Span>,
+    /// Whether the function makes a `varyk-std` call (M5a spec 1).
+    uses_std: bool,
+    /// Whether a `log` call was checked (M5a spec 2.6).
+    logs: bool,
+    /// Whether the function is a `#[test]`, the one place `assert` and
+    /// `assert_eq` may be called (M5a spec 2.7).
+    is_test: bool,
+    /// The directory an `assert`'s location is written from (see
+    /// [`location_base`]).
+    base: &'a std::path::Path,
+    /// What the `json` calls of every function reach so far.
+    reached: &'a mut Reached,
+    /// What the `env` calls reach.
+    env_reached: &'a mut Reached,
     diagnostics: &'a mut Vec<Diagnostic>,
 }
 
@@ -321,6 +431,7 @@ impl FnChecker<'_> {
             owner: sig.owner,
             name: sig.name.clone(),
             is_pub: sig.is_pub,
+            is_test: sig.is_test,
             params,
             ret: sig.ret.clone(),
             body,
@@ -870,7 +981,7 @@ impl FnChecker<'_> {
                 .push(Diagnostic::new(codes::V0200, span, message));
             return None;
         };
-        let (min, max) = int_range(kind);
+        let (min, max) = kind.range();
         let limit = if negated && min < 0 {
             min.unsigned_abs()
         } else {
@@ -1189,6 +1300,9 @@ impl FnChecker<'_> {
                 .push(Diagnostic::new(codes::V0100, callee.span, message));
             return None;
         }
+        if path.is_none() && matches!(name.name.as_str(), "assert" | "assert_eq") {
+            return self.assert_call(&name.name, args, callee.span, span);
+        }
         // `path_owner` returned `None` (not `Some(None)`, already handled
         // above): the path, if any, is a module path (spec 3.1).
         let module_path = path.as_ref();
@@ -1221,6 +1335,23 @@ impl FnChecker<'_> {
                 return None;
             }
         };
+        // A test is run by `varyk test` alone (M5a spec 2.7).
+        if let Callee::Varyk(id) = found {
+            if self.symbols.fns[id.0 as usize].is_test {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        codes::V0114,
+                        callee.span,
+                        format!("`{path}` is a test and cannot be called"),
+                    )
+                    .with_note(
+                        "`varyk test` runs each test on its own; put what the tests share in \
+                         a function without `#[test]` and call that",
+                    ),
+                );
+                return None;
+            }
+        }
 
         let (params, ret): (Vec<Ty>, Ty) = match found {
             Callee::Varyk(id) => {
@@ -1253,6 +1384,75 @@ impl FnChecker<'_> {
                 rooted: None,
             },
             ty: ret,
+            span,
+        })
+    }
+
+    /// `assert(cond)` or `assert_eq(a, b)` (M5a spec 2.7), `name` called
+    /// at `name_span`: only in a test (V0114), with the call's Varyk file
+    /// and line for the failure message. `assert_eq`'s operands are
+    /// checked as `a == b` is, so differing types are V0200 and a type
+    /// without `==` is V0203.
+    fn assert_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        name_span: Span,
+        span: Span,
+    ) -> Option<HirExpr> {
+        if !self.is_test {
+            self.diagnostics.push(
+                Diagnostic::new(
+                    codes::V0114,
+                    name_span,
+                    format!("`{name}` can only be used inside a `#[test]` function"),
+                )
+                .with_note(
+                    "a failed check stops the program, which has no place in service code; \
+                     return an `Err` or handle the case instead",
+                ),
+            );
+            return None;
+        }
+        let (cond, kind) = if name == "assert" {
+            let [cond] = args else {
+                self.arguments(name, &[Ty::Bool], args, span);
+                return None;
+            };
+            let cond = self
+                .expr(cond, Some(Ty::Bool))
+                .and_then(|cond| self.expect(cond, &Ty::Bool))?;
+            (cond, AssertKind::Plain)
+        } else {
+            let [a, b] = args else {
+                let message = format!(
+                    "`assert_eq` takes 2 arguments but {} {} given",
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" },
+                );
+                self.diagnostics
+                    .push(Diagnostic::new(codes::V0201, span, message));
+                return None;
+            };
+            let cond = self.binary(BinaryOp::Eq, a, b, None, span)?;
+            let HirExprKind::Binary { lhs, .. } = &cond.kind else {
+                return None;
+            };
+            let show = matches!(
+                lhs.ty,
+                Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Error
+            );
+            (cond, AssertKind::Eq { show })
+        };
+        let file = &self.sources[span.file.0 as usize];
+        let (line, _) = file.line_col(span.start);
+        Some(HirExpr {
+            kind: HirExprKind::Assert {
+                cond: Box::new(cond),
+                location: format!("{}:{line}", location_path(&file.path, self.base)),
+                kind,
+            },
+            ty: Ty::Unit,
             span,
         })
     }
@@ -1583,8 +1783,9 @@ impl FnChecker<'_> {
                         self.ty_name(&arg.ty)
                     );
                     self.diagnostics.push(
-                        Diagnostic::new(codes::V0203, arg.span, message)
-                            .with_note("only numbers, `bool`, and `string` have a printed form"),
+                        Diagnostic::new(codes::V0203, arg.span, message).with_note(
+                            "only numbers, `bool`, `string`, and `Error` have a printed form",
+                        ),
                     );
                     failed = true;
                 }
@@ -1698,24 +1899,7 @@ impl FnChecker<'_> {
     }
 
     fn ty_name(&self, ty: &Ty) -> String {
-        match ty {
-            Ty::Bool => "bool".to_string(),
-            Ty::Int(kind) => kind.name().to_string(),
-            Ty::Float(kind) => kind.name().to_string(),
-            Ty::String => "string".to_string(),
-            Ty::Struct(id) => self.symbols.structs[id.0 as usize].name.clone(),
-            Ty::Enum(id) => self.symbols.enums[id.0 as usize].name.clone(),
-            Ty::Option(inner) => format!("Option<{}>", self.ty_name(inner)),
-            Ty::Result(ok, err) => {
-                format!("Result<{}, {}>", self.ty_name(ok), self.ty_name(err))
-            }
-            Ty::Vec(inner) => format!("Vec<{}>", self.ty_name(inner)),
-            Ty::HashMap(key, value) => {
-                format!("HashMap<{}, {}>", self.ty_name(key), self.ty_name(value))
-            }
-            Ty::Chain(item) => format!("chain of {}", self.ty_name(item)),
-            Ty::Unit => "()".to_string(),
-        }
+        derives::ty_name(&self.symbols.structs, &self.symbols.enums, ty)
     }
 }
 
@@ -1842,6 +2026,7 @@ fn unfinished_chains(expr: &HirExpr, next: bool, out: &mut Vec<Diagnostic>) {
         | HirExprKind::Local(_) => {}
         HirExprKind::Call { args, .. }
         | HirExprKind::Println { args, .. }
+        | HirExprKind::Log { args, .. }
         | HirExprKind::Format { args, .. }
         | HirExprKind::EnumLit { args, .. }
         | HirExprKind::VecLit(args) => each(args, out),
@@ -1868,7 +2053,8 @@ fn unfinished_chains(expr: &HirExpr, next: bool, out: &mut Vec<Diagnostic>) {
         }
         HirExprKind::Unary { operand, .. }
         | HirExprKind::Cast { expr: operand, .. }
-        | HirExprKind::Try { operand, .. } => unfinished_chains(operand, false, out),
+        | HirExprKind::Try { operand, .. }
+        | HirExprKind::Assert { cond: operand, .. } => unfinished_chains(operand, false, out),
         HirExprKind::Binary { lhs, rhs, .. } => {
             unfinished_chains(lhs, false, out);
             unfinished_chains(rhs, false, out);
@@ -2070,18 +2256,3 @@ mod values;
 
 #[cfg(test)]
 mod tests;
-
-/// The smallest and largest value of an integer type.
-fn int_range(kind: IntKind) -> (i128, i128) {
-    match kind {
-        IntKind::I8 => (i8::MIN.into(), i8::MAX.into()),
-        IntKind::I16 => (i16::MIN.into(), i16::MAX.into()),
-        IntKind::I32 => (i32::MIN.into(), i32::MAX.into()),
-        IntKind::I64 => (i64::MIN.into(), i64::MAX.into()),
-        IntKind::U8 => (0, u8::MAX.into()),
-        IntKind::U16 => (0, u16::MAX.into()),
-        IntKind::U32 => (0, u32::MAX.into()),
-        // Taken as 64 bits wide, as on every 64-bit target.
-        IntKind::U64 | IntKind::Usize => (0, u64::MAX.into()),
-    }
-}
