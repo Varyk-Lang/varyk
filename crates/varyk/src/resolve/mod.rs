@@ -24,6 +24,7 @@ use crate::interop::ImportedModule;
 use crate::package::Kind;
 use crate::types::{Derives, ParamMode, Ty};
 
+mod attrs;
 mod imports;
 mod modules;
 mod paths;
@@ -33,6 +34,8 @@ mod tests;
 mod uses;
 mod visibility;
 
+use attrs::Place;
+pub use attrs::{FieldAttrs, HirDefault};
 use imports::skipped_note;
 use modules::load_modules;
 pub use paths::resolve_path;
@@ -135,6 +138,8 @@ pub struct FnSig {
     /// For a function of an `impl` block, its index in
     /// [`ImplBlock::functions`].
     pub member: Option<usize>,
+    /// Marked `#[test]` (M5a spec 2.7): run by `varyk test`, never called.
+    pub is_test: bool,
     /// The whole declaration, starting at `fn` (or `pub`).
     pub span: Span,
 }
@@ -223,6 +228,8 @@ pub struct FieldDef {
     /// For a field of an imported struct whose Rust type does not map
     /// (M3 spec 4.1): the type, and what to change.
     pub unusable: Option<Unusable>,
+    /// Its attributes (M5a spec 2.2); none for an imported struct's field.
+    pub attrs: FieldAttrs,
     /// The whole declaration, starting at the field's name (or `pub`);
     /// for an imported struct's field, its name in the `.rs` file.
     pub span: Span,
@@ -336,6 +343,9 @@ impl EnumDef {
 pub struct VariantDef {
     pub name: String,
     pub fields: VariantFieldsDef,
+    /// `#[rename("key")]` on a unit variant (M5a spec 2.2): the key's text
+    /// between the quotes, as written.
+    pub rename: Option<String>,
 }
 
 /// What a variant holds: values by position, none for a unit variant
@@ -816,6 +826,11 @@ impl Symbols {
         if let Some(prim) = Ty::from_primitive_name(name) {
             return Ok(prim);
         }
+        // No struct or enum can take the name (V0113), so it is always
+        // the standard one (M5a spec 2.3).
+        if name == "Error" {
+            return Ok(Ty::Error);
+        }
         if name == "String" || name == "str" {
             return Err(Diagnostic::new(
                 codes::V0107,
@@ -1024,7 +1039,11 @@ fn parse(file: &SourceFile) -> Result<Program, Vec<Diagnostic>> {
 /// namespace with the primitives, `String`, `Option`, `Result`, and `Vec`,
 /// so a user item with one of those names would capture them in rustc
 /// (`mod String;` makes every `String` a module).
+/// `Error` is V0113 instead: the standard error type's name.
 pub(crate) fn reserved_type_name(name: &str, span: Span) -> Option<Diagnostic> {
+    if name == "Error" {
+        return Some(error_name_taken(span));
+    }
     let primitive = Ty::from_primitive_name(name).is_some() || matches!(name, "string" | "str");
     if primitive {
         return Some(taken(name, "a built-in type", span));
@@ -1046,6 +1065,83 @@ pub(crate) fn reserved_value_name(name: &str, span: Span) -> Option<Diagnostic> 
         _ => return None,
     };
     Some(taken(name, owner, span))
+}
+
+/// V0113 at `span` for a struct, enum, module, `use` alias, or `.rs`
+/// struct or enum named `Error`, the standard error type (M5a spec 2.10).
+pub(crate) fn error_name_taken(span: Span) -> Diagnostic {
+    Diagnostic::new(
+        codes::V0113,
+        span,
+        "the name `Error` is already taken by the standard error type",
+    )
+    .with_note(
+        "every standard call that can fail gives an `Error`, so a type of your own needs \
+         another name, such as `ParseError` or `Problem`",
+    )
+}
+
+/// V0113 at `span` for a module, struct, or enum named `json`, `env`, or `log`, the
+/// standard modules (M5a spec 2.10).
+pub(crate) fn std_module_taken(name: &str, span: Span) -> Option<Diagnostic> {
+    if !is_std_module(name) {
+        return None;
+    }
+    Some(
+        Diagnostic::new(
+            codes::V0113,
+            span,
+            format!("the name `{name}` is already taken by the standard `{name}` module"),
+        )
+        .with_note(format!(
+            "the standard `{name}` module is reached by its path wherever it is used, as in \
+             `{name}::..`, so a module, struct, or enum of your own needs another name"
+        )),
+    )
+}
+
+/// `json`, `env`, and `log`, the standard modules (M5a spec 2.10).
+pub(crate) fn is_std_module(name: &str) -> bool {
+    matches!(name, "json" | "env" | "log")
+}
+
+/// V0113 at `span` for a function named `assert` or `assert_eq`, the
+/// standard checks of a test (M5a spec 2.7, 2.10).
+fn std_fn_taken(name: &str, span: Span) -> Option<Diagnostic> {
+    if !matches!(name, "assert" | "assert_eq") {
+        return None;
+    }
+    Some(
+        Diagnostic::new(
+            codes::V0113,
+            span,
+            format!("the name `{name}` is already taken by the standard check `{name}`"),
+        )
+        .with_note(
+            "`assert` and `assert_eq` check results inside a `#[test]` function, so a \
+             function of your own needs another name",
+        ),
+    )
+}
+
+/// V0113 at `span` for an item, method, module, or `use` name starting
+/// with `varyk_`, kept for the functions the compiler adds to the
+/// generated Rust (M5a spec 2.10).
+pub(crate) fn varyk_prefix_taken(name: &str, span: Span) -> Option<Diagnostic> {
+    if !name.starts_with("varyk_") {
+        return None;
+    }
+    Some(
+        Diagnostic::new(
+            codes::V0113,
+            span,
+            format!("the name `{name}` starts with `varyk_`"),
+        )
+        .with_note(
+            "names starting with `varyk_` are kept for what Varyk adds to the Rust it writes, \
+             so this needs another name",
+        ),
+    )
 }
 
 fn taken(name: &str, owner: &str, span: Span) -> Diagnostic {
@@ -1139,7 +1235,14 @@ fn collect_symbols(
                         ));
                     }
                     let id = push_fn(&mut symbols.fns, function, module.id, index, None);
+                    let placed = attrs::placed(&function.attrs, Place::Function, diagnostics);
+                    if !placed.is_empty() {
+                        symbols.fns[id.0 as usize].is_test = true;
+                        check_test_shape(function, diagnostics);
+                    }
                     diagnostics.extend(reserved_value_name(&name.name, name.span));
+                    diagnostics.extend(std_fn_taken(&name.name, name.span));
+                    diagnostics.extend(varyk_prefix_taken(&name.name, name.span));
                     match first_fn.entry(&name.name) {
                         Entry::Occupied(first) => {
                             diagnostics.push(duplicate(&name.name, name.span, *first.get()));
@@ -1155,6 +1258,9 @@ fn collect_symbols(
                     // Reported, but still registered: the later passes walk
                     // the struct declarations in the same order by id.
                     diagnostics.extend(reserved_type_name(&name.name, name.span));
+                    diagnostics.extend(std_module_taken(&name.name, name.span));
+                    diagnostics.extend(varyk_prefix_taken(&name.name, name.span));
+                    attrs::placed(&decl.attrs, Place::Struct, diagnostics);
                     let id = StructId(symbols.structs.len() as u32);
                     symbols.structs.push(StructDef {
                         name: name.name.clone(),
@@ -1178,6 +1284,9 @@ fn collect_symbols(
                 Item::Enum(decl) => {
                     let name = &decl.name;
                     diagnostics.extend(reserved_type_name(&name.name, name.span));
+                    diagnostics.extend(std_module_taken(&name.name, name.span));
+                    diagnostics.extend(varyk_prefix_taken(&name.name, name.span));
+                    attrs::placed(&decl.attrs, Place::Enum, diagnostics);
                     let id = EnumId(symbols.enums.len() as u32);
                     // Variant names are known now; pass 2 fills in their
                     // payload types (and pass 1b already needs the names).
@@ -1187,6 +1296,7 @@ fn collect_symbols(
                         .map(|variant| VariantDef {
                             name: variant.name.name.clone(),
                             fields: VariantFieldsDef::Tuple(Vec::new()),
+                            rename: None,
                         })
                         .collect();
                     symbols.enums.push(EnumDef {
@@ -1211,20 +1321,27 @@ fn collect_symbols(
                     }
                 }
                 Item::Impl(block) => {
+                    attrs::placed(&block.attrs, Place::Impl, diagnostics);
                     let first = symbols.fns.len() as u32;
                     for (member, function) in block.functions.iter().enumerate() {
                         let name = &function.name;
+                        attrs::placed(&function.attrs, Place::Method, diagnostics);
                         diagnostics.extend(reserved_value_name(&name.name, name.span));
+                        diagnostics.extend(varyk_prefix_taken(&name.name, name.span));
                         push_fn(&mut symbols.fns, function, module.id, index, Some(member));
                     }
                     impls.push((module.id, block, first));
                 }
-                Item::Mod(_) => {}
+                Item::Mod(decl) => {
+                    attrs::placed(&decl.attrs, Place::Mod, diagnostics);
+                }
                 // `use` introduces no symbol of its own in this pass: it
                 // names an existing one, so it is resolved once every
                 // module's own names (and, further below, its imports) are
                 // known, in `uses::register`.
-                Item::Use(_) => {}
+                Item::Use(decl) => {
+                    attrs::placed(&decl.attrs, Place::Use, diagnostics);
+                }
             }
         }
     }
@@ -1325,8 +1442,10 @@ fn collect_symbols(
                             diagnostics.push(duplicate(&name.name, name.span, first));
                         }
                         seen.entry(&name.name).or_insert(name.span);
+                        let placed = attrs::placed(&field.attrs, Place::Field, diagnostics);
                         match symbols.resolve_type(&field.ty, module.id) {
                             Ok(ty) => {
+                                let attrs = field_attrs(&placed, &ty, &field.ty, diagnostics);
                                 // Only a `pub` field's type must be as
                                 // widely visible as its callers (spec
                                 // 3.4): a private field may have a
@@ -1345,6 +1464,7 @@ fn collect_symbols(
                                     ty,
                                     is_pub: field.is_pub,
                                     unusable: None,
+                                    attrs,
                                     span: field.span,
                                 });
                             }
@@ -1366,6 +1486,18 @@ fn collect_symbols(
                             diagnostics.push(duplicate(&name.name, name.span, first));
                         }
                         seen.entry(&name.name).or_insert(name.span);
+                        let place = match &variant.fields {
+                            VariantFields::Unit => Place::UnitVariant,
+                            VariantFields::Tuple(_) | VariantFields::Named(_) => Place::DataVariant,
+                        };
+                        let rename = attrs::placed(&variant.attrs, place, diagnostics)
+                            .into_iter()
+                            .find_map(|attr| attrs::rename(attr, diagnostics));
+                        if let VariantFields::Named(fields) = &variant.fields {
+                            for field in fields {
+                                attrs::placed(&field.attrs, Place::VariantField, diagnostics);
+                            }
+                        }
                         // Each field name, where one is written.
                         let written: Vec<(Option<&Ident>, &TypeExpr)> = match &variant.fields {
                             VariantFields::Unit => Vec::new(),
@@ -1419,6 +1551,7 @@ fn collect_symbols(
                         variants.push(VariantDef {
                             name: name.name.clone(),
                             fields,
+                            rename,
                         });
                     }
                     symbols.enums[next_enum].variants = variants;
@@ -1476,9 +1609,49 @@ fn push_fn(
         },
         item,
         member,
+        is_test: false,
         span: function.span,
     });
     id
+}
+
+/// The checked attributes of a struct field of type `ty`, written as
+/// `written`, from those [`attrs::placed`] kept.
+fn field_attrs(
+    placed: &[&varyk_syntax::Attribute],
+    ty: &Ty,
+    written: &TypeExpr,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> FieldAttrs {
+    let mut attrs = FieldAttrs::default();
+    for attr in placed {
+        match attr.name.name.as_str() {
+            "rename" => attrs.rename = attrs::rename(attr, diagnostics),
+            "default" => attrs.default = attrs::default(attr, ty, written, diagnostics),
+            "skip" => attrs.skip = true,
+            _ => {}
+        }
+    }
+    attrs
+}
+
+/// V0114 for a `#[test]` function with parameters or a return type (M5a
+/// spec 2.7): the test runner calls it with nothing and keeps nothing.
+fn check_test_shape(function: &Function, diagnostics: &mut Vec<Diagnostic>) {
+    if function.params.is_empty() && function.return_type.is_none() {
+        return;
+    }
+    diagnostics.push(
+        Diagnostic::new(
+            codes::V0114,
+            header(function),
+            "a test must take no parameters and return nothing",
+        )
+        .with_note(
+            "`varyk test` runs each test on its own, giving it nothing, and a test checks its \
+             results with `assert` and `assert_eq` instead of returning them",
+        ),
+    );
 }
 
 /// V0109 for every struct or enum that contains itself, directly or
@@ -1691,6 +1864,16 @@ fn check_entry_main(entry: &Module, kind: Kind, diagnostics: &mut Vec<Diagnostic
                 header(function),
                 "`main` must take no parameters and return nothing",
             ));
+        }
+        Some(function) if function.attrs.iter().any(|attr| attr.name.name == "test") => {
+            diagnostics.push(
+                Diagnostic::new(
+                    codes::V0114,
+                    header(function),
+                    "`main` is where the program starts and cannot be a test",
+                )
+                .with_note("put the test in a function of its own, with another name"),
+            );
         }
         Some(_) => {}
     }

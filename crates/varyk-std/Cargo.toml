@@ -1,0 +1,19 @@
+[package]
+name = "varyk-std"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The runtime that programs written in Varyk, a language for backend services that compiles to Rust, call into: errors, JSON, configuration, and logging"
+readme = "../../README.md"
+keywords = ["varyk", "runtime", "json", "logging", "config"]
+categories = ["development-tools"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }

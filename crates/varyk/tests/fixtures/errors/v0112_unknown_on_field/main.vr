@@ -1,0 +1,6 @@
+struct User {
+    #[serde(rename = "userName")]
+    user_name: string,
+}
+
+fn main() {}

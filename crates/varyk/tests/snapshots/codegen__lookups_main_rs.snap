@@ -21,8 +21,8 @@ fn or_zero(o: &Option<i32>) -> i32 {
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn code(text: &str) -> Result<i32, String> {
-    let parsed: Option<i32> = text.parse::<i32>().ok();
-    let n = parsed.ok_or("not a number".to_string())?;
+    let parsed: Result<i32, ::varyk_std::Error> = ::varyk_std::parse::<i32>(text);
+    let n = parsed.ok().ok_or("not a number".to_string())?;
     Ok(n)
 }
 

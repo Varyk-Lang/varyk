@@ -1,0 +1,8 @@
+fn greet() {}
+
+#[skip]
+use crate::greet as hello;
+
+fn main() {
+    hello();
+}

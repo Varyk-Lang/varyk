@@ -34,12 +34,13 @@ fn report(lines: Vec<string>) -> Option<string> {
 }
 
 fn parse_code(text: string) -> Result<i32, string> {
-    let parsed: Option<i32> = text.parse();
-    parsed.ok_or(format!("bad code: {}", text))
+    let parsed: Result<i32, Error> = text.parse();
+    parsed.map_err(|e| format!("bad code: {}", text))
 }
 
 fn next_port(text: string) -> Option<i32> {
-    let port: i32 = text.trim().parse()?;
+    let parsed: Result<i32, Error> = text.trim().parse();
+    let port = parsed.ok()?;
     Some(port + 1)
 }
 

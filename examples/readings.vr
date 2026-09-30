@@ -19,8 +19,8 @@ struct Reading {
 }
 
 fn parse_reading(text: string) -> Result<Reading, string> {
-    let parsed: Option<f64> = text.trim().parse();
-    let value = parsed.ok_or(format!("not a number: {}", text.trim()))?;
+    let parsed: Result<f64, Error> = text.trim().parse();
+    let value = parsed.ok().ok_or(format!("not a number: {}", text.trim()))?;
     Ok(Reading { value: value, unit: Unit::Celsius })
 }
 

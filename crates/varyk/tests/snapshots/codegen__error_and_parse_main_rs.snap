@@ -1,0 +1,33 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct Failure {
+    error: ::varyk_std::Error,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn number(text: &str) -> Result<i32, ::varyk_std::Error> {
+    let n = ::varyk_std::parse::<i32>(text.trim())?;
+    if n < 0 {
+        return Err(::varyk_std::Error::new(::std::format!("{} is negative", n)));
+    }
+    Ok(n)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let owned = "stored".to_string();
+    let e = ::varyk_std::Error::new("literal".to_string());
+    let f = ::varyk_std::Error::new(owned);
+    let m = e.message();
+    ::std::println!("{} {}", m, f);
+    let failure = Failure { error: e.clone() };
+    ::std::println!("{}", failure.error == e);
+    match number(" 42 ") {
+        Ok(n) => ::std::println!("{}", n),
+        Err(error) => ::std::println!("{}", error.message()),
+    }
+}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `json` is already taken by the standard `json` module
+ --> crates/varyk/tests/fixtures/errors/v0113_module_named_json/main.vr:1:5
+  |
+1 | mod json;
+  |     ^^^^ the name `json` is already taken by the standard `json` module
+  |
+  = note: the standard `json` module is reached by its path wherever it is used, as in `json::..`, so a module, struct, or enum of your own needs another name

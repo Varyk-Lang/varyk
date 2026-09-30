@@ -1,0 +1,16 @@
+// expected output: nothing on stdout; with LOG=debug, stderr holds
+// (after the time on each line):
+// DEBUG starting with 3 workers
+// INFO listening on port 8080
+// WARN queue is 90 percent full
+// ERROR request failed: connection refused
+
+fn main() {
+    let workers = 3;
+    let port = 8080;
+    let cause = Error::new("connection refused");
+    log::debug("starting with {} workers", workers);
+    log::info("listening on port {}", port);
+    log::warn("queue is {} percent full", 90);
+    log::error("request failed: {}", cause);
+}

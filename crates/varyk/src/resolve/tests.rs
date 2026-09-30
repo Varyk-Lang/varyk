@@ -1085,14 +1085,17 @@ fn enum_and_impl_register() {
             VariantDef {
                 name: "Circle".to_string(),
                 fields: VariantFieldsDef::Tuple(vec![F64]),
+                rename: None,
             },
             VariantDef {
                 name: "Rect".to_string(),
                 fields: VariantFieldsDef::Tuple(vec![F64, Ty::String]),
+                rename: None,
             },
             VariantDef {
                 name: "Point".to_string(),
                 fields: VariantFieldsDef::Tuple(vec![]),
+                rename: None,
             },
         ]
     );
@@ -2121,5 +2124,457 @@ fn a_use_of_a_variant_by_crate_path_of_a_type_in_scope_says_only_to_write_the_pa
     assert_eq!(
         d.message,
         "`use` cannot name a variant; `Shape` can already be used here, so write `Shape::Circle`"
+    );
+}
+
+#[test]
+fn a_rs_struct_named_error_is_v0113_at_its_name() {
+    let (diagnostics, sources) = error_fixture("v0113_rs_struct_named_error");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0113, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, 1, "Error"));
+}
+
+#[test]
+fn a_use_alias_named_error_is_v0113() {
+    let d = errors_str("struct Problem {\n    n: i32,\n}\nuse Problem as Error;\nfn main() {}\n");
+    assert_eq!(only(&d).code, codes::V0113, "{d:#?}");
+}
+
+// --- Attributes and reserved names (M5a spec 2.2, 2.7, 2.10) ---------------
+
+/// The code and headline of every diagnostic for `text`.
+fn codes_and_messages(text: &str) -> Vec<(&'static str, String)> {
+    errors_str(text)
+        .into_iter()
+        .map(|d| (d.code, d.message))
+        .collect()
+}
+
+fn resolved_str(text: &str) -> Resolved {
+    match resolve_str(text).0 {
+        Ok(resolved) => resolved,
+        Err(diagnostics) => panic!("unexpected diagnostics for:\n{text}\n{diagnostics:#?}"),
+    }
+}
+
+#[test]
+fn derive_on_a_struct_is_v0112_naming_the_four_with_the_derive_note() {
+    let diagnostics = errors_str("#[derive(Clone)]\nstruct P { x: i32 }\nfn main() {}");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0112);
+    assert_eq!(d.message, "there is no attribute named `derive`");
+    assert_eq!((d.span.start, d.span.end), (0, 16));
+    assert_eq!(
+        d.notes,
+        vec![
+            "the attributes are `#[rename(\"key\")]`, `#[default(value)]`, `#[skip]`, and \
+             `#[test]`"
+                .to_string(),
+            "`.clone()`, `==`, and JSON work without a derive: Varyk gives a type each of them \
+             when it can"
+                .to_string(),
+        ]
+    );
+}
+
+#[test]
+fn an_attribute_on_a_struct_enum_impl_mod_or_use_is_v0112() {
+    let cases = [
+        (
+            "#[skip] struct P { x: i32 }",
+            "`#[skip]` cannot go on a struct",
+        ),
+        (
+            "#[rename(\"e\")] enum E { A }",
+            "`#[rename]` cannot go on an enum",
+        ),
+        (
+            "struct P { x: i32 }\n#[test] impl P { }",
+            "`#[test]` cannot go on an `impl` block",
+        ),
+        // No file for `m`: V0104 as well.
+        ("#[skip] mod m;", "`#[skip]` cannot go on a `mod` line"),
+        (
+            "#[skip] use crate::f as g;\nfn f() {}",
+            "`#[skip]` cannot go on a `use` line",
+        ),
+    ];
+    for (source, message) in cases {
+        let text = format!("{source}\nfn main() {{}}");
+        let found: Vec<(&str, String)> = codes_and_messages(&text)
+            .into_iter()
+            .filter(|(code, _)| *code != codes::V0104)
+            .collect();
+        assert_eq!(found, vec![(codes::V0112, message.to_string())], "{text}");
+    }
+}
+
+#[test]
+fn attributes_in_the_wrong_place_are_v0112_saying_where_they_go() {
+    let cases = [
+        (
+            "struct P { #[inline] x: i32 }",
+            "there is no attribute named `inline`",
+            None,
+        ),
+        (
+            "struct P { #[test] x: i32 }",
+            "`#[test]` cannot go on a struct field",
+            Some("`#[test]` goes before a top-level function"),
+        ),
+        (
+            "enum E { #[skip] A }",
+            "`#[skip]` cannot go on a variant",
+            Some("`#[skip]` goes before a struct field"),
+        ),
+        (
+            "enum E { #[rename(\"c\")] C(i32) }",
+            "`#[rename]` cannot go on a variant that carries data",
+            Some("`#[rename]` goes before a struct field or a variant that carries no data"),
+        ),
+        (
+            "enum E { C { #[rename(\"x\")] x: i32 } }",
+            "`#[rename]` cannot go on a field of a variant",
+            Some("`#[rename]` goes before a struct field or a variant that carries no data"),
+        ),
+        (
+            "struct P { x: i32 }\nimpl P { #[test] fn t() {} }",
+            "`#[test]` cannot go on a method",
+            Some("`#[test]` goes before a top-level function"),
+        ),
+        (
+            "struct P { x: i32 }\nimpl P { #[skip] fn t(self) {} }",
+            "`#[skip]` cannot go on a method",
+            Some("`#[skip]` goes before a struct field"),
+        ),
+        (
+            "#[default(1)] fn f() {}",
+            "`#[default]` cannot go on a function",
+            Some("`#[default]` goes before a struct field"),
+        ),
+    ];
+    for (source, message, note) in cases {
+        let text = format!("{source}\nfn main() {{}}");
+        let diagnostics = errors_str(&text);
+        let d = only(&diagnostics);
+        assert_eq!(
+            (d.code, d.message.as_str()),
+            (codes::V0112, message),
+            "{text}"
+        );
+        if let Some(note) = note {
+            assert_eq!(d.notes, vec![note.to_string()], "{text}");
+        }
+    }
+}
+
+#[test]
+fn the_same_attribute_twice_is_v0112_at_the_second() {
+    let text = "struct P { #[skip] #[skip] x: Option<i32> }\nfn main() {}";
+    let (result, sources) = resolve_str(text);
+    let Err(diagnostics) = result else {
+        panic!("expected diagnostics");
+    };
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0112);
+    assert_eq!(d.message, "`#[skip]` is written twice here");
+    let second = text.rfind("#[skip]").expect("in text") as u32;
+    assert_eq!(d.span.start, second);
+    assert_eq!(d.labels[0].span, span_of(&sources, 0, "#[skip]"));
+}
+
+#[test]
+fn a_missing_or_unexpected_argument_is_v0112() {
+    let cases = [
+        (
+            "struct P { #[rename] x: i32 }",
+            "`#[rename]` needs a value, as in `#[rename(\"userName\")]`",
+        ),
+        (
+            "struct P { #[default] x: i32 }",
+            "`#[default]` needs a value, as in `#[default(8080)]`",
+        ),
+        (
+            "struct P { #[skip(1)] x: Option<i32> }",
+            "`#[skip]` takes no value",
+        ),
+        ("#[test(1)] fn t() {}", "`#[test]` takes no value"),
+    ];
+    for (source, message) in cases {
+        let text = format!("{source}\nfn main() {{}}");
+        assert_eq!(
+            codes_and_messages(&text),
+            vec![(codes::V0112, message.to_string())],
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_literal_that_does_not_fit_is_v0209() {
+    let cases = [
+        (
+            "struct P { #[rename(1)] x: i32 }",
+            "`#[rename]` needs a name in quotes, as in `#[rename(\"userName\")]`",
+        ),
+        (
+            "struct P { #[rename(userName)] x: i32 }",
+            "`#[rename]` needs a name in quotes, as in `#[rename(\"userName\")]`",
+        ),
+        (
+            "enum E { #[rename(true)] A }",
+            "`#[rename]` needs a name in quotes, as in `#[rename(\"userName\")]`",
+        ),
+        (
+            "struct P { #[rename(\"\")] x: i32 }",
+            "`#[rename(\"\")]` gives an empty name",
+        ),
+        (
+            "struct P { #[default(\"x\")] x: i32 }",
+            "the default `\"x\"` does not fit the type `i32`",
+        ),
+        (
+            "struct P { #[default(300)] x: u8 }",
+            "the default `300` does not fit in `u8` (0 to 255)",
+        ),
+        (
+            "struct P { #[default(-1)] x: u8 }",
+            "the default `-1` does not fit in `u8` (0 to 255)",
+        ),
+        (
+            "struct P { #[default(1)] x: f64 }",
+            "the default `1` does not fit the type `f64`",
+        ),
+        (
+            "struct P { #[default(1.5)] x: i32 }",
+            "the default `1.5` does not fit the type `i32`",
+        ),
+        (
+            "struct P { #[default(0.00000000000000000000000000000000000000000000001)] x: f32 }",
+            "the default `0.00000000000000000000000000000000000000000000001` does not fit in `f32`",
+        ),
+        (
+            "struct P { #[default(1)] x: bool }",
+            "the default `1` does not fit the type `bool`",
+        ),
+        (
+            "struct P { #[default(Role::Admin)] x: i32 }",
+            "`#[default]` needs a number, a string in quotes, `true`, or `false`",
+        ),
+        (
+            "struct P { #[default(1)] x: Option<i32> }",
+            "`#[default]` cannot go on an `Option` field",
+        ),
+        (
+            "enum Role { A }\nstruct P { #[default(1)] x: Role }",
+            "`#[default]` cannot go on a field of type `Role`",
+        ),
+        (
+            "struct Q { y: i32 }\nstruct P { #[default(1)] x: Q }",
+            "`#[default]` cannot go on a field of type `Q`",
+        ),
+        (
+            "struct P { #[default(1)] x: Vec<i32> }",
+            "`#[default]` cannot go on a field of type `Vec<i32>`",
+        ),
+    ];
+    for (source, message) in cases {
+        let text = format!("{source}\nfn main() {{}}");
+        assert_eq!(
+            codes_and_messages(&text),
+            vec![(codes::V0209, message.to_string())],
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn an_integer_default_on_a_float_says_to_write_a_fraction() {
+    let diagnostics = errors_str("struct P { #[default(-2)] x: f32 }\nfn main() {}");
+    assert_eq!(
+        only(&diagnostics).notes,
+        vec!["write `-2.0` for a number with a fractional part".to_string()]
+    );
+}
+
+#[test]
+fn well_placed_attributes_resolve_into_the_definitions() {
+    let resolved = resolved_str(
+        "enum Role { #[rename(\"admin\")] Admin, Member, Guest(i32) }\n\
+         struct User {\n\
+             #[rename(\"userName\")] user_name: string,\n\
+             #[skip] #[default(-3)] a: i8,\n\
+             #[default(1_000)] b: u64,\n\
+             #[default(-1.5)] c: f64,\n\
+             #[default(2.5)] d: f32,\n\
+             #[default(\"hi\\n\")] e: string,\n\
+             #[default(true)] f: bool,\n\
+             #[skip] g: Option<i32>,\n\
+             h: Role,\n\
+         }\n\
+         #[test]\n\
+         fn checks() {}\n\
+         fn main() {}",
+    );
+    let user = &resolved.symbols.structs[0];
+    let attrs: Vec<&FieldAttrs> = user.fields.iter().map(|f| &f.attrs).collect();
+    assert_eq!(attrs[0].rename.as_deref(), Some("userName"));
+    assert_eq!(attrs[0].default, None);
+    assert!(!attrs[0].skip);
+    assert!(attrs[1].skip);
+    assert_eq!(attrs[1].default, Some(HirDefault::Int(-3)));
+    assert_eq!(attrs[2].default, Some(HirDefault::Int(1000)));
+    assert_eq!(attrs[3].default, Some(HirDefault::Float(-1.5)));
+    assert_eq!(attrs[4].default, Some(HirDefault::Float(2.5)));
+    assert_eq!(attrs[5].default, Some(HirDefault::Str("hi\\n".to_string())));
+    assert_eq!(attrs[6].default, Some(HirDefault::Bool(true)));
+    assert!(attrs[7].skip);
+    assert_eq!(attrs[8], &FieldAttrs::default());
+    let role = &resolved.symbols.enums[0];
+    let renames: Vec<Option<&str>> = role.variants.iter().map(|v| v.rename.as_deref()).collect();
+    assert_eq!(renames, vec![Some("admin"), None, None]);
+    let tests: Vec<(&str, bool)> = resolved
+        .symbols
+        .fns
+        .iter()
+        .map(|f| (f.name.as_str(), f.is_test))
+        .collect();
+    assert_eq!(tests, vec![("checks", true), ("main", false)]);
+}
+
+#[test]
+fn a_test_with_parameters_or_a_return_type_is_v0114() {
+    for source in ["#[test] fn t(x: i32) {}", "#[test] fn t() -> i32 { 1 }"] {
+        let text = format!("{source}\nfn main() {{}}");
+        let diagnostics = errors_str(&text);
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0114, "{text}");
+        assert_eq!(
+            d.message,
+            "a test must take no parameters and return nothing"
+        );
+        assert_eq!(&text[d.span.start as usize..d.span.end as usize], "fn t");
+    }
+}
+
+#[test]
+fn the_standard_module_names_are_v0113_for_a_module() {
+    for name in ["json", "env", "log"] {
+        let text = format!("mod {name};\nfn main() {{}}");
+        assert_eq!(
+            codes_and_messages(&text),
+            vec![(
+                codes::V0113,
+                format!("the name `{name}` is already taken by the standard `{name}` module")
+            )],
+            "{text}"
+        );
+    }
+    // So may not a struct or an enum, whose associated functions would
+    // otherwise be taken for the module's.
+    for name in ["json", "env", "log"] {
+        for text in [
+            format!("struct {name} {{ x: i32 }}\nfn main() {{}}"),
+            format!("enum {name} {{ A }}\nfn main() {{}}"),
+        ] {
+            assert_eq!(
+                codes_and_messages(&text),
+                vec![(
+                    codes::V0113,
+                    format!("the name `{name}` is already taken by the standard `{name}` module")
+                )],
+                "{text}"
+            );
+        }
+    }
+    // A local, a field, and a function may use the names.
+    resolved_str("struct S { log: i32 }\nfn env() {}\nfn main() { let json = 1; }");
+}
+
+#[test]
+fn assert_and_assert_eq_are_v0113_for_a_function() {
+    for name in ["assert", "assert_eq"] {
+        let text = format!("fn {name}() {{}}\nfn main() {{}}");
+        assert_eq!(
+            codes_and_messages(&text),
+            vec![(
+                codes::V0113,
+                format!("the name `{name}` is already taken by the standard check `{name}`")
+            )],
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_use_of_a_standard_module_is_v0113() {
+    for path in ["json", "json::parse", "log::info", "env"] {
+        let text = format!("use {path};\nfn main() {{}}");
+        let first = path.split("::").next().unwrap_or(path);
+        assert_eq!(
+            codes_and_messages(&text),
+            vec![(
+                codes::V0113,
+                format!("`{first}` is a standard module and cannot be brought in with `use`")
+            )],
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn the_varyk_prefix_is_v0113_on_every_item() {
+    let cases = [
+        "fn varyk_f() {}",
+        "struct varyk_S { x: i32 }",
+        "enum varyk_E { A }",
+        "mod varyk_m;",
+        "struct P { x: i32 }\nimpl P { fn varyk_m(self) {} }",
+        "fn f() {}\nuse crate::f as varyk_f;",
+    ];
+    for source in cases {
+        let text = format!("{source}\nfn main() {{}}");
+        let diagnostics = errors_str(&text);
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0113, "{text}");
+        assert!(
+            d.message.starts_with("the name `varyk_")
+                && d.message.ends_with("` starts with `varyk_`"),
+            "{text}: {}",
+            d.message
+        );
+    }
+}
+
+#[test]
+fn a_use_of_a_test_function_is_v0114() {
+    let (diagnostics, _) = error_fixture("v0114_test_used");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0114);
+    assert_eq!(d.message, "`m::checks` is a test and cannot be imported");
+}
+
+#[test]
+fn a_test_named_main_in_the_entry_file_is_v0114() {
+    let text = "#[test]\nfn main() {}";
+    let diagnostics = errors_str(text);
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0114);
+    assert_eq!(
+        d.message,
+        "`main` is where the program starts and cannot be a test"
+    );
+    assert_eq!(&text[d.span.start as usize..d.span.end as usize], "fn main");
+}
+
+#[test]
+fn a_negative_default_on_an_unsigned_field_is_v0209_even_zero() {
+    assert_eq!(
+        codes_and_messages("struct P { #[default(-0)] x: u16 }\nfn main() {}"),
+        vec![(
+            codes::V0209,
+            "the default `-0` does not fit in `u16` (0 to 65535)".to_string()
+        )]
     );
 }

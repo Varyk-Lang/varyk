@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: two fields of `User` have the key `name`: `user_name` and `name`
+ --> crates/varyk/tests/fixtures/errors/v0209_same_field_key/main.vr:4:5
+  |
+3 |     user_name: string,
+  |     ----------------- `user_name` has it first
+4 |     name: string,
+  |     ^^^^^^^^^^^^ two fields of `User` have the key `name`: `user_name` and `name`
+  |
+  = note: a field's key is its name, or its `#[rename]`; each key of a struct must be different

@@ -218,7 +218,7 @@ fn calls_of_a_borrowed_return_are_rooted_and_its_root_recorded() {
 #[test]
 fn a_question_mark_beside_a_part_is_mixed() {
     // A `?` returns early with a new `None` or `Err`.
-    let text = "struct User {\n    nick: Option<string>,\n    port: Option<i32>,\n}\nfn g(u: User, m: HashMap<string, i32>) -> Option<string> {\n    let n = m.get(\"k\")?;\n    u.nick\n}\nfn check(x: i32) -> Result<i32, string> {\n    Ok(x)\n}\nfn pick(r: Result<i32, string>, x: i32) -> Result<i32, string> {\n    let y = check(x)?;\n    r\n}\nimpl User {\n    fn nick_or(self, text: string) -> Option<string> {\n        let n: i32 = text.parse()?;\n        self.nick\n    }\n    fn port_of(self, text: string) -> Option<i32> {\n        let n: i32 = text.parse()?;\n        self.port\n    }\n}\nfn main() {}\n";
+    let text = "struct User {\n    nick: Option<string>,\n    port: Option<i32>,\n}\nfn g(u: User, m: HashMap<string, i32>) -> Option<string> {\n    let n = m.get(\"k\")?;\n    u.nick\n}\nfn check(x: i32) -> Result<i32, string> {\n    Ok(x)\n}\nfn pick(r: Result<i32, string>, x: i32) -> Result<i32, string> {\n    let y = check(x)?;\n    r\n}\nimpl User {\n    fn nick_or(self, text: string) -> Option<string> {\n        let r: Result<i32, Error> = text.parse();\n        let n: i32 = r.ok()?;\n        self.nick\n    }\n    fn port_of(self, text: string) -> Option<i32> {\n        let r: Result<i32, Error> = text.parse();\n        let n: i32 = r.ok()?;\n        self.port\n    }\n}\nfn main() {}\n";
     // `port_of` returns an `Option` of a Copy payload, still a part.
     for name in ["g", "pick", "nick_or", "port_of"] {
         assert!(

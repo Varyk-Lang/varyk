@@ -1,0 +1,9 @@
+struct Config {
+    user_name: string,
+    #[rename("USER_NAME")]
+    login: string,
+}
+
+fn main() {
+    let c: Result<Config, Error> = env::parse();
+}

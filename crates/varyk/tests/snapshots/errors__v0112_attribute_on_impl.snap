@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[test]` cannot go on an `impl` block
+ --> crates/varyk/tests/fixtures/errors/v0112_attribute_on_impl/main.vr:5:1
+  |
+5 | #[test]
+  | ^^^^^^^ `#[test]` cannot go on an `impl` block
+  |
+  = note: `#[test]` goes before a top-level function

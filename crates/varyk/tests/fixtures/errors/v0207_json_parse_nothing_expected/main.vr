@@ -1,0 +1,7 @@
+struct User {
+    name: string,
+}
+
+fn main() {
+    let user = json::parse("{\"name\": \"ann\"}");
+}

@@ -1,0 +1,8 @@
+enum Event {
+    Click {
+        #[rename("posX")]
+        x: i32,
+    },
+}
+
+fn main() {}

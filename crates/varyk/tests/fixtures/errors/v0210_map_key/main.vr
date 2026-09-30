@@ -1,0 +1,8 @@
+struct Scores {
+    by_id: HashMap<i32, u8>,
+}
+
+fn main() {
+    let loaded: Result<Scores, Error> = json::parse("{}");
+    println!("{}", loaded.is_ok());
+}

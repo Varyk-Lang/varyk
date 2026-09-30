@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[skip]` cannot go on a variant
+ --> crates/varyk/tests/fixtures/errors/v0112_skip_on_variant/main.vr:3:5
+  |
+3 |     #[skip]
+  |     ^^^^^^^ `#[skip]` cannot go on a variant
+  |
+  = note: `#[skip]` goes before a struct field

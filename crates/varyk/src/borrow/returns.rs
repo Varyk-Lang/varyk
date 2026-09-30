@@ -848,6 +848,7 @@ fn walk_expr(expr: &mut HirExpr, visit: &mut impl FnMut(&mut HirExpr)) {
         | HirExprKind::VecLit(args)
         | HirExprKind::EnumLit { args, .. }
         | HirExprKind::Println { args, .. }
+        | HirExprKind::Log { args, .. }
         | HirExprKind::Format { args, .. } => {
             for arg in args {
                 walk_expr(arg, visit);
@@ -871,7 +872,8 @@ fn walk_expr(expr: &mut HirExpr, visit: &mut impl FnMut(&mut HirExpr)) {
         }
         HirExprKind::Unary { operand, .. }
         | HirExprKind::Cast { expr: operand, .. }
-        | HirExprKind::Try { operand, .. } => walk_expr(operand, visit),
+        | HirExprKind::Try { operand, .. }
+        | HirExprKind::Assert { cond: operand, .. } => walk_expr(operand, visit),
         HirExprKind::Binary { lhs, rhs, .. } => {
             walk_expr(lhs, visit);
             walk_expr(rhs, visit);

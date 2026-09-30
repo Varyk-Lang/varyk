@@ -13,9 +13,9 @@ mod span;
 mod token;
 
 pub use ast::{
-    BinaryOp, Block, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, ForHead, Function, Ident,
-    ImplBlock, Item, Literal, MatchArm, ModDecl, Param, Path, PathStart, Pattern, Program,
-    SelfMode, Stmt, StructDecl, TypeExpr, UnaryOp, UseDecl, VariantField, VariantFields,
+    AttrArg, Attribute, BinaryOp, Block, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, ForHead,
+    Function, Ident, ImplBlock, Item, Literal, MatchArm, ModDecl, Param, Path, PathStart, Pattern,
+    Program, SelfMode, Stmt, StructDecl, TypeExpr, UnaryOp, UseDecl, VariantField, VariantFields,
 };
 pub use error::{FixIt, SyntaxError, V0001, V0002, V0003, V0010, V0011, V0012};
 pub use lexer::{KEYWORDS, RESERVED_KEYWORDS, lex};

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0404]: `varyk-std` must be version [minor], the version of this compiler
+ --> crates/varyk/tests/fixtures/errors/v0404_std_wrong_minor/Cargo.toml:7:1
+  |
+7 | varyk-std = "0.1"
+  | ^^^^^^^^^ `varyk-std` must be version [minor], the version of this compiler
+  |
+  = note: write `varyk-std = "[version]"` under `[dependencies]` in `Cargo.toml`

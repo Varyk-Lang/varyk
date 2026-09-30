@@ -35,7 +35,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::{varyk, varyk_in};
-use varyk::backend::{Backend, CrateInfo, RustBackend};
+use varyk::backend::{Backend, CrateInfo, RustBackend, StdDependency};
 use varyk::borrow::analyze_unchecked;
 use varyk::resolve::resolve;
 use varyk::types::typecheck;
@@ -881,12 +881,21 @@ const CONTEXTS: &[Context] = &[
         name: "question option with an expected type",
         ret: " -> Option<i32>",
         body: "let a: i32 = {v};\n    let b: i32 = Some({v})?;\n    Some(a + b)",
+        values: &["Some(li)?", "Some(pi)?", "Some(mi)?"],
+    },
+    // `?` on `parse` in a function returning `Result<_, Error>` (M5a spec
+    // 2.8), on each kind of text.
+    Context {
+        name: "question error result with an expected type",
+        ret: " -> Result<i32, Error>",
+        body: "let a: i32 = {v};\n    Ok(a)",
         values: &[
-            "Some(li)?",
-            "Some(pi)?",
-            "Some(mi)?",
             "ls.parse()?",
+            "ps.parse()?",
             "lw[0].parse()?",
+            "lp.s.parse()?",
+            "mk_s().parse()?",
+            "\"3\".parse()?",
         ],
     },
     Context {
@@ -958,7 +967,7 @@ const CONTEXTS: &[Context] = &[
     Context {
         name: "string reading rows",
         ret: "",
-        body: "let a = {v}.is_empty();\n    let b = {v}.contains(ps) && {v}.contains(ls) && {v}.contains(lp.s) && {v}.contains(\"x\");\n    let d = {v}.starts_with(ll) || {v}.starts_with(ms);\n    let e = {v}.to_uppercase();\n    let f = {v}.replace(ps, lp.s);\n    let g: Option<i32> = {v}.parse();\n    let h: Option<bool> = {v}.parse();\n    read_s({v}.replace(\"a\", ls));\n    lw.push({v}.to_uppercase());\n    read_s(e);\n    lw.push(f);",
+        body: "let a = {v}.is_empty();\n    let b = {v}.contains(ps) && {v}.contains(ls) && {v}.contains(lp.s) && {v}.contains(\"x\");\n    let d = {v}.starts_with(ll) || {v}.starts_with(ms);\n    let e = {v}.to_uppercase();\n    let f = {v}.replace(ps, lp.s);\n    let g: Result<i32, Error> = {v}.parse();\n    let h: Result<bool, Error> = {v}.parse();\n    read_s({v}.replace(\"a\", ls));\n    lw.push({v}.to_uppercase());\n    read_s(e);\n    lw.push(f);",
         values: &[
             "ls",
             "ll",
@@ -1188,7 +1197,23 @@ const MUST_PASS: &[&str] = &[
     "let a = ls.to_uppercase();\n    let b = ps.replace(\"a\", ls);\n    let d = lw.join(ps);\n    let e = lw.remove(0);\n    lw.push(a);\n    lw.push(b);\n    lw.push(d);\n    lw.push(e);",
     // `parse` into each number type and `bool`; `contains` and `sort` on
     // `bool`s, and `contains` on floats; a `HashMap` of each key kind.
-    "let a: Option<u8> = ls.parse();\n    let b: Option<i64> = ps.parse();\n    let d: Option<f32> = lp.s.parse();\n    let e: Option<bool> = mk_s().parse();\n    let f: Option<usize> = \"3\".parse();",
+    "let a: Result<u8, Error> = ls.parse();\n    let b: Result<i64, Error> = ps.parse();\n    let d: Result<f32, Error> = lp.s.parse();\n    let e: Result<bool, Error> = mk_s().parse();\n    let f: Result<usize, Error> = \"3\".parse();\n    let g = a.ok();\n    let h = e.is_ok();",
+    // `Error` (M5a spec 2.3, 3): `Error::new` takes a literal, a stored
+    // `string` (moved), or a new one; `message` is part of its error,
+    // used before the error moves; `{}` prints one, and `==` and
+    // `.clone()` work on it.
+    "let e = Error::new(ls);\n    let f = Error::new(\"lit\");\n    let g = Error::new(mk_s());\n    let m = e.message();\n    read_s(m);\n    println!(\"{} {}\", f, g.message());\n    let b = e == f;\n    let h = e.clone();\n    let es = vec![e, h];\n    read_s(es[0].message());",
+    // `json` (M5a spec 2.4, 3): `parse` reads a literal, a stored
+    // `string`, a field, or a new one into each kind of convertible type;
+    // `stringify` reads a local, a parameter, a `mut` parameter, an
+    // element, a field, a temporary, a literal, an `if`, and a container,
+    // leaving each usable after it.
+    "let r: Result<P, Error> = json::parse(ps);\n    let a: Result<Vec<P>, Error> = json::parse(ls);\n    let b: Result<HashMap<string, Option<u8>>, Error> = json::parse(lp.s);\n    let d: Result<string, Error> = json::parse(mk_s());\n    let e: Result<Vec<f64>, Error> = json::parse(\"[1.5]\");\n    let f = json::stringify(lp);\n    read_s(json::stringify(pp));\n    let g = json::stringify(mp);\n    let h = json::stringify(lv[0]) == json::stringify(mk_p());\n    let i = json::stringify(\"lit\");\n    let j = json::stringify(lp.s);\n    let k = json::stringify(if c { lp } else { pp });\n    let m = json::stringify(mk_m());\n    let n = json::stringify(lk);\n    println!(\"{} {} {}\", f, json::stringify(lw), json::stringify(ll));\n    read_p(lp);\n    lv.push(mk_p());\n    read_s(ls);",
+    // `env::parse` (M5a spec 2.5) makes a flat struct where a `Result` is
+    // expected; the struct and its `Error` stay usable.
+    "let r: Result<P, Error> = env::parse();\n    match r {\n        Ok(v) => read_p(v),\n        Err(e) => read_s(e.message()),\n    }",
+    // `log` (M5a spec 2.6) reads its arguments, leaving each usable after.
+    "log::debug(\"{}\", ls);\n    log::info(\"{} {}\", lp.s, li);\n    log::warn(\"plain\");\n    log::error(\"{}\", mk_s());\n    read_s(ls);\n    read_p(lp);",
     "let mut bs = vec![true, c];\n    bs.sort();\n    let b = bs.contains(c);\n    let fs = vec![1.5];\n    let f = fs.contains(1.5);",
     "let mut im: HashMap<i32, bool> = HashMap::new();\n    im.insert(li, c);\n    let b = im.contains_key(li) && im.contains_key(pi) && im.contains_key(3);\n    let mut bm: HashMap<bool, HashMap<u8, string>> = HashMap::new();\n    let old = bm.insert(c, HashMap::new());\n    read_i(bm.len() as i32);",
     // The changing rows of a `Vec` of strings, of structs, and of
@@ -2147,6 +2172,39 @@ fn programs_that_pass_check_compile() {
 /// each must pass `check` and build.
 const MUST_BUILD_TREES: &[(&str, &[(&str, &str)])] = &[
     (
+        "`env::parse` into a struct of a nested module: a rename, a default, an `Option`, a unit enum, and a skipped field with a default",
+        &[
+            (
+                "main.vr",
+                "mod settings;\n\nfn load() -> Result<settings::Config, Error> {\n    let c: settings::Config = env::parse()?;\n    Ok(c)\n}\n\nfn main() {\n    match load() {\n        Ok(c) => println!(\"{}\", c.port),\n        Err(e) => println!(\"{}\", e),\n    }\n}\n",
+            ),
+            (
+                "settings.vr",
+                "pub enum Mode {\n    Dev,\n    #[rename(\"prod\")]\n    Prod,\n}\n\npub struct Config {\n    #[rename(\"http_port\")]\n    #[default(8080)]\n    pub port: u16,\n    pub mode: Mode,\n    pub token: Option<string>,\n    #[skip]\n    #[default(\"x\")]\n    pub name: string,\n}\n",
+            ),
+        ],
+    ),
+    (
+        "`#[default]` helpers of struct `A_b` field `c` and struct `A` field `b_c` in one module, both read, beside a method of the type",
+        &[(
+            "main.vr",
+            "struct A_b {\n    #[default(1)]\n    c: i32,\n}\n\nstruct A {\n    #[default(2)]\n    b_c: i32,\n}\n\nimpl A {\n    fn get(self) -> i32 {\n        self.b_c\n    }\n}\n\nfn main() {\n    let x: Result<A_b, Error> = json::parse(\"{}\");\n    let y: Result<A, Error> = json::parse(\"{}\");\n    match x {\n        Ok(v) => println!(\"{}\", v.c),\n        Err(e) => println!(\"{}\", e),\n    }\n    match y {\n        Ok(v) => println!(\"{}\", v.get()),\n        Err(e) => println!(\"{}\", e),\n    }\n}\n",
+        )],
+    ),
+    (
+        "`json` on types of a nested module: each derive combination, `rename` on a field and a variant, `skip` with and without a default, a default of each kind, and a struct holding itself through a `Vec`",
+        &[
+            (
+                "main.vr",
+                "mod shop;\n\nfn load(body: string) -> Result<shop::Order, Error> {\n    let o: shop::Order = json::parse(body)?;\n    Ok(o)\n}\n\nfn main() {\n    let r = load(\"{}\");\n    let t = shop::Tree { name: \"t\", kids: Vec::new() };\n    println!(\"{}\", json::stringify(t));\n    let n = shop::Note { text: \"x\", cache: \"c\" };\n    println!(\"{}\", json::stringify(n));\n    let both: Result<shop::Tree, Error> = json::parse(\"{}\");\n    match r {\n        Ok(o) => println!(\"{}\", json::stringify(o.lines)),\n        Err(e) => println!(\"{}\", e),\n    }\n}\n",
+            ),
+            (
+                "shop.vr",
+                "pub enum Status {\n    #[rename(\"open\")]\n    Open,\n    Closed,\n}\n\npub struct Line {\n    #[rename(\"sku\")]\n    pub code: string,\n    #[default(1)]\n    pub count: u16,\n}\n\npub struct Order {\n    #[default(-1)]\n    pub id: i64,\n    #[default(0.5)]\n    pub rate: f64,\n    #[default(\"n/a\\t\")]\n    pub note: string,\n    #[default(false)]\n    pub paid: bool,\n    pub status: Status,\n    pub lines: Vec<Line>,\n    pub by_name: HashMap<string, Vec<Line>>,\n    #[skip]\n    #[default(7)]\n    pub tries: u8,\n    #[skip]\n    pub seen: Option<Vec<string>>,\n}\n\npub struct Tree {\n    pub name: string,\n    pub kids: Vec<Tree>,\n}\n\npub struct Note {\n    pub text: string,\n    #[skip]\n    pub cache: string,\n}\n",
+            ),
+        ],
+    ),
+    (
         "a recursive enum and a struct holding itself through a `HashMap`, cloned and compared",
         &[(
             "main.vr",
@@ -2595,11 +2653,11 @@ const MUST_RUN_TREES: &[(&str, Files, &str)] = &[
         &[
             (
                 "main.vr",
-                "mod ext;\n\nfn main() {\n    let v = vec![1, 2];\n    let s = format!(\"{} items\", v.len());\n    println!(\"{}\", s);\n}\n",
+                "mod ext;\n\nfn main() {\n    let v = vec![1, 2];\n    let s = format!(\"{} items\", v.len());\n    println!(\"{}\", s);\n}\n\n#[test]\nfn checks() {\n    assert(1 + 1 == 2);\n    assert_eq(\"a\", \"a\");\n}\n",
             ),
             (
                 "ext.rs",
-                "#[macro_export]\nmacro_rules! println {\n    ($($t:tt)*) => {\n        ::std::println!(\"HIJACKED\")\n    };\n}\n\n#[macro_export]\nmacro_rules! vec {\n    ($($t:tt)*) => {\n        ::std::vec::Vec::<i32>::new()\n    };\n}\n\n#[macro_export]\nmacro_rules! format {\n    ($($t:tt)*) => {\n        ::std::string::String::from(\"HIJACKED\")\n    };\n}\n",
+                "#[macro_export]\nmacro_rules! println {\n    ($($t:tt)*) => {\n        ::std::println!(\"HIJACKED\")\n    };\n}\n\n#[macro_export]\nmacro_rules! vec {\n    ($($t:tt)*) => {\n        ::std::vec::Vec::<i32>::new()\n    };\n}\n\n#[macro_export]\nmacro_rules! format {\n    ($($t:tt)*) => {\n        ::std::string::String::from(\"HIJACKED\")\n    };\n}\n\n#[macro_export]\nmacro_rules! assert {\n    ($($t:tt)*) => {\n        ::std::panic!(\"HIJACKED\")\n    };\n}\n",
             ),
         ],
         "2 items\n",
@@ -2619,6 +2677,67 @@ fn programs_run_as_written() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+/// The label of the [`MUST_RUN_TREES`] case whose `.rs` module exports
+/// macros named like the std ones, `assert` among them.
+const HIJACK: &str = "std macros beside a `.rs` module exporting macros of the same names";
+
+/// The tests of the [`HIJACK`] program pass under `varyk test`: `assert`
+/// and `assert_eq` are written `::std::assert!`, so the module's
+/// `assert!`, which always fails, is never the one called.
+#[test]
+fn std_asserts_beside_a_hijacking_macro_pass() {
+    let (index, (_, files, _)) = MUST_RUN_TREES
+        .iter()
+        .enumerate()
+        .find(|(_, (label, _, _))| *label == HIJACK)
+        .expect("the hijacking case");
+    let entry = write_program(&format!("run{index:02}"), files);
+    let output = varyk(&["test", entry.to_str().expect("utf-8 path")]);
+    assert!(
+        output.status.success(),
+        "{:?}\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Bodies of `#[test]` functions using `assert` and `assert_eq` (M5a spec
+/// 2.7) on each kind of value, after [`SETUP`] and a `let c = true;`:
+/// each must pass `check`, build under `cargo test`, and pass, so an
+/// operand evaluated twice (`lv.pop()`) or compared in a form Rust
+/// rejects fails here.
+const MUST_TEST: &[&str] = &[
+    "assert(li == 7);\n    assert(ls == \"made\" && lp.n > 0);\n    assert(!ln.is_empty());\n    assert(c);\n    read_s(ls);\n    read_p(lp);",
+    "let n = lp.s;\n    assert_eq(ls, \"made\");\n    assert_eq(\"made\", ls);\n    assert_eq(lp.s, \"mp\");\n    assert_eq(n, lp.s);\n    assert_eq(mk_s(), ls);\n    assert_eq(lw[0], ls);\n    assert_eq(ll, \"lit\");\n    assert_eq({ let t = mk_p(); t.s }, n);\n    assert_eq(ls.trim(), \"made\");\n    assert_eq(s_of(lp), \"mp\");\n    assert_eq(format!(\"{}!\", ls), \"made!\");\n    read_s(ls);\n    read_p(lp);",
+    "assert_eq(if c { ls } else { \"x\" }, \"made\");\n    assert_eq(if c { mk_s() } else { mk_p().s }, \"made\");\n    read_s(ls);",
+    "assert_eq(lp, mk_p());\n    assert_eq(mk_p(), lp);\n    assert_eq(le, E::C);\n    assert_eq(lo, Some(mk_p()));\n    assert_eq(lv, vec![mk_p()]);\n    assert_eq(lv[0], lp);\n    assert_eq(lq, mk_q());\n    assert_eq(lk, Some(7));\n    assert_eq(lr, mk_r());\n    assert_eq(if c { lp } else { lq.p }, mk_p());\n    read_p(lp);\n    read_v(lv);\n    read_e(le);",
+    "assert_eq(li, 7);\n    assert_eq(mk_i() + 1, 8);\n    assert_eq(ln.len(), 2);\n    assert_eq(area(2.0), 4.0);\n    assert_eq(li > 0, true);\n    let b: u8 = 3;\n    assert_eq(b, 3);\n    assert_eq(Error::new(\"x\"), Error::new(\"x\"));",
+    "for x in ln {\n        assert(x > 0);\n    }\n    match lo {\n        Some(p) => assert_eq(p.n, 1),\n        None => assert(false),\n    }",
+    "lv.push(mk_p());\n    assert_eq(lv.len(), 2);\n    assert_eq(lv.pop(), Some(mk_p()));\n    assert_eq(lv.len(), 1);",
+];
+
+#[test]
+fn tests_with_asserts_build_and_pass() {
+    let mut source = format!("{PRELUDE}\nfn main() {{}}\n");
+    for (index, body) in MUST_TEST.iter().enumerate() {
+        source.push_str(&format!(
+            "\n#[test]\nfn t{index:02}() {{\n{SETUP}    let c = true;\n    {body}\n}}\n"
+        ));
+    }
+    let entry = write_program("tests", &[("main.vr", &source), ("ext.rs", EXT_RS)]);
+    let (checked, stderr) = run("check", &entry);
+    assert!(checked, "tests with asserts fail check:\n{stderr}");
+    let output = varyk(&["test", entry.to_str().expect("utf-8 path")]);
+    assert_no_crash(&output, "`varyk test` on the assert cases");
+    assert!(
+        output.status.success(),
+        "tests with asserts fail to build or pass:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// A library package (M3 spec 2.2) whose public functions name a type
@@ -3539,10 +3658,20 @@ fn trees_that_break_a_rule_fail_check() {
     }
 }
 
+/// The manifest of a crate the harness writes itself, one bin per case
+/// appended: it depends on the workspace's `crates/varyk-std` (M5a spec
+/// 5.3), which any case may use.
+fn rejects_manifest() -> String {
+    format!(
+        "[package]\nname = \"rejects\"\nversion = \"0.0.0\"\nedition = \"2024\"\nautobins = false\n\n[dependencies]\nvaryk-std = {{ path = {:?} }}\n\n[workspace]\n",
+        common::std_path().display().to_string()
+    )
+}
+
 #[test]
 fn trees_that_break_a_rule_fail_rustc() {
     let dir = scratch_root().join("rustc_rejects_trees");
-    let mut manifest = "[package]\nname = \"rejects\"\nversion = \"0.0.0\"\nedition = \"2024\"\nautobins = false\n\n[workspace]\n".to_string();
+    let mut manifest = rejects_manifest();
     let mut write = |name: &str, files: &[(&str, &str)]| {
         let bin = dir.join("src").join("bin").join(name);
         for (path, text) in files {
@@ -3719,7 +3848,7 @@ fn programs_that_break_a_rule_fail_rustc() {
     let src = dir.join("src").join("bin");
     fs::create_dir_all(&src).expect("create the crate directory");
     fs::write(src.join("ext.rs"), EXT_RS).expect("write ext.rs");
-    let mut manifest = "[package]\nname = \"rejects\"\nversion = \"0.0.0\"\nedition = \"2024\"\nautobins = false\n\n[workspace]\n".to_string();
+    let mut manifest = rejects_manifest();
     let mut bins = Vec::new();
     let mut accepted = Vec::new();
     let mut unemitted = Vec::new();
@@ -3756,8 +3885,12 @@ fn programs_that_break_a_rule_fail_rustc() {
             return false;
         };
         let (program, _) = analyze_unchecked(program, &sources);
-        let generated =
-            RustBackend.generate(&program, &CrateInfo::single_file("rejects".to_string()));
+        // Only its `src/main.rs` is used: the manifest is `rejects_manifest`.
+        let std = StdDependency::for_program(program.uses_std);
+        let generated = RustBackend.generate(
+            &program,
+            &CrateInfo::single_file("rejects".to_string(), std),
+        );
         let main = &generated
             .files
             .iter()

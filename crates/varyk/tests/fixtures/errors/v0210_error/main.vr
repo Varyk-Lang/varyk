@@ -1,0 +1,9 @@
+struct Failure {
+    code: i32,
+    error: Error,
+}
+
+fn main() {
+    let failure = Failure { code: 1, error: Error::new("disk full") };
+    println!("{}", json::stringify(failure));
+}

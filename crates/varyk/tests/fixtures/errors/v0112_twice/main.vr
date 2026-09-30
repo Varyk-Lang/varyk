@@ -1,0 +1,7 @@
+struct User {
+    #[rename("id")]
+    #[rename("userId")]
+    user_id: i32,
+}
+
+fn main() {}

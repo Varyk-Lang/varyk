@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: the field `password_hash` is skipped, so it has no value when `User` is read
+ --> crates/varyk/tests/fixtures/errors/v0209_skip_parsed_without_default/main.vr:4:5
+  |
+4 |     password_hash: string,
+  |     ^^^^^^^^^^^^^^^^^^^^^ the field `password_hash` is skipped, so it has no value when `User` is read
+...
+8 |     let loaded: Result<User, Error> = json::parse("{\"name\": \"ann\"}");
+  |                                       ---------------------------------- `User` is read here
+  |
+  = note: give it a `#[default(..)]`, or make it an `Option`, which is `None` when read

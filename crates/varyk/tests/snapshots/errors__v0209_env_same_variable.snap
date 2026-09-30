@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: two fields of `Config` have the variable `USER_NAME`: `user_name` and `login`
+ --> crates/varyk/tests/fixtures/errors/v0209_env_same_variable/main.vr:4:5
+  |
+2 |     user_name: string,
+  |     ----------------- `user_name` has it first
+3 |     #[rename("USER_NAME")]
+4 |     login: string,
+  |     ^^^^^^^^^^^^^ two fields of `Config` have the variable `USER_NAME`: `user_name` and `login`
+  |
+  = note: a field reads the variable named by its key, its name or its `#[rename]`, in upper case; each field of a struct needs a different variable

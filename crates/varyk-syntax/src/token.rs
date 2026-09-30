@@ -92,6 +92,9 @@ pub enum TokenKind {
     Arrow,
     FatArrow,
     Question,
+    /// `#`, which starts an attribute, `#[name]` or `#[name(literal)]`
+    /// (M5a spec 2.1, 2.2).
+    Hash,
 }
 
 /// A single lexical token: its kind plus the span it came from.

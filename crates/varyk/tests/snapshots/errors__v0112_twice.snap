@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[rename]` is written twice here
+ --> crates/varyk/tests/fixtures/errors/v0112_twice/main.vr:3:5
+  |
+2 |     #[rename("id")]
+  |     --------------- first written here
+3 |     #[rename("userId")]
+  |     ^^^^^^^^^^^^^^^^^^^ `#[rename]` is written twice here

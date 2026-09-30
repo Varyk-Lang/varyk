@@ -14,8 +14,8 @@ use crate::types::{IntKind, Ty};
 impl FnChecker<'_> {
     /// `receiver.method(args)` (spec 2.5, 2.6): a method of the receiver's
     /// type from its `impl` blocks, or a row of the built-in table for a
-    /// `Vec`, a `string`, an `Option`, a `Result`, or a `HashMap` (M4 spec
-    /// 2.7), whose element rule the receiver must meet (V0200) and whose
+    /// `Vec`, a `string`, an `Option`, a `Result`, a `HashMap` (M4 spec
+    /// 2.7), or an `Error` (M5a spec 2.3), whose element rule the receiver must meet (V0200) and whose
     /// `parse` takes its type from `expected`. A method the type does not
     /// have is V0100 naming the type (and, for a built-in type, listing
     /// its methods); a non-`pub` method of another module's type is V0105.
@@ -145,6 +145,7 @@ impl FnChecker<'_> {
                     return None;
                 };
                 let entry = id.get();
+                self.uses_std |= entry.uses_std();
                 if !entry.element.accepts(&subst.t) {
                     let message = if owner == Owner::Chain {
                         format!(
@@ -164,7 +165,7 @@ impl FnChecker<'_> {
                     return None;
                 }
                 let subst = match (entry.result, &expected, args) {
-                    (builtins::Shape::OptionOfExpected, ..) => {
+                    (builtins::Shape::ResultOfExpected, ..) => {
                         let expected = self.parsed_type(expected.as_ref(), span)?;
                         builtins::Subst { expected, ..subst }
                     }
@@ -230,7 +231,7 @@ impl FnChecker<'_> {
 
     /// Whether `.clone()` on a value of type `ty` is the derived copy of
     /// M4 spec 2.10 rather than a method of the type: on a number, `bool`,
-    /// `Option`, `Result`, `Vec`, or `HashMap`, and on a struct or enum
+    /// `Option`, `Result`, `Vec`, `HashMap`, or `Error`, and on a struct or enum
     /// with no member of that name. `string` has its own row, and a chain
     /// no `clone`.
     fn derived_clone(&self, ty: &Ty) -> bool {
@@ -243,7 +244,8 @@ impl FnChecker<'_> {
             | Ty::Option(_)
             | Ty::Result(..)
             | Ty::Vec(_)
-            | Ty::HashMap(..) => return true,
+            | Ty::HashMap(..)
+            | Ty::Error => return true,
             _ => return false,
         };
         matches!(
@@ -361,16 +363,23 @@ impl FnChecker<'_> {
     }
 
     /// The type `parse()` (at `span`) reads, taken from `expected` as
-    /// `None`'s is (M4 spec 2.7): the `X` of an expected `Option<X>`, a
-    /// number type or `bool` (V0200 otherwise); V0206 when it is the
-    /// operand of `?` in a function returning `Result`; V0207 with nothing
-    /// expected, showing the two statements such a function writes.
+    /// `None`'s is (M4 spec 2.7, M5a spec 2.8): the `X` of an expected
+    /// `Result<X, _>`, a number type or `bool` (V0200 otherwise). The
+    /// result is always `Result<X, Error>`, so another error type is a
+    /// mismatch, or V0206 under `?`. V0206 when it is the operand of `?` in
+    /// a function returning `Option`, and V0207 with nothing expected, each
+    /// showing the two statements that make an `Option` of it.
     fn parsed_type(&mut self, expected: Option<&Ty>, span: Span) -> Option<Ty> {
+        // Two statements, since the checker never types a receiver from
+        // the call made on it (M5a spec 2.8).
+        let shape = "let parsed: Result<i32, Error> = text.parse();` then `parsed.ok()";
         match expected {
-            Some(Ty::Option(inner)) if matches!(**inner, Ty::Int(_) | Ty::Float(_) | Ty::Bool) => {
+            Some(Ty::Result(inner, _))
+                if matches!(**inner, Ty::Int(_) | Ty::Float(_) | Ty::Bool) =>
+            {
                 Some((**inner).clone())
             }
-            Some(Ty::Option(inner)) => {
+            Some(Ty::Result(inner, _)) => {
                 let message = format!(
                     "`parse` reads a number or `bool` from text, and cannot make a `{}`",
                     self.ty_name(inner)
@@ -379,39 +388,42 @@ impl FnChecker<'_> {
                     .push(Diagnostic::new(codes::V0200, span, message));
                 None
             }
-            // `text.parse()?` in a function returning `Result`: the
-            // expected `Result` came through `?`, and `parse` gives an
-            // `Option`.
-            Some(Ty::Result(..)) if self.result_try_operand == Some(span) => {
-                let message = format!(
-                    "`?` works on a `Result`, and this is `Option<_>`; `{}` returns `{}`",
-                    self.name,
-                    self.ty_name(&self.ret)
-                );
-                self.diagnostics.push(
-                    Diagnostic::new(codes::V0206, span, message)
-                        .with_note(
-                            "`parse` gives an `Option`; in a function returning `Result`, write \
-                             two statements: `let parsed: Option<i32> = text.parse();` then \
-                             `parsed.ok_or(e)?`",
-                        )
-                        .with_note(
-                            "in Rust terms, `?` returns early with the `Err` or the `None`, so \
-                             the function's return type must be a `Result` with the same error \
-                             type, or an `Option`",
-                        ),
-                );
+            // `text.parse()?` in a function returning `Option`: the
+            // expected `Option` came through `?`, and `parse` gives a
+            // `Result`.
+            Some(Ty::Option(..)) if self.option_try_operand == Some(span) => {
+                self.result_under_option_question(span, "parse", shape);
                 None
             }
             _ => {
                 let what = "the type `parse()` reads";
-                // Two statements, since the checker never types a receiver
-                // from the call made on it.
-                let shape = "let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?";
-                self.type_hole(span, expected, "Option<_>", what, shape);
+                self.type_hole(span, expected, "Result<_, Error>", what, shape);
                 None
             }
         }
+    }
+
+    /// V0206 at `span` for `call(..)?`, whose `Result<_, Error>` meets `?`
+    /// in a function returning `Option`; the note shows the two
+    /// statements of `shape`.
+    pub(super) fn result_under_option_question(&mut self, span: Span, call: &str, shape: &str) {
+        let message = format!(
+            "`?` works on an `Option`, and this is `Result<_, Error>`; `{}` returns `{}`",
+            self.name,
+            self.ty_name(&self.ret)
+        );
+        self.diagnostics.push(
+            Diagnostic::new(codes::V0206, span, message)
+                .with_note(format!(
+                    "`{call}` gives a `Result`; in a function returning `Option`, write two \
+                     statements: `{shape}?`"
+                ))
+                .with_note(
+                    "in Rust terms, `?` returns early with the `Err` or the `None`, so the \
+                     function's return type must be a `Result` with the same error type, or an \
+                     `Option`",
+                ),
+        );
     }
 
     /// `base[index]` (spec 2.6): `base` must be a `Vec` and `index` a
@@ -510,12 +522,12 @@ impl FnChecker<'_> {
                 }
                 _ => {
                     let before = self.diagnostics.len();
-                    let outer = self.result_try_operand.take();
-                    if let Ty::Result(..) = ret {
-                        self.result_try_operand = Some(operand.span);
+                    let outer = self.option_try_operand.take();
+                    if let Ty::Option(..) = ret {
+                        self.option_try_operand = Some(operand.span);
                     }
                     let checked = self.expr(operand, wanted);
-                    self.result_try_operand = outer;
+                    self.option_try_operand = outer;
                     let Some(checked) = checked else {
                         // `Err(e)?;` has no value type to take from anywhere.
                         if is_err_call(operand) {
@@ -714,7 +726,7 @@ const RESULT_NOTE: &str = "on an error, `?` returns it from the function at once
 pub(super) fn owner_words(owner: Owner) -> String {
     match owner {
         Owner::Chain => "a chain".to_string(),
-        Owner::Option => format!("an `{}`", owner.name()),
+        Owner::Option | Owner::Error => format!("an `{}`", owner.name()),
         _ => format!("a `{}`", owner.name()),
     }
 }

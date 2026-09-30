@@ -103,26 +103,41 @@ section 7 of the spec.
 
 ## Milestone 5: batteries for services
 
-Gated on three open questions in the spec: serde derivation (automatic or
-attribute syntax), the async runtime shape, and ownership-transfer syntax.
-The bar for the milestone is one golden path: a users API on a database is
-`varyk init`, one file, and `varyk run` away, within fifteen minutes of
-`cargo install varyk`, and `varyk build --release` leaves an ordinary native
-executable. Promotion waits for it.
+Milestone 5 is three milestones. The bar for the whole of it is one golden
+path: a users API on a database is `varyk init`, one file, and `varyk run`
+away, within fifteen minutes of `cargo install varyk`, and
+`varyk build --release` leaves an ordinary native executable. It is met at
+the end of 5b2, and promotion waits for it.
 
-- [ ] `varyk-std` crate
-- [ ] Derivation of serde traits for Varyk structs, per the open question
-- [ ] JSON via serde
-- [ ] Logging via tracing
+### Milestone 5a: data, configuration, logging, and tests
+
+Design: [specs/2026-09-30-milestone-5a-design.md](specs/2026-09-30-milestone-5a-design.md).
+
+- [x] `varyk-std` crate, and the `varyk-std` dependency in every package (`varyk check` reads its version and lock)
+- [x] `Error`, one built-in error type with a message, and `parse` returning a `Result`
+- [x] Attributes `#[rename]`, `#[default]`, `#[skip]`, and `#[test]`
+- [x] Serde derivation for the types a `json` or `env` call reaches
+- [x] JSON: `json::parse` and `json::stringify`
+- [x] Configuration from the environment and `.env`: `env::parse`
+- [x] Logging via tracing: `log::debug`, `info`, `warn`, and `error`
+- [x] `varyk test`, with `assert` and `assert_eq`
+- [x] `varyk add`, a pass-through to `cargo add`
+- [x] Examples `json`, `config`, `logging`, and the `users` package, with `greeting` updated to what `varyk init` writes; `docs/language.md`, `docs/design.md`, `docs/open-questions.md`, and `docs/roadmap.md` updated
+
+### Milestone 5b1: async
+
+Gated on two open questions: the async runtime shape and ownership-transfer
+syntax.
+
+- [ ] `async`/`await` on a built-in tokio runtime, `spawn` as a built-in, `Send`/`Sync`/`Pin` kept out of the surface syntax and their failures mapped to Varyk diagnostics
+
+### Milestone 5b2: HTTP and the database
+
 - [ ] HTTP server on a proven Rust crate, chosen at that time
 - [ ] HTTP client on the same stack
 - [ ] Databases through one API; sqlx is the candidate crate
-- [ ] Configuration from the environment
-- [ ] `varyk test`
-- [ ] `async`/`await` on a built-in tokio runtime, `spawn` as a built-in, `Send`/`Sync`/`Pin` kept out of the surface syntax and their failures mapped to Varyk diagnostics
-- [ ] `varyk add`, a pass-through to `cargo add`, so the golden path never leaves the `varyk` command
+- [ ] `.rs` signatures naming Varyk-declared types and `varyk_std::Error`, so the `varyk-std` facades can take and return Varyk structs (moved from milestone 4)
 - [ ] An agent evaluation: the examples written by a model from `docs/language.md` alone, pass rates published, before any page claims that agents write Varyk well
-- [ ] `.rs` signatures naming Varyk-declared types, so the `varyk-std` facades can take and return Varyk structs (moved from milestone 4)
 
 ## Milestone 6: tooling and beyond
 
@@ -138,6 +153,10 @@ executable. Promotion waits for it.
 
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
+
+TOML, beside the rest of the cuts listed under "Not in milestone 5a" in
+[language.md](language.md): nothing on the golden path needs it, and the
+same machinery adds it later.
 
 `Box`, until a program needs a recursive type that `Vec` or `HashMap`
 cannot hold, and

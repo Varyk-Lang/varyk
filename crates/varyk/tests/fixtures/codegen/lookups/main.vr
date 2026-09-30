@@ -12,8 +12,8 @@ fn or_zero(o: Option<i32>) -> i32 {
 }
 
 fn code(text: string) -> Result<i32, string> {
-    let parsed: Option<i32> = text.parse();
-    let n = parsed.ok_or("not a number")?;
+    let parsed: Result<i32, Error> = text.parse();
+    let n = parsed.ok().ok_or("not a number")?;
     Ok(n)
 }
 

@@ -1,0 +1,13 @@
+pub fn total(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[test]
+fn adds_two_numbers() {
+    assert_eq(total(2, 3), 5);
+}
+
+#[test]
+fn adds_wrongly() {
+    assert_eq(total(2, 2), 5);
+}

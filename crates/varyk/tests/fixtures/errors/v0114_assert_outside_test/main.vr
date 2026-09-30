@@ -1,0 +1,8 @@
+fn total(a: i32, b: i32) -> i32 {
+    assert(a >= 0);
+    a + b
+}
+
+fn main() {
+    println!("{}", total(1, 2));
+}

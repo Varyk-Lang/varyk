@@ -1,0 +1,105 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Serialize, ::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+enum Role {
+    #[serde(rename = "admin")]
+    Admin,
+    Member,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Serialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct Shown {
+    #[serde(rename = "userName")]
+    user_name: String,
+    #[serde(skip)]
+    hash: String,
+    tries: i32,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct Read {
+    #[serde(default = "Read::varyk_default_offset")]
+    offset: i64,
+    #[serde(default = "Read::varyk_default_ratio")]
+    ratio: f32,
+    #[serde(default = "Read::varyk_default_label")]
+    label: String,
+    #[serde(default = "Read::varyk_default_on")]
+    on: bool,
+    #[serde(skip, default = "Read::varyk_default_count")]
+    count: u8,
+    #[serde(skip)]
+    cache: Option<String>,
+    nick: Option<String>,
+    role: Role,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+impl Read {
+    fn varyk_default_offset() -> i64 {
+        -8
+    }
+
+    fn varyk_default_ratio() -> f32 {
+        1.5
+    }
+
+    fn varyk_default_label() -> String {
+        "a \"b\"\n".to_string()
+    }
+
+    fn varyk_default_on() -> bool {
+        true
+    }
+
+    fn varyk_default_count() -> u8 {
+        9
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Serialize, ::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct Both {
+    roles: Vec<Role>,
+    tags: ::std::collections::HashMap<String, u16>,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct Plain {
+    n: i32,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn load(body: &str) -> Result<Both, ::varyk_std::Error> {
+    let b = ::varyk_std::json::parse::<Both>(body)?;
+    Ok(b)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let s = Shown { user_name: "ann".to_string(), hash: "h".to_string(), tries: 1 };
+    ::std::println!("{}", ::varyk_std::json::stringify(&s));
+    let r: Result<Read, ::varyk_std::Error> = ::varyk_std::json::parse::<Read>("{}");
+    let b: Result<Both, ::varyk_std::Error> = load("{}");
+    match &b {
+        Ok(b) => ::std::println!("{}", ::varyk_std::json::stringify(b)),
+        Err(e) => ::std::println!("{}", e),
+    }
+    ::std::println!("{}", ::varyk_std::json::stringify("text"));
+    let p = Plain { n: 1 };
+    ::std::println!("{}", p.n);
+}

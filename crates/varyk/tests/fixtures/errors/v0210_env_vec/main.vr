@@ -1,0 +1,7 @@
+struct Config {
+    hosts: Vec<string>,
+}
+
+fn main() {
+    let c: Result<Config, Error> = env::parse();
+}

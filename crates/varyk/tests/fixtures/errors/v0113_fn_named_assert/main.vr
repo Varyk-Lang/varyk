@@ -1,0 +1,7 @@
+fn assert(ok: bool) {
+    if !ok {
+        println!("failed");
+    }
+}
+
+fn main() {}

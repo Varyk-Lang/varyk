@@ -1,0 +1,29 @@
+struct Failure {
+    error: Error,
+}
+
+fn number(text: string) -> Result<i32, Error> {
+    let n: i32 = text.trim().parse()?;
+    if n < 0 {
+        return Err(Error::new(format!("{} is negative", n)));
+    }
+    Ok(n)
+}
+
+fn main() {
+    let owned = "stored";
+    let e = Error::new("literal");
+    let f = Error::new(owned);
+    let m = e.message();
+    println!("{} {}", m, f);
+    let failure = Failure { error: e.clone() };
+    println!("{}", failure.error == e);
+    match number(" 42 ") {
+        Ok(n) => println!("{}", n),
+        Err(error) => println!("{}", error.message()),
+    }
+    match number("abc") {
+        Ok(n) => println!("{}", n),
+        Err(error) => println!("{}", error),
+    }
+}

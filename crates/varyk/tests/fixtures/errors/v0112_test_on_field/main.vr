@@ -1,0 +1,6 @@
+struct User {
+    #[test]
+    name: string,
+}
+
+fn main() {}

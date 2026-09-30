@@ -1,0 +1,6 @@
+struct Config {
+    #[default(300)]
+    retries: u8,
+}
+
+fn main() {}

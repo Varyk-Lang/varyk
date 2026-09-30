@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0114]: `m::checks` is a test and cannot be imported
+ --> crates/varyk/tests/fixtures/errors/v0114_test_used/main.vr:3:5
+  |
+3 | use m::checks;
+  |     ^^^^^^^^^ `m::checks` is a test and cannot be imported
+  |
+  = note: `varyk test` runs each test on its own; put what the tests share in a function without `#[test]` and import that

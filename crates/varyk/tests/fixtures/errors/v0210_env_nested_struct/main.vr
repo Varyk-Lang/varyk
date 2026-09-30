@@ -1,0 +1,12 @@
+struct Database {
+    host: string,
+}
+
+struct Config {
+    port: u16,
+    database: Database,
+}
+
+fn main() {
+    let c: Result<Config, Error> = env::parse();
+}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: `json` is a standard module and cannot be brought in with `use`
+ --> crates/varyk/tests/fixtures/errors/v0113_use_json/main.vr:1:5
+  |
+1 | use json;
+  |     ^^^^ `json` is a standard module and cannot be brought in with `use`
+  |
+  = note: write the path where it is used, as in `json::..`, and remove this `use`

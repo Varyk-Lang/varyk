@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0114]: a test must take no parameters and return nothing
+ --> crates/varyk/tests/fixtures/errors/v0114_test_with_return_type/main.vr:2:1
+  |
+2 | fn adds() -> i32 {
+  | ^^^^^^^ a test must take no parameters and return nothing
+  |
+  = note: `varyk test` runs each test on its own, giving it nothing, and a test checks its results with `assert` and `assert_eq` instead of returning them

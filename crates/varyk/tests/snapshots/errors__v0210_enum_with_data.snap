@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0210]: `Order` cannot be turned into JSON
+  --> crates/varyk/tests/fixtures/errors/v0210_enum_with_data/main.vr:13:20
+   |
+ 8 |     payment: Payment,
+   |     ---------------- `Card` carries data
+...
+13 |     println!("{}", json::stringify(order));
+   |                    ^^^^^^^^^^^^^^^^^^^^^^ `Order` cannot be turned into JSON
+   |
+   = note: only an enum whose variants carry no data can go through JSON; for data, use a struct with a field of a plain enum marked `#[rename("type")]` (a `PaymentKind` with a variant per kind) and an `Option` field for each kind's data

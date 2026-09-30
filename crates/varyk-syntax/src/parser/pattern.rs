@@ -63,6 +63,10 @@ impl<'a> Parser<'a> {
                 );
                 Err(())
             }
+            Some(TokenKind::Hash) => {
+                self.push_expected("a pattern");
+                Err(())
+            }
             _ => {
                 let span = self.current_span();
                 self.bump();
@@ -122,7 +126,7 @@ impl<'a> Parser<'a> {
 
     /// One literal of a pattern: a number with an optional `-`, a string,
     /// or a `bool`, with its span.
-    fn parse_pattern_literal(&mut self) -> Result<(Literal, Span), ()> {
+    pub(super) fn parse_pattern_literal(&mut self) -> Result<(Literal, Span), ()> {
         let start = self.current_span();
         let negative = self.bump_if(&TokenKind::Minus);
         let literal = match self.peek() {

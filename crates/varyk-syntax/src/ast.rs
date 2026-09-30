@@ -85,6 +85,39 @@ impl TypeExpr {
     }
 }
 
+/// An attribute, `#[name]` or `#[name(literal)]` (M5a spec 2.2), written
+/// before an item, a struct field, an enum variant, a field of a variant,
+/// or a method. The parser keeps every one it reads; which names exist and
+/// where each may go is the compiler's resolver's to check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute {
+    pub name: Ident,
+    /// What is between the parentheses; `None` when there are none.
+    pub arg: Option<AttrArg>,
+    /// From `#` through `]`.
+    pub span: Span,
+}
+
+/// The argument of an attribute: one literal, a number optionally after
+/// `-`, with a number's raw text as lexed and a string's text between the
+/// quotes, unmodified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttrArg {
+    Str(String),
+    Int {
+        text: String,
+        negative: bool,
+    },
+    Float {
+        text: String,
+        negative: bool,
+    },
+    Bool(bool),
+    /// Anything else between the parentheses (`#[derive(Clone)]`): kept
+    /// so the resolver can name the attribute, never a valid argument.
+    Other,
+}
+
 /// A whole parsed source file: the top-level items it declares, in order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
@@ -120,6 +153,7 @@ pub enum SelfMode {
 /// (`self_mode`), which is never a [`Param`] (spec 2.5).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub is_pub: bool,
     pub self_mode: SelfMode,
@@ -147,6 +181,7 @@ pub struct Param {
 /// see [`FieldDecl::is_pub`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDecl {
+    pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub is_pub: bool,
     pub fields: Vec<FieldDecl>,
@@ -159,6 +194,7 @@ pub struct StructDecl {
 /// includes the struct's own methods.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldDecl {
+    pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub ty: TypeExpr,
     pub is_pub: bool,
@@ -170,6 +206,7 @@ pub struct FieldDecl {
 /// complete-looking declaration missing the one thing it must have.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDecl {
+    pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub is_pub: bool,
     pub variants: Vec<EnumVariant>,
@@ -181,6 +218,7 @@ pub struct EnumDecl {
 /// spec 2.5).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumVariant {
+    pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub fields: VariantFields,
     pub span: Span,
@@ -200,6 +238,7 @@ pub enum VariantFields {
 /// on them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantField {
+    pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub ty: TypeExpr,
     pub span: Span,
@@ -210,6 +249,7 @@ pub struct VariantField {
 /// names a struct or enum is the compiler's `resolve` module's job.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
+    pub attrs: Vec<Attribute>,
     pub type_name: Ident,
     pub functions: Vec<Function>,
     pub span: Span,
@@ -221,6 +261,7 @@ pub struct ImplBlock {
 /// the declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModDecl {
+    pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub is_pub: bool,
     pub span: Span,
@@ -231,6 +272,7 @@ pub struct ModDecl {
 /// -- resolved and checked by the compiler's resolver, never the parser.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseDecl {
+    pub attrs: Vec<Attribute>,
     pub path: Path,
     pub alias: Option<Ident>,
     pub span: Span,

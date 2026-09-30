@@ -1,6 +1,6 @@
 # The Varyk language
 
-This page describes everything Varyk accepts today, in milestone 4 of an
+This page describes everything Varyk accepts today, in milestone 5a of an
 experimental, pre-1.0 language (see [roadmap.md](roadmap.md) for what comes
 next). Anything not described here is rejected with an error that names
 what is not supported. For the reasons behind the design, see
@@ -242,7 +242,15 @@ yet. None of them can be used as a name.
 parameter, or `let` name can be any of them, because the generated Rust
 would then hide Rust's own. A struct, enum, or module also cannot take a
 built-in type's name (`i32`, `string`, `str`, and so on); a function, field,
-or local can (`let string = "x";` is fine).
+or local can (`let string = "x";` is fine). `Error`, the standard error
+type, cannot name a struct, enum, module, or `use`, nor a `pub` struct or
+enum of a `.rs` module (V0113). `json`, `env`, and `log`, the standard
+modules, cannot name a module, a struct, an enum, or a `use`, and `use json;` or
+`use json::parse;` is an error: a standard module is reached by its path
+where it is used. `assert` and `assert_eq` cannot name a function, and no
+function, method, struct, enum, module, or `use` name can start with
+`varyk_`, which is kept for what Varyk adds to the Rust it writes (all
+V0113). A local or a field may use any of these names.
 
 ## Types
 
@@ -258,6 +266,7 @@ or local can (`let string = "x";` is fine).
 | an enum you declare | one of several variants, each with its own values |
 | `Option<T>`, `Result<T, E>`, `Vec<T>` | Rust's standard types, written as in Rust and nested freely |
 | `HashMap<K, V>` | values of type `V` found by keys of type `K`, an integer type, `bool`, or `string` |
+| `Error` | the standard error: a message, given by every standard call that can fail |
 
 A struct declares its fields and their types. A field is private unless
 marked `pub`, and follows the same rule as any other item without `pub`:
@@ -342,18 +351,19 @@ never works it out from later lines.
 
 Numbers and `bool` are called Copy types: using one makes a copy, and the
 original stays usable. `string`, structs, enums, `Option`, `Result`, `Vec`,
-and `HashMap` are not Copy.
+`HashMap`, and `Error` are not Copy.
 
 **Copies and comparisons.** A struct or enum can be copied with
 `x.clone()` when every field and value it holds can be: a number, a `bool`,
-a `string`, an `Option`, `Result`, `Vec`, or `HashMap` of such types,
+a `string`, an `Error`, an `Option`, `Result`, `Vec`, or `HashMap` of such types,
 another struct or enum that can be copied, or a Rust type whose `.rs` file
 derives `Clone` for it (see [Rust structs and methods](#rust-structs-and-methods)).
 Two values of a type can be compared with `==` and `!=` by the same rule,
 with `PartialEq` in place of `Clone`. A type that holds itself through a
 `Vec` or a `HashMap` counts as if it could, as in Rust. `x.clone()` is a
 new, owned copy of everything inside; it works the same way on an
-`Option`, `Result`, `Vec`, or `HashMap` whose contents can be copied, and
+`Error`, and on an `Option`, `Result`, `Vec`, or `HashMap` whose contents
+can be copied, and
 on a number or `bool` it is an error (V0100), since those are copied on use
 already. When something inside is in the way, `.clone()` and `==` are
 errors (V0203) that name the field, and, for a Rust type, say to derive the
@@ -392,8 +402,8 @@ In the generated Rust, `self` is `&self` and `mut self` is `&mut self`.
 
 ### Calls on built-in types
 
-These are all the calls `Vec`, `string`, `Option`, `Result`, and `HashMap`
-have, beside the calls of a chain (see [Chains](#chains)); any other is an
+These are all the calls `Vec`, `string`, `Option`, `Result`, `HashMap`, and
+`Error` have, beside the calls of a chain (see [Chains](#chains)); any other is an
 error listing the type's calls. "Reads" borrows the
 value the call is made on, "changes" needs a value that may be changed, like
 a `mut` parameter, and "takes" uses the value up, as `?` does (see below).
@@ -441,16 +451,34 @@ and so is `join` on anything but strings.
 | `s.trim()` | reads; `s` must be stored, or a literal | the text of `s` without the spaces at either end: part of `s`, not a copy (see "Returning part of a parameter") |
 | `s.split(sep)`; `sep: string` read | reads; `s` must be stored, or a literal | a chain of the pieces of `s` between the places `sep` appears, each part of `s`, not a copy (see [Chains](#chains)) |
 | `s.push_str(t)`; `t: string` read | changes | nothing; `t` is added to the end of `s` |
-| `s.parse()` | reads | `Option<T>`, `T` a number type or `bool` |
+| `s.parse()` | reads | `Result<T, Error>`, `T` a number type or `bool` |
 
 `s.clone()` is the one way to copy text, and it always makes owned text.
-`parse` gives `None` when the text is not a value of `T`, with Rust's rules
-for what the text may look like. `T` comes from where the result goes, as
-`None`'s type does, `?` included: `let n: Option<i32> = text.parse();`, or
-`let n: i32 = text.parse()?;` in a function returning an `Option`. A
-function returning a `Result` writes two statements,
-`let parsed: Option<i32> = text.parse();` and then `parsed.ok_or(e)?`;
-`text.parse()?` there is an error (V0206).
+`parse` gives an `Err` when the text is not a value of `T`, with Rust's
+rules for what the text may look like, and its message names the text and
+the type (`` `abc` is not a number ``, `` `yes` is not `true` or `false` ``).
+`T` comes from where the result goes, as `None`'s type does, `?` included:
+`let n: Result<i32, Error> = text.parse();`, or `let n: i32 = text.parse()?;`
+in a function returning `Result<_, Error>`. For an `Option`, write two
+statements, `let parsed: Result<i32, Error> = text.parse();` and then
+`parsed.ok()`; `text.parse()?` in a function returning an `Option` is an
+error (V0206), and so is one in a function whose error type is not `Error`.
+
+**`Error`:**
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `Error::new(text)`; `text: string` | none | a new `Error` with the message `text`; `text` is kept, like a struct field |
+| `e.message()` | reads | the message: part of `e`, not a copy (see "Returning part of a parameter") |
+
+`{}` prints an `Error`'s message, and two errors can be compared with `==`.
+There is no conversion into `Error` from another error type: a function's
+own error enum becomes one with `map_err` and a function that gives its
+text, `r.map_err(|e| Error::new(describe(e)))`. In the generated Rust,
+`Error` is `::varyk_std::Error` and `parse` is `::varyk_std::parse`, from
+the `varyk-std` crate; a single file that uses either (names `Error`, or
+calls `Error::new`, `parse`, or a `json` or `env` call) gets it as a dependency at
+exactly the compiler's version.
 
 **`Option<T>`:**
 
@@ -974,6 +1002,97 @@ a `Result` the function only borrows, such as a parameter, a field, or an
 element, cannot be used with `?` (V0304). In the generated Rust, `r?` is
 written as it is.
 
+## Logging
+
+The four `log` calls write a line to stderr. Like `json` and `env`, `log`
+is written with the module's name; there is no `use log;`.
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `log::debug(format, args..)`; `args` read | none | nothing: a debug line |
+| `log::info(format, args..)`; `args` read | none | nothing: an info line |
+| `log::warn(format, args..)`; `args` read | none | nothing: a warning line |
+| `log::error(format, args..)`; `args` read | none | nothing: an error line |
+
+```varyk
+// main.vr
+fn main() {
+    let port = 8080;
+    log::info("listening on port {}", port);
+    log::warn("queue is {} percent full", 90);
+}
+```
+
+The format string and its arguments follow `println!` exactly: the text
+is a string literal written in quotes (anything else is V0202), the
+number of `{}` must match the number of arguments (V0202), and the
+arguments are numbers, `bool`, strings, or an `Error` (V0203 otherwise).
+
+`LOG` sets the level, `debug`, `info`, `warn`, `error`, or `off`; it is
+`info` when unset, and a line below the level is not written. `LOG` and
+`LOG_FORMAT` are read as `env::parse` reads a variable: the process
+environment first, then `.env`. A text line, without colour, is the time,
+the level, and the message: `2026-09-30T12:00:00.000Z INFO listening on port
+8080`. With `LOG_FORMAT=json` each line is one JSON object with the keys
+`time`, `level`, and `message`; any other value gives text.
+
+A program that makes a `log` call starts logging first thing in its
+`main`; a program without one writes nothing to stderr. Setup never stops
+the program: a bad `LOG` value or a `.env` that cannot be read gives one
+warning line, and logging goes on at `info` in text. In the generated Rust
+a call is `::varyk_std::tracing::info!(..)`, and `main` begins with
+`::varyk_std::start();`. A library's `log` calls go wherever the program
+using it sends them.
+
+## Tests
+
+A top-level function marked `#[test]` is a test, in any module, `pub` or
+not. `varyk test` builds the program with its tests and runs them;
+`varyk build` and `varyk run` leave them out. Two calls check results,
+and only inside a test:
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `assert(cond)`; `cond` a `bool` | none | nothing; the test fails when `cond` is false |
+| `assert_eq(a, b)`; `a` and `b` read | none | nothing; the test fails when `a != b` |
+
+```varyk
+// main.vr
+fn total(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn main() {
+    println!("{}", total(2, 3));
+}
+
+#[test]
+fn adds_two_numbers() {
+    assert_eq(total(2, 3), 5);
+    assert(total(0, 0) == 0);
+}
+```
+
+A test takes no parameters, returns nothing, cannot be called from the
+program, and cannot be the entry file's `main` (V0114). `assert` takes a
+`bool` (V0200 otherwise). `assert_eq` takes two values of one type (V0200
+otherwise) that `==` can compare (V0203 otherwise), reads them as `==`
+does, and works out each one once. Outside a test both are V0114: a check
+that stops the program has no place in service code, which returns an
+`Err` instead.
+
+A failing check stops its test and names the Varyk file and line, the
+file from the package's root, or for a single file its name alone, wherever
+`varyk` runs: `assertion failed at src/store.vr:12`. `assert_eq` adds both values when they print with `{}`
+(numbers, `bool`, strings, and `Error`): `assertion failed at
+src/store.vr:12: left is 4, right is 5`.
+
+`varyk test` shows the Rust test runner's report, which names a test in a
+module by its path (`store::adds_two_numbers`), and exits 0 when every
+test passes. In the generated Rust a test is a `#[test]` function, `assert`
+is `::std::assert!(cond, "assertion failed at ..")`, and `assert_eq` is
+`::std::assert!` on `==` of its two values.
+
 ## Printing
 
 `println!` prints a line. The first argument is a string literal, and each
@@ -985,9 +1104,9 @@ println!("{} is {} years old", name, age);
 
 The number of `{}` must match the number of arguments. Write `{{` and `}}`
 to print `{` and `}`. Nothing may go inside the braces. The arguments must be
-numbers, `bool`, or strings; a struct, an enum, an `Option`, a `Result`, a
-`Vec`, or a `HashMap` cannot be printed whole, even one that can be copied
-and compared.
+numbers, `bool`, strings, or an `Error`, which prints its message; a
+struct, an enum, an `Option`, a `Result`, a `Vec`, or a `HashMap` cannot be
+printed whole, even one that can be copied and compared.
 
 `format!` follows the same rules and, instead of printing, makes new text:
 `let line = format!("{} is {}", name, age);`. It is the way to join strings.
@@ -1107,6 +1226,229 @@ not pick it. In Rust,
 for the mutable borrow instead, and no Varyk-declared parameter takes
 ownership of a string or struct. Copy types are passed by value.
 
+## Attributes
+
+An attribute is written `#[name]` or `#[name(value)]` on the line before
+what it marks, or at the start of the same line. Several may stack. There
+are four:
+
+| Attribute | Goes before | Meaning |
+|---|---|---|
+| `#[rename("key")]` | a struct field, or a variant that carries no data | the name used in JSON and the environment instead of the Varyk name |
+| `#[default(value)]` | a struct field | the value used when the key or variable is missing |
+| `#[skip]` | a struct field | never written or read by `json` or `env` |
+| `#[test]` | a top-level function | a test, run by `varyk test` |
+
+```varyk
+// main.vr
+struct Config {
+    #[rename("PORT")]
+    #[default(8080)]
+    port: u16,
+    #[skip]
+    cache: Option<string>,
+}
+
+#[test]
+fn adds() {}
+
+fn main() {}
+```
+
+Any other name, such as `#[derive(Clone)]` or `#[serde(..)]`, is an error
+listing the four (`.clone()`, `==`, and JSON need no derive). So is an
+attribute anywhere else (on a struct, an enum, an `impl` block, a method,
+a `mod` or `use` line, a variant that carries data, or a field of a
+variant), the same attribute twice, a missing value (`#[rename]`), or a
+value where none goes (`#[skip(1)]`); all V0112. A `#` anywhere an
+attribute cannot start is a syntax error, and so is `#!`.
+
+`#[rename]` takes a non-empty string in quotes. `#[default]` takes one
+literal that fits the field: a whole number in the range of an integer
+field (`-1` fits `i32`, `300` does not fit `u8`), a number with a
+fractional part for an `f32` or `f64` field (`1.0`, not `1`, as anywhere
+else a number meets a float), a string in quotes for a `string` field, or
+`true` or `false` for a `bool` field. `#[default]` cannot go on an `Option`
+field, which is already `None` when missing, nor on a field of any other
+type. These are checked on every struct, used or not (V0209).
+
+`#[test]` marks a test (see [Tests](#tests)). `#[rename]`, `#[default]`,
+and `#[skip]` act on the types a `json` or `env` call reaches (see
+[JSON](#json) and [Configuration](#configuration)); on any other type they
+change nothing.
+
+## JSON
+
+The `json` module reads and writes JSON. Its two calls are written with
+the module's name, `json::parse(..)`; there is no `use json;`.
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `json::parse(text)`; `text: string` read | none | `Result<T, Error>`: a `T` read from the JSON text, or an `Err` saying what is wrong |
+| `json::stringify(value)`; `value: T` read | none | new text: `value` as compact JSON |
+
+```varyk
+// main.vr
+enum Role {
+    Admin,
+    #[rename("member")]
+    Member,
+}
+
+struct User {
+    id: u32,
+    #[rename("userName")]
+    user_name: string,
+    role: Role,
+    nickname: Option<string>,
+    #[default(18)]
+    age: u8,
+    #[skip]
+    password_hash: Option<string>,
+}
+
+fn load(body: string) -> Result<User, Error> {
+    let u: User = json::parse(body)?;
+    Ok(u)
+}
+
+fn main() {
+    match load("{\"id\": 7, \"userName\": \"ann\", \"role\": \"member\"}") {
+        Ok(u) => println!("{}", json::stringify(u)),
+        Err(e) => println!("error: {}", e),
+    }
+}
+```
+
+This prints `{"id":7,"userName":"ann","role":"member","nickname":null,"age":18}`.
+
+`T` for `json::parse` comes from where the result goes, as for `s.parse()`:
+a `let` with a written type, an argument, a return value, a field, and
+through `?`. The head of a `match` and the value a method is called on do
+not give it one, so a result looked at with `match` is put in a `let`
+first: `let r: Result<User, Error> = json::parse(body);`. With no type to
+take it is V0207, which shows `let u: User = json::parse(..)?;`.
+
+How values map:
+
+- a struct is an object; its keys are the field names, or their
+  `#[rename]`, written in declaration order; keys it does not have are
+  ignored when read;
+- a key that is missing when read is `None` for an `Option` field, the
+  `#[default]` value if the field has one, and otherwise an error naming
+  the key;
+- `None` is written as `null`, and `null` reads as `None`;
+- an enum whose variants carry no data is a string, the variant's name or
+  its `#[rename]`;
+- a `Vec` is an array, and a `HashMap<string, V>` an object (in no
+  particular key order);
+- numbers, `bool`, and `string` are themselves; a number out of range for
+  its type is an error when read (`300` for a `u8`), never a crash.
+
+A `#[skip]` field is never written and never read. A struct that
+`json::parse` reaches must give each of its skipped fields a value: a
+`#[default]`, or an `Option` type, which is `None` (V0209). Once renamed,
+the keys of the fields that are not skipped must all be different, and so
+must the keys of an enum's variants (V0209). These are checked only on the
+types a `json` call reaches.
+
+`json::stringify` cannot fail, so it gives a `string`, not a `Result`.
+Only these types can go through JSON: numbers, `bool`, `string`; `Option`
+and `Vec` of such a type; `HashMap<string, V>` of one; a struct whose
+fields, apart from skipped ones, are such types; and an enum whose
+variants carry no data. Anything else is an error at the call that names
+the part in the way (V0210): an enum with a variant that carries data, a
+`HashMap` whose key is not `string`, `Error`, or a Rust type from a `.rs`
+module. For data that varies by kind, use a struct with a field of a
+plain enum marked `#[rename("type")]` and an `Option` field for each
+kind's data. The check follows the fields all the way down, and a type
+that holds itself through a `Vec` is fine.
+
+`json::stringify` and `json::parse` only read their argument, so the
+value can be used after the call. In the generated Rust they are
+`::varyk_std::json::stringify(&value)` and
+`::varyk_std::json::parse::<User>(&text)`, and a type that a call reaches
+derives serde's `Serialize`, `Deserialize`, or both, through `varyk-std`,
+as the calls need; no other type gets them.
+
+## Configuration
+
+`env::parse()` fills a struct from the environment. It is written with the
+module's name; there is no `use env;`.
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `env::parse()` | none | `Result<T, Error>`: a `T` read from the environment, or an `Err` naming the variable that is wrong |
+
+```varyk
+// main.vr
+enum Mode {
+    Dev,
+    #[rename("live")]
+    Live,
+}
+
+struct Config {
+    port: u16,
+    #[rename("db_url")]
+    database_url: string,
+    mode: Mode,
+    token: Option<string>,
+    #[default(30)]
+    timeout_secs: u32,
+}
+
+fn load() -> Result<Config, Error> {
+    let c: Config = env::parse()?;
+    Ok(c)
+}
+
+fn main() {
+    match load() {
+        Ok(c) => println!("{} {}", c.port, c.timeout_secs),
+        Err(e) => println!("error: {}", e),
+    }
+}
+```
+
+`T` comes from where the result goes, in the same places as for
+`json::parse`; with none it is V0207, which shows
+`let c: Config = env::parse()?;`, and a result looked at with `match` is
+put in a typed `let` first.
+
+`T` must be a struct whose fields, apart from skipped ones, are numbers,
+`bool`, `string`, enums whose variants carry no data, or an `Option` of
+one of those. A nested struct, a `Vec`, or a `HashMap` field, or a `T` that
+is not a struct, is an error at the call naming the part in the way
+(V0210); mark a field the program fills itself `#[skip]` and make it an
+`Option`.
+
+Each field reads the variable named by its key, the field's name or its
+`#[rename]`, in upper case: a field `port` reads `PORT`, and the field
+`database_url` above, renamed `db_url`, reads `DB_URL` (not `DATABASE_URL`). Two fields whose variables would be
+the same are V0209. For each field, in order:
+
+1. a variable set in the process environment wins;
+2. otherwise, the value in `.env`, if that file has the variable;
+3. otherwise, the field's `#[default]`, or `None` for an `Option`, or an
+   `Err` such as `` `PORT` is not set ``.
+
+A value is read as its field's type: a number from its text, `true` or
+`false` for a `bool`, the variant's name or `#[rename]` for an enum, and
+a `string` as written. One that does not read is an `Err` naming the
+variable and the value (`` `PORT` is not a number: `abc` ``), never a
+crash.
+
+`.env` is read from the current directory, once, the first time it is
+needed. It is a list of `KEY=value` lines; blank lines and lines starting
+with `#` are skipped, and a value may be wrapped in single or double
+quotes. A missing file is fine; a malformed line is an `Err` naming the
+line. `.env` is never written into the process environment. Variable
+expansion (`${OTHER}`) and several files (`.env.local`) are not supported.
+
+In the generated Rust it is `::varyk_std::env::parse::<Config>()`, and the
+struct derives serde's `Deserialize` through `varyk-std`.
+
 ## Strings
 
 There is one string type, `string`. Behind it, the compiler picks either a
@@ -1133,7 +1475,7 @@ and in the generated Rust it is `.clone()`, or `.to_string()` when `s` is a
 copies a string's text behind your back. A string that is already owned
 moves instead, with no copy.
 
-## Not in milestone 4
+## Not in milestone 5a
 
 These do not exist yet; where one can be written, it is an error that names
 what is not supported. They are left out because no program has needed
@@ -1162,8 +1504,18 @@ crate); `pub(crate)` and `pub(super)`; `use` with braces or globs;
 re-exports (`pub use`) in either direction; settings taken from a Cargo
 workspace; custom target paths; reading `[features]`; sharing cargo's
 `target/` between `varyk build` and `cargo build`; `varyk init` into an
-existing project; and `varyk` commands for `cargo test`, `cargo doc`, and
-`cargo add`, which work unchanged through cargo once `init` has run.
+existing project; and a `varyk` command for `cargo doc`, which works
+unchanged through cargo once `init` has run.
+
+Also not yet, from the batteries: TOML; pretty-printed JSON; JSON for
+enums that carry data (write a `type` field); `flatten`, aliases, and
+custom formats in JSON; structured log fields (`log::info("x", id = 1)`),
+log targets, and spans; `.env` variable expansion and several `.env`
+files; a kind or a cause on `Error`, and automatic conversion into `Error`
+from other error types at `?`; attributes on structs, methods, and
+variants with data; `#[default]` on an `Option`, enum, or struct field;
+`varyk_std::Error` in a `.rs` signature; and `async`, HTTP, and the
+database, which are milestones 5b1 and 5b2.
 
 These are left out by design: closures as values (function types, and a
 closure in a `let`, a parameter, a return, or a field), `move`, a type on a
@@ -1173,7 +1525,8 @@ finished where it is written); an `Option` holding part of a stored value
 as a value of its own (look inside `get` and `find` where they are made);
 indexing a `HashMap`; `loop`; guards, `|`, `..`, and `@` in patterns, and
 `let else`; ranges anywhere but the head of a `for`; `+` on strings (use
-`format!`); `Self`; `Copy` structs; traits, generics, and attributes;
+`format!`); `Self`; `Copy` structs; traits, generics, and attributes
+other than the four under [Attributes](#attributes);
 derives beyond `Clone` and `PartialEq`, so `println!` stays an error on
 structs, enums, `Option`, `Result`, `Vec`, and `HashMap`; a method that
 takes `self` by value, or any other way to write "give this away"; `impl`
@@ -1181,7 +1534,7 @@ blocks for built-in types; a `use` of an enum variant; naming a crate from
 Varyk code (write a `.rs` facade instead: a Rust file of the package that
 wraps what the program needs from the crate in plain functions, as
 "Calling Rust" shows); and everything planned for later milestones, such
-as the batteries for services, `async`, `varyk fmt`, and a language server.
+as HTTP, databases, `async`, `varyk fmt`, and a language server.
 
 `unwrap` and `expect` are never added, in this or any later milestone: a
 call that stops the program when a value is absent defeats the purpose of a
@@ -1457,9 +1810,11 @@ names the module and says which `pub mod` fixes it.
 varyk check [file.vr]                            check for errors; never runs cargo
 varyk build [file.vr] [--release] [--emit-rust]  generate and build; print the executable's path
 varyk run [file.vr] [--release] [-- args...]     build, then run with the given arguments
+varyk test [file.vr]                             build the tests and run them
 varyk emit [file.vr] --out-dir DIR               check, then write the generated tree to DIR;
                                                   never runs cargo
 varyk init [dir] [--lib]                         write a package that plain cargo build compiles
+varyk add [cargo add args]                       run cargo add in the package
 varyk publish [--assemble-only] [-- cargo args]  check, assemble a plain Rust crate, and run
                                                   cargo publish there
 ```
@@ -1482,9 +1837,9 @@ stops with "this package is a library; it has nothing to run", and
   files), each after a line naming it, and then builds.
 - `--message-format=json` works with every command and prints errors, and
   the warnings rustc gives about your `.rs` modules, as JSON on standard
-  output, one object per line, instead of the text form; under `varyk run`,
-  whose standard output is the program's own, they go to standard error
-  instead. The
+  output, one object per line, instead of the text form; under `varyk run`
+  and `varyk test`, whose standard output is the program's or the test
+  runner's own, they go to standard error instead. The
   error, each of its labels, and its fix-it each name the file they point
   into. Lines count from 1; `column` fields count bytes from the start of the
   line, also from 1. A Rust compiler error in one of your `.rs` modules is
@@ -1498,7 +1853,9 @@ stops with "this package is a library; it has nothing to run", and
   and so does cargo failing before it compiles anything, followed by
   cargo's own words.
 
-`run` exits with the program's exit code. For a single file, the generated
+`run` exits with the program's exit code, and `test` with the test
+runner's (see [Tests](#tests)); a Rust error while building the tests is
+reported as under `build`. For a single file, the generated
 Rust project lives in the build directory, `target/varyk/` under the current
 directory (so in your source tree if you run `varyk` from the `.vr` file's
 directory). For a package it is `target/varyk/<name>/` under the package's
@@ -1512,10 +1869,13 @@ is reported as V0900 at the Varyk line responsible (see "Calling Rust").
 
 `varyk init [dir]` writes a new package in `dir` (the current directory
 if you leave it out), named after that directory: `Cargo.toml`,
-`.gitignore`, `build.rs`, `src/main.rs`, and `src/main.vr` (a hello-world
-program). `varyk init --lib` writes `src/lib.rs` and `src/lib.vr` (one
-`pub fn`) instead, and prints one line, "created the package `<name>` in `<dir>`; run
-`varyk run` or `cargo run`" (`build` for a library, and "`cd <dir>`, then"
+`.gitignore` (`/target` and `.env`, so a local secrets file is never
+committed), `build.rs`, `src/main.rs`, and `src/main.vr` (a hello-world
+program). The `Cargo.toml` lists `varyk-std = "X.Y.Z"` under
+`[dependencies]`, the compiler's own version, since a program that uses
+`Error` or another `varyk-std` feature needs it. `varyk init --lib` writes
+`src/lib.rs` and `src/lib.vr` (one `pub fn`) instead, and prints one line,
+"created the package `<name>` in `<dir>`; run `varyk run` or `cargo run`" (`build` for a library, and "`cd <dir>`, then"
 first when you gave a directory other than `.`, in single quotes if it has
 a space or another character a shell treats specially). The name is the directory's name made
 a valid crate name (`my app` becomes `my_app`). It refuses to run, and
@@ -1574,6 +1934,27 @@ error); a `DIR` or `DIR/src` that is itself a symbolic link; and a
 `DIR` written with `..` in it. It is the command `build.rs` calls, and
 exists as its own command mainly for that use.
 
+### `varyk add` and upgrading
+
+`varyk add [cargo add args]` runs `cargo add` with exactly the arguments
+you give, in the package found upward from the current directory (so a
+relative `--path` is relative to the package), and passes cargo's output and
+exit code through; Varyk interprets none of the arguments. Outside a
+package it says "no Varyk package here". `cargo add` needs the
+`src/main.rs` (or `src/lib.rs`) stub that `varyk init` writes; in a package
+without one, add the line to `Cargo.toml` by hand.
+
+A program that uses `varyk-std` (it names `Error` or calls one of its
+features) needs `varyk-std` in `[dependencies]`, as `"X.Y"` or `"X.Y.Z"`
+(a leading `^` is fine) or a table with such a `version` and no `path`,
+`git`, `optional`, or `package`, where `X.Y` is the compiler's version
+(`~`, `=`, `>=`, `*` and lists are refused); and if `Cargo.lock` locks
+`varyk-std`, a version no older than the compiler's. `varyk check` says
+which of these fails (V0404) and the line to write. To upgrade, run
+`cargo install varyk`, then whatever `varyk check` asks for: change the
+line, or run `cargo update -p varyk-std`. A single file has no
+`Cargo.toml`; its generated crate depends on the compiler's exact version.
+
 ### `varyk publish`
 
 `varyk publish [-- cargo args]` always works on the package found
@@ -1623,15 +2004,20 @@ Every error has a code. A code is never reused for a different meaning.
 | V0109 | a struct or enum that contains itself, directly or through other structs, enums, `Option`, or `Result`; a `Vec` or `HashMap` breaks the cycle |
 | V0110 | a `use` naming a crate this compiler recognizes by name (`std`, `core`, `alloc`, and in a package every crate in `[dependencies]`); call a crate from a `.rs` module in the package instead |
 | V0111 | a path Varyk cannot follow: `super` in the entry file, a `use` ending at an enum variant or at a type's method or associated function, a `use` whose leading name, or whose only name (`use shop;`), is a module declared elsewhere in the package (write it from `crate::` or `super::`), or a `use` whose leading name another `use` made |
+| V0112 | an attribute Varyk does not have (the message lists the four; `derive` gets a note that `.clone()`, `==`, and JSON need none), one in a place it cannot go (the note says where it goes), the same attribute twice on one item, or a value missing (`#[rename]`, `#[default]`) or not expected (`#[skip(1)]`, `#[test(1)]`) |
+| V0113 | the name `Error`, the standard error type, given to a struct, an enum, a module, or a `use`, or to a `pub` struct or enum of a `.rs` module; `json`, `env`, or `log`, the standard modules, given to a module, a struct, an enum, or a `use`, or a `use` of one (`use json;`, `use json::parse;`); `assert` or `assert_eq` given to a function or a `use`; a function, method, struct, enum, module, or `use` name starting with `varyk_`, kept for what Varyk adds to the Rust it writes |
+| V0114 | a `#[test]` function with parameters or a return type, a call to or `use` of one, or `main` of the entry file marked `#[test]`; `assert` or `assert_eq` outside a `#[test]` function |
 | V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool` |
 | V0201 | wrong number of arguments, or of values in an enum value; a variant value with named fields that leaves one out, or with the wrong kind of brackets; a closure with more or fewer than one parameter |
-| V0202 | `println!` or `format!` with the wrong number of `{}`, or something other than `{}` in braces |
-| V0203 | `{}` used on anything but a number, `bool`, or string; `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file |
+| V0202 | `println!`, `format!`, or a `log` call with the wrong number of `{}`, or something other than `{}` in braces; a `log` call whose text is not a string literal written in quotes |
+| V0203 | `{}` used on anything but a number, `bool`, string, or `Error`; `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file |
 | V0204 | a `match` that does not handle every value: a variant at any depth, a `bool` value, or, on a number or a string, the catch-all it always needs; the message names a value shape it misses |
 | V0205 | a pattern that does not fit the value: a variant of another type, the wrong number of positions in a variant, a variant pattern leaving out a named field, a literal or range of another type or not fitting it, a range whose ends are reversed, a float literal, or a string literal inside another pattern; an arm that can never run, such as one after `_` or a name; or a `match`, `if let`, or `while let` on something that is not an enum, `Option`, `Result`, number, `bool`, or string |
 | V0206 | `?` in a function that does not return a `Result` or an `Option`, on a `Result` in a function returning an `Option` or the reverse, or on a value that is not a `Result` with the function's error type |
-| V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, or `parse()` whose type cannot be worked out where it is written, `Err(e)?;`, `text.parse().ok_or(e)?`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
+| V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, `parse()`, `json::parse(..)`, or `env::parse()` whose type cannot be worked out where it is written, `Err(e)?;`, `text.parse().ok()`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
 | V0208 | a value that must be used where it is made: an `Option` from `get`, or from `find` on a chain of borrowed items, holding part of a stored value, stored in a `let`, passed, returned, used with `?`, given any method, or named whole by a pattern (look inside it with `match` or `if let`); an unfinished chain anywhere but as the value the next call of the chain is made on or the head of a `for` (finish the chain there) |
+| V0209 | a `#[rename]` value that is not a string in quotes, or is empty; a `#[default]` value that does not fit its field's type (`"x"` on an `i32`, `300` on a `u8`, `1` on an `f64`); `#[default]` on an `Option` field or on a field that is not a number, `string`, or `bool`; on a type a `json` call reaches, a skipped field with no `#[default]` that is not an `Option` when the type is read, or two fields that are not skipped, or two variants, with the same key once renamed, and, on a type `env::parse` reaches, two fields whose upper-cased keys are the same variable |
+| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
 | V0300 | changing a parameter that was declared without `mut`, by assigning to it or calling `push` or `pop` on it |
 | V0301 | changing a `let` name that was declared without `mut`, or a name a `match` pattern or a `for` made, by assigning to it or calling `push` or `pop` on it; also changing, inside a closure, a name from outside it or the closure's parameter |
 | V0302 | a `let` name without `mut` passed to a `mut` parameter or used to call a `mut self` method |
@@ -1645,4 +2031,5 @@ Every error has a code. A code is never reused for a different meaning.
 | V0401 | something in `Cargo.toml` Varyk does not support yet: a key outside the fixed set `check` reads, a `src/bin/`, `examples/`, `tests/`, or `benches/` directory or the root file of the other kind (`src/lib.rs` beside `src/main.vr`), which cargo would build as further targets, a setting taken from a Cargo workspace (`workspace = true`), dependencies for only some platforms (`[target.'cfg(..)'.dependencies]`), `links`, which needs a build script the published crate does not carry, a custom `build` script, `[lints]`, or `[patch]` or `[replace]`, in the package or in the root manifest of an enclosing workspace |
 | V0402 | a Cargo target table (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`), not supported yet: a package is one program from `src/main.vr` or one library from `src/lib.vr`, found by cargo's defaults |
 | V0403 | a `Cargo.toml` that cannot be used: it cannot be read, is not valid TOML, has a top-level key cargo reads as a table (`workspace`, `dependencies`, `features`, ...) that is not one, has no `[package]` `name`, names with `workspace` a directory that has no workspace manifest or sits under a `Cargo.toml` whose `workspace` is not a table, or its `name` is not letters, digits, `-`, and `_` starting with a letter or `_`, or a `[package]` key has a value of the wrong shape (`license = 1`), or its `rust-version` is not `MAJOR.MINOR[.PATCH]`, or is `cache` or `package`, or a program (not a library) is called `deps`, `examples`, `build`, or `incremental` in any case, the names of Cargo's own build folders, or its `version` is present but not text of the form `MAJOR.MINOR.PATCH` that cargo accepts; or its package has both `src/main.vr` and `src/lib.vr` (from the command line, a `Cargo.toml` found but whose package has neither is reported before any check runs: "no Varyk package here" and why, in one line) |
+| V0404 | the `varyk-std` dependency of a program that uses it is missing, comes from a `path` or `git`, is `optional` or renamed, has a requirement that is not `X.Y` or `X.Y.Z` (optionally `^`) on the compiler's version, or `Cargo.lock` locks an older `varyk-std`; the note gives the line to write, or `cargo update -p varyk-std` |
 | V0900 | rustc rejected the Rust code Varyk generated, which should not happen, except for the known limits listed under "Calling Rust"; the message carries rustc's own message and code and asks you to report it, or, when rustc also rejected a `.rs` module you wrote, says it may follow from that error. An error or warning in a `.rs` module you wrote is not this code: it is shown at your file, unchanged |

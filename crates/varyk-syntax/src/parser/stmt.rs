@@ -63,8 +63,7 @@ impl<'a> Parser<'a> {
                             has_semi: false,
                         });
                     } else {
-                        let err_span = self.current_span();
-                        self.push_error(V0002, err_span, "expected `;` after this expression");
+                        self.push_expected("`;` after this expression");
                         return Err(());
                     }
                 }

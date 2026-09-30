@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `log` is already taken by the standard `log` module
+ --> crates/varyk/tests/fixtures/errors/v0113_module_named_log/main.vr:1:5
+  |
+1 | mod log;
+  |     ^^^ the name `log` is already taken by the standard `log` module
+  |
+  = note: the standard `log` module is reached by its path wherever it is used, as in `log::..`, so a module, struct, or enum of your own needs another name

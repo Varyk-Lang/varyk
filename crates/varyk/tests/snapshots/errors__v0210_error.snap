@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0210]: `Failure` cannot be turned into JSON
+ --> crates/varyk/tests/fixtures/errors/v0210_error/main.vr:8:20
+  |
+3 |     error: Error,
+  |     ------------ `Error` holds a message, not data
+...
+8 |     println!("{}", json::stringify(failure));
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^ `Failure` cannot be turned into JSON
+  |
+  = note: keep the error's text instead, in a `string` field set from `e.message()`

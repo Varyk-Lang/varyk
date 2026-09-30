@@ -4,8 +4,9 @@
 
 use super::Parser;
 use crate::ast::{
-    EnumDecl, EnumVariant, FieldDecl, Function, Ident, ImplBlock, Item, ModDecl, Param, Path,
-    Program, SelfMode, StructDecl, UseDecl, VariantField, VariantFields,
+    AttrArg, Attribute, EnumDecl, EnumVariant, FieldDecl, Function, Ident, ImplBlock, Item,
+    Literal, ModDecl, Param, Path, Program, SelfMode, StructDecl, UseDecl, VariantField,
+    VariantFields,
 };
 use crate::error::{FixIt, V0001, V0002, V0011, V0012};
 use crate::span::Span;
@@ -27,7 +28,82 @@ impl<'a> Parser<'a> {
         Program { items }
     }
 
+    /// Every attribute (`#[name]`, `#[name(literal)]`, M5a spec 2.2) at the
+    /// current position, in order; none when the current token is not `#`.
+    fn parse_attributes(&mut self) -> Result<Vec<Attribute>, ()> {
+        let mut attrs = Vec::new();
+        while self.peek() == Some(&TokenKind::Hash) {
+            attrs.push(self.parse_attribute()?);
+        }
+        Ok(attrs)
+    }
+
+    /// One attribute, at its `#`. A single literal between the parentheses
+    /// is its argument; anything else there is kept as [`AttrArg::Other`]
+    /// for the resolver to report with the attribute's name.
+    fn parse_attribute(&mut self) -> Result<Attribute, ()> {
+        let hash = self.current_span();
+        self.bump(); // `#`
+        self.expect(TokenKind::LBracket, "`[` after `#`")?;
+        let name = self.expect_identifier("an attribute name")?;
+        let arg = if self.peek() == Some(&TokenKind::LParen) {
+            let literal_len = match self.peek_at(1) {
+                Some(TokenKind::Minus) => 2,
+                Some(
+                    TokenKind::IntegerLiteral(_)
+                    | TokenKind::FloatLiteral(_)
+                    | TokenKind::StringLiteral(_)
+                    | TokenKind::BoolLiteral(_),
+                ) => 1,
+                _ => 0,
+            };
+            let number_after_minus = matches!(
+                self.peek_at(2),
+                Some(TokenKind::IntegerLiteral(_) | TokenKind::FloatLiteral(_))
+            );
+            let one_literal = literal_len > 0
+                && ((literal_len == 2 && !number_after_minus)
+                    || self.peek_at(1 + literal_len) == Some(&TokenKind::RParen));
+            if one_literal {
+                self.bump(); // `(`
+                let (literal, _) = self.parse_pattern_literal()?;
+                self.expect(TokenKind::RParen, "`)` after the attribute's value")?;
+                Some(match literal {
+                    Literal::Str(text) => AttrArg::Str(text),
+                    Literal::Int { text, negative } => AttrArg::Int { text, negative },
+                    Literal::Float { text, negative } => AttrArg::Float { text, negative },
+                    Literal::Bool(value) => AttrArg::Bool(value),
+                })
+            } else {
+                self.skip_paren_group();
+                Some(AttrArg::Other)
+            }
+        } else {
+            None
+        };
+        let rbracket = self.expect(TokenKind::RBracket, "`]` after the attribute")?;
+        Ok(Attribute {
+            name,
+            arg,
+            span: self.span_from(hash, rbracket.span),
+        })
+    }
+
     fn parse_item(&mut self) -> Result<Item, ()> {
+        let attrs = self.parse_attributes()?;
+        let item = self.parse_item_after(!attrs.is_empty())?;
+        Ok(match item {
+            Item::Function(decl) => Item::Function(Function { attrs, ..decl }),
+            Item::Struct(decl) => Item::Struct(StructDecl { attrs, ..decl }),
+            Item::Enum(decl) => Item::Enum(EnumDecl { attrs, ..decl }),
+            Item::Impl(decl) => Item::Impl(ImplBlock { attrs, ..decl }),
+            Item::Mod(decl) => Item::Mod(ModDecl { attrs, ..decl }),
+            Item::Use(decl) => Item::Use(UseDecl { attrs, ..decl }),
+        })
+    }
+
+    /// An item, after its attributes (`after_attrs` when there were any).
+    fn parse_item_after(&mut self, after_attrs: bool) -> Result<Item, ()> {
         let start_span = self.current_span();
         let is_pub = self.bump_if(&TokenKind::Pub);
         if is_pub && self.peek() == Some(&TokenKind::LParen) {
@@ -66,12 +142,12 @@ impl<'a> Parser<'a> {
                 Err(())
             }
             _ => {
-                let span = self.current_span();
-                self.push_error(
-                    V0002,
-                    span,
-                    "expected an item (`fn`, `struct`, `enum`, `impl`, `mod`, or `use`)",
-                );
+                let what = if after_attrs {
+                    "an item (`fn`, `struct`, `enum`, `impl`, `mod`, or `use`) after the attribute"
+                } else {
+                    "an item (`fn`, `struct`, `enum`, `impl`, `mod`, or `use`)"
+                };
+                self.push_expected(what);
                 Err(())
             }
         }
@@ -117,6 +193,7 @@ impl<'a> Parser<'a> {
         let body = self.parse_block()?;
         let span = self.span_from(start_span, body.span);
         Ok(Function {
+            attrs: Vec::new(),
             name,
             is_pub,
             self_mode,
@@ -357,6 +434,7 @@ impl<'a> Parser<'a> {
         let rbrace = self.expect(TokenKind::RBrace, "`}` after the struct's fields")?;
         let span = self.span_from(start_span, rbrace.span);
         Ok(StructDecl {
+            attrs: Vec::new(),
             name,
             is_pub,
             fields,
@@ -368,6 +446,7 @@ impl<'a> Parser<'a> {
     /// restricted visibility, is `V0001` (`reject_pub_paren`): Varyk has
     /// only plain `pub`.
     fn parse_field(&mut self) -> Result<FieldDecl, ()> {
+        let attrs = self.parse_attributes()?;
         let start_span = self.current_span();
         let is_pub = self.bump_if(&TokenKind::Pub);
         if is_pub && self.peek() == Some(&TokenKind::LParen) {
@@ -378,6 +457,7 @@ impl<'a> Parser<'a> {
         let ty = self.parse_type()?;
         let span = self.span_from(start_span, ty.span);
         Ok(FieldDecl {
+            attrs,
             name,
             ty,
             is_pub,
@@ -442,7 +522,12 @@ impl<'a> Parser<'a> {
         };
         let semi = self.expect(TokenKind::Semi, "`;` after the `use` path")?;
         let span = self.span_from(start_span, semi.span);
-        Ok(UseDecl { path, alias, span })
+        Ok(UseDecl {
+            attrs: Vec::new(),
+            path,
+            alias,
+            span,
+        })
     }
 
     /// The path of a `use` item: an optional keyword prefix (`crate`,
@@ -520,6 +605,7 @@ impl<'a> Parser<'a> {
         }
         let span = self.span_from(start_span, rbrace.span);
         Ok(EnumDecl {
+            attrs: Vec::new(),
             name,
             is_pub,
             variants,
@@ -530,6 +616,7 @@ impl<'a> Parser<'a> {
     /// A unit variant (`Point`), a tuple variant (`Circle(f64, f64)`), or a
     /// variant with named fields (`Click { x: i32, y: i32 }`, M4 spec 2.5).
     fn parse_enum_variant(&mut self) -> Result<EnumVariant, ()> {
+        let attrs = self.parse_attributes()?;
         let name = self.expect_name_identifier("a variant name")?;
         let (fields, span) = match self.peek() {
             Some(TokenKind::LParen) => {
@@ -576,13 +663,19 @@ impl<'a> Parser<'a> {
             }
             _ => (VariantFields::Unit, name.span),
         };
-        Ok(EnumVariant { name, fields, span })
+        Ok(EnumVariant {
+            attrs,
+            name,
+            fields,
+            span,
+        })
     }
 
     /// A named field of a variant: `name: T`. `pub` (or `pub(...)`) before
     /// it is `V0001` with a fix-it removing it, since a variant's fields
     /// are as visible as the enum; parsing goes on without it.
     fn parse_variant_field(&mut self) -> Result<VariantField, ()> {
+        let attrs = self.parse_attributes()?;
         if self.peek() == Some(&TokenKind::Pub) {
             let pub_span = self.current_span();
             self.bump();
@@ -605,7 +698,12 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::Colon, "`:` after the field name")?;
         let ty = self.parse_type()?;
         let span = self.span_from(name.span, ty.span);
-        Ok(VariantField { name, ty, span })
+        Ok(VariantField {
+            attrs,
+            name,
+            ty,
+            span,
+        })
     }
 
     /// Consumes a `{...}` group whose opening `{` is already confirmed
@@ -663,15 +761,16 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::LBrace, "`{` after the impl type")?;
         let mut functions = Vec::new();
         while self.peek().is_some() && self.peek() != Some(&TokenKind::RBrace) {
+            let attrs = self.parse_attributes()?;
             let fn_start = self.current_span();
             let is_pub = self.bump_if(&TokenKind::Pub);
             match self.peek() {
                 Some(TokenKind::Fn) => {
-                    functions.push(self.parse_function(fn_start, is_pub, true)?);
+                    let function = self.parse_function(fn_start, is_pub, true)?;
+                    functions.push(Function { attrs, ..function });
                 }
                 _ => {
-                    let span = self.current_span();
-                    self.push_error(V0002, span, "expected a function in the `impl` block");
+                    self.push_expected("a function in the `impl` block");
                     return Err(());
                 }
             }
@@ -679,6 +778,7 @@ impl<'a> Parser<'a> {
         let rbrace = self.expect(TokenKind::RBrace, "`}` after the impl's functions")?;
         let span = self.span_from(start_span, rbrace.span);
         Ok(ImplBlock {
+            attrs: Vec::new(),
             type_name,
             functions,
             span,
@@ -690,7 +790,12 @@ impl<'a> Parser<'a> {
         let name = self.expect_name_identifier("a module name")?;
         let semi = self.expect(TokenKind::Semi, "`;` after the module name")?;
         let span = self.span_from(start_span, semi.span);
-        Ok(ModDecl { name, is_pub, span })
+        Ok(ModDecl {
+            attrs: Vec::new(),
+            name,
+            is_pub,
+            span,
+        })
     }
 }
 
@@ -699,6 +804,7 @@ mod tests {
     use super::*;
     use crate::error::SyntaxError;
     use crate::lex;
+    use crate::parser::STRAY_HASH;
     use crate::source::SourceFile;
     use crate::span::FileId;
 
@@ -1368,5 +1474,206 @@ mod tests {
                 .any(|e| e.code == V0001 && e.message.contains("keyword")),
             "errors: {errors:?}"
         );
+    }
+
+    // --- Attributes (M5a spec 2.2) ---------------------------------------
+
+    fn only_struct(program: &Program) -> &StructDecl {
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0] {
+            Item::Struct(s) => s,
+            other => panic!("expected a struct, got {other:?}"),
+        }
+    }
+
+    fn attr_names(attrs: &[Attribute]) -> Vec<&str> {
+        attrs.iter().map(|a| a.name.name.as_str()).collect()
+    }
+
+    #[test]
+    fn rename_on_its_own_line_before_a_field() {
+        let program = parse_program_ok(
+            "struct User {\n    #[rename(\"userName\")]\n    user_name: string,\n}",
+        );
+        let s = only_struct(&program);
+        let attrs = &s.fields[0].attrs;
+        assert_eq!(attr_names(attrs), vec!["rename"]);
+        assert_eq!(attrs[0].arg, Some(AttrArg::Str("userName".to_string())));
+        // The field's own span still starts at its name.
+        assert_eq!(s.fields[0].span.start, s.fields[0].name.span.start);
+    }
+
+    #[test]
+    fn rename_inline_before_a_field() {
+        let program = parse_program_ok("struct User { #[rename(\"id\")] user_id: i32 }");
+        let s = only_struct(&program);
+        assert_eq!(attr_names(&s.fields[0].attrs), vec!["rename"]);
+        assert_eq!(s.fields[0].name.name, "user_id");
+    }
+
+    #[test]
+    fn stacked_attributes_keep_their_order() {
+        let program = parse_program_ok("struct C { #[skip] #[default(1)] n: i32, m: i32 }");
+        let s = only_struct(&program);
+        let attrs = &s.fields[0].attrs;
+        assert_eq!(attr_names(attrs), vec!["skip", "default"]);
+        assert_eq!(attrs[0].arg, None);
+        assert_eq!(
+            attrs[1].arg,
+            Some(AttrArg::Int {
+                text: "1".to_string(),
+                negative: false
+            })
+        );
+        assert!(s.fields[1].attrs.is_empty());
+    }
+
+    #[test]
+    fn negative_float_and_bool_literals() {
+        let program = parse_program_ok(
+            "struct C { #[default(-1)] a: i32, #[default(1.5)] b: f64, #[default(-2.5)] c: f64, \
+             #[default(true)] d: bool }",
+        );
+        let s = only_struct(&program);
+        let args: Vec<Option<AttrArg>> = s.fields.iter().map(|f| f.attrs[0].arg.clone()).collect();
+        assert_eq!(
+            args,
+            vec![
+                Some(AttrArg::Int {
+                    text: "1".to_string(),
+                    negative: true
+                }),
+                Some(AttrArg::Float {
+                    text: "1.5".to_string(),
+                    negative: false
+                }),
+                Some(AttrArg::Float {
+                    text: "2.5".to_string(),
+                    negative: true
+                }),
+                Some(AttrArg::Bool(true)),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_argument_that_is_not_one_literal_is_kept_as_other() {
+        let program = parse_program_ok("#[derive(Clone, PartialEq)]\nstruct P { x: i32 }");
+        let s = only_struct(&program);
+        assert_eq!(attr_names(&s.attrs), vec!["derive"]);
+        assert_eq!(s.attrs[0].arg, Some(AttrArg::Other));
+        // The struct's span starts at `struct`, not at the attribute.
+        assert_eq!(&s.span, &Span::new(FileId(0), 28, s.span.end));
+    }
+
+    #[test]
+    fn test_before_a_function() {
+        let program = parse_program_ok("#[test]\nfn parses() { }");
+        let f = only_function(&program);
+        assert_eq!(attr_names(&f.attrs), vec!["test"]);
+        assert_eq!(f.attrs[0].span, Span::new(FileId(0), 0, 7));
+        assert_eq!(f.span.start, 8);
+    }
+
+    #[test]
+    fn attributes_before_every_item_kind_parse() {
+        let program = parse_program_ok(
+            "#[a] mod m;\n#[b] use m::f;\n#[c] enum E { X }\n#[d] impl E { }\n#[e] pub fn g() { }",
+        );
+        let names: Vec<Vec<&str>> = program
+            .items
+            .iter()
+            .map(|item| match item {
+                Item::Mod(d) => attr_names(&d.attrs),
+                Item::Use(d) => attr_names(&d.attrs),
+                Item::Enum(d) => attr_names(&d.attrs),
+                Item::Impl(d) => attr_names(&d.attrs),
+                Item::Function(d) => attr_names(&d.attrs),
+                Item::Struct(d) => attr_names(&d.attrs),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![vec!["a"], vec!["b"], vec!["c"], vec!["d"], vec!["e"]]
+        );
+    }
+
+    #[test]
+    fn attributes_before_a_variant_a_variant_field_and_a_method() {
+        let program = parse_program_ok(
+            "enum E { #[rename(\"a\")] A, B { #[skip] x: i32 } }\n\
+             impl E { #[test] fn m(self) { } }",
+        );
+        let Item::Enum(e) = &program.items[0] else {
+            panic!("expected an enum");
+        };
+        assert_eq!(attr_names(&e.variants[0].attrs), vec!["rename"]);
+        assert!(e.variants[1].attrs.is_empty());
+        let VariantFields::Named(fields) = &e.variants[1].fields else {
+            panic!("expected named fields");
+        };
+        assert_eq!(attr_names(&fields[0].attrs), vec!["skip"]);
+        let Item::Impl(block) = &program.items[1] else {
+            panic!("expected an impl");
+        };
+        assert_eq!(attr_names(&block.functions[0].attrs), vec!["test"]);
+    }
+
+    #[test]
+    fn a_stray_hash_in_a_body_names_where_attributes_go() {
+        let (_, errors) = parse_program("fn f() { #[skip] let x = 1; }");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, V0002);
+        assert_eq!(errors[0].message, STRAY_HASH);
+    }
+
+    #[test]
+    fn a_stray_hash_in_a_type_names_where_attributes_go() {
+        let (_, errors) = parse_program("struct S { x: #[a] i32 }");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].message, STRAY_HASH);
+    }
+
+    #[test]
+    fn a_stray_hash_after_an_expression_or_in_a_pattern_names_where_attributes_go() {
+        for src in [
+            "fn f() { let x = 1; x #[a] }",
+            "fn f() { match 1 { #[a] 1 => {}, _ => {} } }",
+            "fn f() { g(#[a] 1); }",
+        ] {
+            let (_, errors) = parse_program(src);
+            assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+            assert_eq!(
+                (errors[0].code, errors[0].message.as_str()),
+                (V0002, STRAY_HASH)
+            );
+        }
+    }
+
+    #[test]
+    fn an_attribute_with_nothing_after_it_is_v0002() {
+        let (_, errors) = parse_program("fn f() { }\n#[test]");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, V0002);
+        assert_eq!(
+            errors[0].message,
+            "expected an item (`fn`, `struct`, `enum`, `impl`, `mod`, or `use`) after the attribute"
+        );
+    }
+
+    #[test]
+    fn hash_without_a_bracket_is_v0002() {
+        let (_, errors) = parse_program("# fn f() { }");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, V0002);
+        assert_eq!(errors[0].message, "expected `[` after `#`");
+    }
+
+    #[test]
+    fn a_minus_before_a_string_is_v0002() {
+        let (_, errors) = parse_program("struct S { #[default(-\"x\")] s: string }");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, V0002);
+        assert_eq!(errors[0].message, "expected a number after `-`");
     }
 }

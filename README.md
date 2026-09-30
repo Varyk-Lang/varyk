@@ -22,8 +22,9 @@ simplicity.
 cargo install varyk
 ```
 
-The service batteries (HTTP, JSON, databases, `async`) are milestone 5 on
-the [roadmap](docs/roadmap.md); what works today is under
+JSON, configuration from the environment, logging, and `varyk test` are in
+milestone 5a; the rest of the service batteries (`async`, HTTP, databases)
+are milestones 5b1 and 5b2 on the [roadmap](docs/roadmap.md); what works today is under
 [Status](#status).
 
 ## Use Varyk until you need Rust
@@ -200,15 +201,24 @@ in the example above.
 
 Varyk is experimental and pre-1.0: anything may change, including any
 syntax, error code, or command-line flag, and a breaking change bumps the
-minor version. This is milestone 4: closures, iterators, and patterns.
+minor version. This is milestone 5a: data, configuration, logging, and
+tests, on top of milestone 4's closures, iterators, and patterns.
 Structs, enums, and `match`, `for` loops, methods, `Option`, `Result`,
 `Vec`, `?`, and `format!` work, and so do packages with dependencies,
 modules at any depth, `use`, private fields, and Rust structs and enums
 imported from `.rs` files; the compiler builds and runs every program in
 `examples/`, and it reports every error it knows about with a code, a
-plain-word message, and, where it can, a suggested fix. Async, the
-batteries for services, and much more are not there yet; see
+plain-word message, and, where it can, a suggested fix. Async, HTTP,
+databases, and much more are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
+
+Milestone 5a adds a built-in `Error`, so `parse` returns a `Result`;
+attributes `#[rename]`, `#[default]`, `#[skip]`, and `#[test]`; `json::parse`
+and `json::stringify`; `env::parse`, which fills a struct from the
+environment and `.env`; `log::info` and its three siblings; and
+`varyk test` and `varyk add`. The `varyk-std` crate behind them is a
+dependency of every package. `parse` returning a `Result` is a breaking
+change. The `users` package in `examples/packages/` shows them together.
 
 Milestone 4 adds closures, as the argument of a call like `filter` or
 `map`; chains such as `names.iter().filter(|n| n.len() > 3).count()`;
