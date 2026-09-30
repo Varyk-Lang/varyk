@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "greeting"
-version = "0.1.0"
+name = "varyk-std"
+version = "0.0.1"

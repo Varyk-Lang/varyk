@@ -1,6 +1,6 @@
-//! The built-in calls (M2 spec 2.6, M4 spec 2.7): the whole standard-library
-//! surface Varyk offers on `Vec`, `string`, `Option`, `Result`, `HashMap`,
-//! and chains, as data. Nothing is read from Rust's standard library; the
+//! The built-in calls (M2 spec 2.6, M4 spec 2.7, M5a spec 2.3): the whole
+//! standard-library surface Varyk offers on `Vec`, `string`, `Option`,
+//! `Result`, `HashMap`, chains, `Error`, `json`, and `env`, as data. Nothing is read from Rust's standard library; the
 //! checker types these calls from [`TABLE`], borrow analysis reads each
 //! entry's parameter modes, and the backend emits each by its name.
 
@@ -16,6 +16,18 @@ pub enum Owner {
     HashMap,
     /// An unfinished chain (M4 spec 2.3), whose rows use `T` for the item.
     Chain,
+    /// `Error` (M5a spec 2.3), made by `varyk-std`.
+    Error,
+    /// The `json` module (M5a spec 2.4), whose calls are written
+    /// `json::name(..)`.
+    Json,
+    /// The `env` module (M5a spec 2.5), whose call is `env::parse()`.
+    Env,
+    /// The `log` module (M5a spec 2.6): `log::info(format, args..)`.
+    Log,
+    /// The checks of a `#[test]` function (M5a spec 2.7), `assert` and
+    /// `assert_eq`, called by their bare names.
+    Test,
 }
 
 impl Owner {
@@ -28,6 +40,11 @@ impl Owner {
             Owner::Result => "Result",
             Owner::HashMap => "HashMap",
             Owner::Chain => "chain",
+            Owner::Error => "Error",
+            Owner::Json => "json",
+            Owner::Env => "env",
+            Owner::Log => "log",
+            Owner::Test => "test",
         }
     }
 
@@ -82,6 +99,7 @@ impl Owner {
                     ..subst
                 },
             ),
+            Ty::Error => (Owner::Error, subst),
             _ => return None,
         })
     }
@@ -122,8 +140,11 @@ pub enum Shape {
     OptionOfV,
     ResultOfTAndE,
     HashMapOfKV,
-    /// `Option<X>`, `X` the type the expected `Option` holds (`parse`).
-    OptionOfExpected,
+    /// `Result<X, Error>`, `X` the type the expected `Result` holds
+    /// (`parse`).
+    ResultOfExpected,
+    /// `Error`.
+    Error,
     /// A `string` lent read-only, passed as a `&str`.
     ReadString,
     /// A `T` lent read-only.
@@ -225,7 +246,8 @@ impl Shape {
             Shape::OptionOfV => Ty::Option(boxed(&subst.v)),
             Shape::ResultOfTAndE => Ty::Result(boxed(&subst.t), boxed(&subst.e)),
             Shape::HashMapOfKV => Ty::HashMap(boxed(&subst.k), boxed(&subst.v)),
-            Shape::OptionOfExpected => Ty::Option(boxed(&subst.expected)),
+            Shape::ResultOfExpected => Ty::Result(boxed(&subst.expected), Box::new(Ty::Error)),
+            Shape::Error => Ty::Error,
             Shape::R => subst.r.clone(),
             Shape::OptionOfR => Ty::Option(boxed(&subst.r)),
             Shape::ResultOfTAndR => Ty::Result(boxed(&subst.t), boxed(&subst.r)),
@@ -483,7 +505,7 @@ pub const TABLE: &[Builtin] = &[
         &[Shape::ReadString],
         Shape::Unit,
     ),
-    row(Owner::String, "parse", Reads, &[], Shape::OptionOfExpected),
+    row(Owner::String, "parse", Reads, &[], Shape::ResultOfExpected),
     row(Owner::Option, "is_some", Reads, &[], Shape::Bool),
     row(Owner::Result, "is_ok", Reads, &[], Shape::Bool),
     row(Owner::Result, "is_err", Reads, &[], Shape::Bool),
@@ -560,7 +582,73 @@ pub const TABLE: &[Builtin] = &[
     chain_row("any", &[TEST], Shape::Bool, ResultKind::Value),
     chain_row("all", &[TEST], Shape::Bool, ResultKind::Value),
     chain_row("find", &[TEST], Shape::OptionOfT, ResultKind::LookInside),
+    // `Error::new` takes its text as an owned `string` (M5a spec 3).
+    row(
+        Owner::Error,
+        "new",
+        Receiver::None,
+        &[Shape::String],
+        Shape::Error,
+    ),
+    borrowed_row(Owner::Error, "message", Shape::String),
+    // `json::parse` reads its text and makes the type expected of it;
+    // `json::stringify` reads its value (M5a spec 2.4, 3).
+    row(
+        Owner::Json,
+        "parse",
+        Receiver::None,
+        &[Shape::ReadString],
+        Shape::ResultOfExpected,
+    ),
+    row(
+        Owner::Json,
+        "stringify",
+        Receiver::None,
+        &[Shape::ReadT],
+        Shape::String,
+    ),
+    // `env::parse` makes the struct expected of it (M5a spec 2.5).
+    row(
+        Owner::Env,
+        "parse",
+        Receiver::None,
+        &[],
+        Shape::ResultOfExpected,
+    ),
+    // The four `log` calls take a format string and arguments, checked
+    // like `println!`'s; the rows only name them (M5a spec 2.6).
+    row(Owner::Log, "debug", Receiver::None, &[], Shape::Unit),
+    row(Owner::Log, "info", Receiver::None, &[], Shape::Unit),
+    row(Owner::Log, "warn", Receiver::None, &[], Shape::Unit),
+    row(Owner::Log, "error", Receiver::None, &[], Shape::Unit),
+    // `assert(cond)` and `assert_eq(a, b)`, only inside a `#[test]`
+    // function; the checker types them itself (M5a spec 2.7).
+    row(
+        Owner::Test,
+        "assert",
+        Receiver::None,
+        &[Shape::Bool],
+        Shape::Unit,
+    ),
+    row(
+        Owner::Test,
+        "assert_eq",
+        Receiver::None,
+        &[Shape::T, Shape::T],
+        Shape::Unit,
+    ),
 ];
+
+impl Builtin {
+    /// Whether the call is a `varyk-std` call (M5a spec 1): a row of
+    /// `Error` or `json`, or `parse`, whose `Error` `varyk-std` makes.
+    pub fn uses_std(&self) -> bool {
+        matches!(
+            self.owner,
+            Owner::Error | Owner::Json | Owner::Env | Owner::Log
+        ) || (self.owner == Owner::String && self.name == "parse")
+    }
+}
 
 /// A row of [`TABLE`], by index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -720,7 +808,7 @@ mod tests {
                 Any,
             ),
             (Owner::String, "push_str", Changes, &[ReadString], Unit, Any),
-            (Owner::String, "parse", Reads, &[], OptionOfExpected, Any),
+            (Owner::String, "parse", Reads, &[], ResultOfExpected, Any),
             (Owner::Option, "is_some", Reads, &[], Bool, Any),
             (Owner::Result, "is_ok", Reads, &[], Bool, Any),
             (Owner::Result, "is_err", Reads, &[], Bool, Any),
@@ -1027,15 +1115,64 @@ mod tests {
             Ty::Result(boxed(Ty::String), boxed(Ty::Bool))
         );
         assert_eq!(
-            Shape::OptionOfExpected.ty(&subst),
-            Ty::Option(boxed(Ty::Int(IntKind::U8)))
+            Shape::ResultOfExpected.ty(&subst),
+            Ty::Result(boxed(Ty::Int(IntKind::U8)), boxed(Ty::Error))
         );
+        assert_eq!(Shape::Error.ty(&subst), Ty::Error);
         assert_eq!(Shape::ReadString.ty(&subst), Ty::String);
         assert_eq!(Shape::ReadT.ty(&subst), Ty::String);
         assert_eq!(
             Shape::HashMapOfKV.ty(&subst),
             Ty::HashMap(boxed(Ty::String), boxed(Ty::Int(IntKind::I32)))
         );
+    }
+
+    #[test]
+    fn the_error_rows_of_m5a_spec_2_3() {
+        let new = lookup(Owner::Error, "new", false).expect("Error::new");
+        assert_eq!(new.path(), "Error::new");
+        assert_eq!(new.get().params, [Shape::String]);
+        assert_eq!(new.get().result, Shape::Error);
+        assert_eq!(new.modes(), [ParamMode::Owned]);
+        let message = row(Owner::Error, "message", true);
+        assert_eq!(message.result, Shape::String);
+        assert_eq!(message.result_kind, ResultKind::Borrowed);
+        assert_eq!(names(Owner::Error, true), ["message"]);
+        assert_eq!(names(Owner::Error, false), ["new"]);
+        let (owner, _) = Owner::of(&Ty::Error).expect("`Error` has rows");
+        assert_eq!(owner, Owner::Error);
+        assert!(new.get().uses_std());
+        assert!(message.uses_std());
+        assert!(row(Owner::String, "parse", true).uses_std());
+        assert!(!row(Owner::String, "trim", true).uses_std());
+    }
+
+    #[test]
+    fn the_json_rows_of_m5a_spec_2_4() {
+        assert_eq!(names(Owner::Json, false), ["parse", "stringify"]);
+        assert!(names(Owner::Json, true).is_empty());
+        let parse = lookup(Owner::Json, "parse", false).expect("json::parse");
+        assert_eq!(parse.path(), "json::parse");
+        assert_eq!(parse.get().params, [Shape::ReadString]);
+        assert_eq!(parse.get().result, Shape::ResultOfExpected);
+        assert_eq!(parse.modes(), [ParamMode::SharedBorrow]);
+        let stringify = lookup(Owner::Json, "stringify", false).expect("json::stringify");
+        assert_eq!(stringify.get().params, [Shape::ReadT]);
+        assert_eq!(stringify.get().result, Shape::String);
+        assert_eq!(stringify.modes(), [ParamMode::SharedBorrow]);
+        assert!(parse.get().uses_std() && stringify.get().uses_std());
+        assert_eq!(Owner::Json.name(), "json");
+    }
+
+    #[test]
+    fn the_env_row_of_m5a_spec_2_5() {
+        assert_eq!(names(Owner::Env, false), ["parse"]);
+        let parse = lookup(Owner::Env, "parse", false).expect("env::parse");
+        assert_eq!(parse.path(), "env::parse");
+        assert!(parse.get().params.is_empty());
+        assert_eq!(parse.get().result, Shape::ResultOfExpected);
+        assert!(parse.get().uses_std());
+        assert_eq!(Owner::Env.name(), "env");
     }
 
     #[test]

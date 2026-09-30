@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use varyk::backend::{Backend, CrateInfo, GeneratedCrate, RustBackend};
+use varyk::backend::{Backend, CrateInfo, GeneratedCrate, RustBackend, StdDependency};
 use varyk_syntax::{FileId, SourceFile};
 
 // --- Helpers ----------------------------------------------------------------
@@ -19,7 +19,11 @@ fn generate_source(entry: SourceFile) -> GeneratedCrate {
         Ok(program) => program,
         Err(diagnostics) => panic!("expected the program to check, got {diagnostics:#?}"),
     };
-    RustBackend.generate(&program, &CrateInfo::single_file("test_pkg".to_string()))
+    let std = StdDependency::for_program(program.uses_std);
+    RustBackend.generate(
+        &program,
+        &CrateInfo::single_file("test_pkg".to_string(), std),
+    )
 }
 
 /// Generates the crate for `<rel>`, relative to the workspace root.
@@ -83,7 +87,39 @@ fn hello_main_rs() {
 #[test]
 fn hello_cargo_toml() {
     let krate = generate_path("examples/hello.vr");
+    // A single file with no `varyk-std` use has no dependency on it (M5a
+    // spec 5.2).
+    assert!(
+        !krate.cargo_toml.contains("varyk-std"),
+        "{}",
+        krate.cargo_toml
+    );
     insta::assert_snapshot!("hello_cargo_toml", krate.cargo_toml);
+}
+
+/// `text` with the compiler's version replaced by `<version>`, so a
+/// release bump never changes a snapshot.
+fn without_version(text: &str) -> String {
+    text.replace(env!("CARGO_PKG_VERSION"), "<version>")
+}
+
+/// A single file whose only mention of `varyk-std` is `Error` in a
+/// signature depends on it at exactly the compiler's version (M5a spec
+/// 1, 5.2).
+#[test]
+fn a_single_file_naming_error_only_in_a_signature_depends_on_varyk_std() {
+    let krate = generate_str("fn f() -> Result<i32, Error> {\n    Ok(1)\n}\n\nfn main() {}\n");
+    assert!(
+        krate
+            .cargo_toml
+            .contains(&format!("varyk-std = \"={}\"", env!("CARGO_PKG_VERSION"))),
+        "{}",
+        krate.cargo_toml
+    );
+    insta::assert_snapshot!(
+        "error_in_a_signature_cargo_toml",
+        without_version(&krate.cargo_toml)
+    );
 }
 
 #[test]
@@ -741,10 +777,13 @@ fn table_rows_hash_maps_and_parse() {
     );
     assert!(main.contains("counts.contains_key(\"apple\")"), "{main}");
     // `parse` in each expected-type position.
-    assert!(main.contains("text.parse::<i32>().ok()?"), "{main}");
-    assert!(main.contains("text.parse::<bool>().ok()"), "{main}");
-    assert!(main.contains("\"1.5\".parse::<f64>().ok()"), "{main}");
-    assert!(main.contains("\"7\".parse::<u8>().ok()"), "{main}");
+    assert!(main.contains("::varyk_std::parse::<i32>(text)?"), "{main}");
+    assert!(main.contains("::varyk_std::parse::<bool>(text)"), "{main}");
+    assert!(
+        main.contains("::varyk_std::parse::<f64>(\"1.5\")"),
+        "{main}"
+    );
+    assert!(main.contains("::varyk_std::parse::<u8>(\"7\")"), "{main}");
     // `contains` on a `Vec<string>` evaluates both sides before its own
     // names are in scope, so the user's `e` is not shadowed.
     assert!(
@@ -1076,4 +1115,273 @@ fn every_line_of_the_new_examples_maps_to_a_span() {
             .collect();
         assert_eq!(unmapped, Vec::new(), "{example}");
     }
+}
+
+/// `Error` and `parse` (M5a spec 2.3, 2.8, 7.5): every standard call and
+/// type by its absolute `::varyk_std` path, `Error::new` given an owned
+/// `String`, `message` a borrowed call, and `parse` handed a `&str`.
+#[test]
+fn error_and_parse_are_written_through_varyk_std() {
+    let main = main_rs(
+        "struct Failure {\n    error: Error,\n}\n\nfn number(text: string) -> Result<i32, Error> {\n    let n: i32 = text.trim().parse()?;\n    if n < 0 {\n        return Err(Error::new(format!(\"{} is negative\", n)));\n    }\n    Ok(n)\n}\n\nfn main() {\n    let owned = \"stored\";\n    let e = Error::new(\"literal\");\n    let f = Error::new(owned);\n    let m = e.message();\n    println!(\"{} {}\", m, f);\n    let failure = Failure { error: e.clone() };\n    println!(\"{}\", failure.error == e);\n    match number(\" 42 \") {\n        Ok(n) => println!(\"{}\", n),\n        Err(error) => println!(\"{}\", error.message()),\n    }\n}\n",
+    );
+    assert!(main.contains("error: ::varyk_std::Error,"), "{main}");
+    assert!(
+        main.contains("-> Result<i32, ::varyk_std::Error>"),
+        "{main}"
+    );
+    assert!(
+        main.contains("::varyk_std::parse::<i32>(text.trim())?"),
+        "{main}"
+    );
+    assert!(
+        main.contains("::varyk_std::Error::new(\"literal\".to_string())"),
+        "{main}"
+    );
+    assert!(main.contains("::varyk_std::Error::new(owned)"), "{main}");
+    assert!(main.contains("e.message()"), "{main}");
+    insta::assert_snapshot!("error_and_parse_main_rs", main);
+}
+
+// --- JSON (M5a spec 2.4, 7.5) -----------------------------------------------
+
+/// Each derive combination: a type only written, one only read, one both
+/// ways, and one no call reaches (whose attributes change nothing), with
+/// `rename`, `skip`, and each kind of `default`.
+const JSON_DERIVES: &str = "enum Role {
+    #[rename(\"admin\")]
+    Admin,
+    Member,
+}
+
+struct Shown {
+    #[rename(\"userName\")]
+    user_name: string,
+    #[skip]
+    hash: string,
+    #[default(3)]
+    tries: i32,
+}
+
+struct Read {
+    #[default(-8)]
+    offset: i64,
+    #[default(1.5)]
+    ratio: f32,
+    #[default(\"a \\\"b\\\"\\n\")]
+    label: string,
+    #[default(true)]
+    on: bool,
+    #[skip]
+    #[default(9)]
+    count: u8,
+    #[skip]
+    cache: Option<string>,
+    nick: Option<string>,
+    role: Role,
+}
+
+struct Both {
+    roles: Vec<Role>,
+    tags: HashMap<string, u16>,
+}
+
+struct Plain {
+    #[rename(\"x\")]
+    #[default(1)]
+    n: i32,
+}
+
+fn load(body: string) -> Result<Both, Error> {
+    let b: Both = json::parse(body)?;
+    Ok(b)
+}
+
+fn main() {
+    let s = Shown { user_name: \"ann\", hash: \"h\", tries: 1 };
+    println!(\"{}\", json::stringify(s));
+    let r: Result<Read, Error> = json::parse(\"{}\");
+    let b = load(\"{}\");
+    match b {
+        Ok(b) => println!(\"{}\", json::stringify(b)),
+        Err(e) => println!(\"{}\", e),
+    }
+    println!(\"{}\", json::stringify(\"text\"));
+    let p = Plain { n: 1 };
+    println!(\"{}\", p.n);
+}
+";
+
+#[test]
+fn json_derives_only_where_reached() {
+    let main = main_rs(JSON_DERIVES);
+    let serde_crate = "#[serde(crate = \"::varyk_std::serde\")]";
+    assert!(
+        main.contains(&format!(
+            "#[derive(::varyk_std::serde::Serialize)]\n{serde_crate}\nstruct Shown {{"
+        )),
+        "{main}"
+    );
+    assert!(
+        main.contains(&format!(
+            "#[derive(::varyk_std::serde::Deserialize)]\n{serde_crate}\nstruct Read {{"
+        )),
+        "{main}"
+    );
+    assert!(
+        main.contains(&format!(
+            "#[derive(::varyk_std::serde::Serialize, ::varyk_std::serde::Deserialize)]\n{serde_crate}\nstruct Both {{"
+        )),
+        "{main}"
+    );
+    assert!(
+        main.contains("#[derive(Clone, PartialEq)]\nstruct Plain {\n    n: i32,"),
+        "{main}"
+    );
+    assert!(!main.contains("impl Plain"), "{main}");
+    // Written only: no default is needed, so none is written.
+    assert!(!main.contains("impl Shown"), "{main}");
+    assert!(main.contains("#[serde(rename = \"userName\")]"), "{main}");
+    assert!(
+        main.contains("#[serde(skip, default = \"Read::varyk_default_count\")]"),
+        "{main}"
+    );
+    assert!(
+        main.contains(
+            "    fn varyk_default_label() -> String {\n        \"a \\\"b\\\"\\n\".to_string()\n    }"
+        ),
+        "{main}"
+    );
+    assert!(
+        main.contains("::varyk_std::json::parse::<Both>(body)?"),
+        "{main}"
+    );
+    assert!(main.contains("::varyk_std::json::stringify(&s)"), "{main}");
+    insta::assert_snapshot!("json_derives_main_rs", main);
+}
+
+// --- env::parse (M5a spec 2.5, 7.5) -----------------------------------------
+
+/// `env::parse` names the type it reads, through the absolute path; the
+/// struct it reaches derives `Deserialize` only, with its default and
+/// rename as `json` gets them.
+#[test]
+fn env_parse_reads_the_expected_struct_through_varyk_std() {
+    let main = main_rs(
+        "enum Mode {
+    Dev,
+    Live,
+}
+
+struct Config {
+    #[rename(\"db_url\")]
+    database: string,
+    mode: Mode,
+    #[default(30)]
+    timeout: u32,
+}
+
+fn load() -> Result<Config, Error> {
+    let c: Config = env::parse()?;
+    Ok(c)
+}
+
+fn main() {
+    let r = load();
+}
+",
+    );
+    assert!(
+        main.contains("::varyk_std::env::parse::<Config>()?"),
+        "{main}"
+    );
+    assert!(
+        main.contains("#[derive(::varyk_std::serde::Deserialize)]"),
+        "{main}"
+    );
+    assert!(!main.contains("Serialize)"), "{main}");
+    insta::assert_snapshot!("env_parse_main_rs", main);
+}
+
+// --- log (M5a spec 2.6, 7.5) ------------------------------------------------
+
+/// A `log` call is written by its full path, and `main` of a program that
+/// logs starts with `::varyk_std::start();`.
+#[test]
+fn log_calls_start_logging_in_main() {
+    let main = main_rs(
+        "fn work(n: i32) {
+    log::debug(\"working on {}\", n);
+}
+
+fn main() {
+    let e = Error::new(\"boom\");
+    work(1);
+    log::info(\"started\");
+    log::warn(\"{} of {}\", 1, 2);
+    log::error(\"failed: {}\", e);
+}
+",
+    );
+    assert!(
+        main.contains("fn main() {\n    ::varyk_std::start();\n"),
+        "{main}"
+    );
+    assert_eq!(main.matches("::varyk_std::start()").count(), 1, "{main}");
+    for level in ["debug", "info", "warn", "error"] {
+        assert!(
+            main.contains(&format!("::varyk_std::tracing::{level}!(")),
+            "{main}"
+        );
+    }
+    insta::assert_snapshot!("log_main_rs", main);
+}
+
+/// A program without a `log` call gets no `start()`.
+#[test]
+fn no_log_call_no_start() {
+    let main = main_rs("fn main() {\n    println!(\"hi\");\n}\n");
+    assert!(!main.contains("start"), "{main}");
+    assert!(!main.contains("tracing"), "{main}");
+}
+
+/// A `#[test]` passes through; `assert` and `assert_eq` become
+/// `::std::assert!` naming the Varyk line, `assert_eq` evaluating each
+/// operand once by matching on references, and showing both values only
+/// when they print with `{}` (M5a spec 7.5).
+#[test]
+fn tests_and_asserts() {
+    let main = main_rs(
+        "enum Color {
+    Red,
+    Blue,
+}
+
+struct P {
+    s: string,
+}
+
+fn name() -> string {
+    \"ann\"
+}
+
+fn main() {}
+
+#[test]
+fn checks() {
+    let p = P { s: \"ann\" };
+    assert(p.s == \"ann\");
+    assert_eq(name(), p.s);
+    assert_eq(p.s, \"ann\");
+    assert_eq(Color::Red, Color::Red);
+    assert_eq(1 + 1, 2);
+}
+",
+    );
+    assert!(main.contains("#[test]\nfn checks() {"), "{main}");
+    assert!(
+        main.contains("::std::assert!(p.s == \"ann\", \"assertion failed at test.vr:19\");"),
+        "{main}"
+    );
+    insta::assert_snapshot!("tests_and_asserts_main_rs", main);
 }

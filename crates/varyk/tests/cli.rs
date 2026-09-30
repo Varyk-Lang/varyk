@@ -144,6 +144,8 @@ fn check_passes_on_every_example_entry_file() {
         "examples/getters.vr",
         "examples/readings.vr",
         "examples/text.vr",
+        "examples/json.vr",
+        "examples/config.vr",
         "examples/packages/greeting/src/main.vr",
         "examples/packages/matcher/src/main.vr",
         "examples/packages/units/src/lib.vr",
@@ -313,4 +315,30 @@ fn every_program_in_the_language_reference_checks() {
     }
     assert!(files.is_empty(), "file blocks after the last `// main.vr`");
     assert!(programs >= 7, "too few programs found: {programs}");
+}
+
+/// `varyk test` on a single file builds its tests, runs them, and exits
+/// zero when they pass (M5a spec 2.7); `main` is not run.
+#[test]
+fn test_on_a_single_file_with_a_passing_test_exits_zero() {
+    let dir = out_dir("test_single_file");
+    fs::create_dir_all(&dir).expect("create the directory");
+    let entry = dir.join("adder.vr");
+    fs::write(
+        &entry,
+        "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\nfn main() {\n    println!(\"main ran\");\n}\n\n#[test]\nfn adds() {\n    assert(add(1, 1) == 2);\n    assert_eq(add(2, 3), 5);\n}\n",
+    )
+    .expect("write the program");
+
+    let output = varyk(&["test", entry.to_str().expect("utf-8 path")]);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{:?}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("test adds ... ok"), "{stdout}");
+    assert!(!stdout.contains("main ran"), "{stdout}");
 }

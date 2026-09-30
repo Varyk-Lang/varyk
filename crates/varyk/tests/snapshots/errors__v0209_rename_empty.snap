@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: `#[rename("")]` gives an empty name
+ --> crates/varyk/tests/fixtures/errors/v0209_rename_empty/main.vr:2:5
+  |
+2 |     #[rename("")]
+  |     ^^^^^^^^^^^^^ `#[rename("")]` gives an empty name
+  |
+  = note: write the name to use between the quotes

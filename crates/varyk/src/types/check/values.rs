@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use varyk_syntax::{Expr, Ident, Path, Span};
+use varyk_syntax::{Expr, ExprKind, Ident, Path, Span};
 
 use super::{FnChecker, is_builtin_variant, opaque_variant, unsupported_rust_signature};
 use crate::builtins::{self, Owner};
@@ -17,12 +17,13 @@ use crate::resolve::{
     path_text, split_last,
 };
 use crate::types::Ty;
+use crate::types::derives::{self, Direction, Medium};
 
 /// What the leading segments of a path `T::name` name.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum PathOwner {
     User(UserType),
-    /// `Vec` or `HashMap`.
+    /// `Vec`, `HashMap`, `Error`, or the `json` module.
     Builtin(Owner),
 }
 
@@ -99,6 +100,12 @@ impl FnChecker<'_> {
         let builtin = match last.name.as_str() {
             "Vec" => Some(Owner::Vec),
             "HashMap" => Some(Owner::HashMap),
+            "Error" => Some(Owner::Error),
+            // A module of the standard library (M5a spec 2.10): no module
+            // or type of the program can be called `json`.
+            "json" => Some(Owner::Json),
+            "env" => Some(Owner::Env),
+            "log" => Some(Owner::Log),
             _ => None,
         };
         if let (None, Some(owner)) = (&prefix, builtin) {
@@ -278,12 +285,32 @@ impl FnChecker<'_> {
         let found = builtins::lookup(owner, &name.name, false);
         let (Some(id), Some(args)) = (found, args) else {
             let message = match found {
-                None => format!(
-                    "`{type_name}` has no function `{}`; the only one is `{type_name}::new()`",
+                None if owner == Owner::Json => format!(
+                    "`json` has no function `{}`; its functions are `json::parse` and \
+                     `json::stringify`",
                     name.name
                 ),
-                Some(_) => {
-                    format!("`{full}` is a function, not a value; call it, as in `{full}()`")
+                None if owner == Owner::Env => format!(
+                    "`env` has no function `{}`; its only function is `env::parse()`",
+                    name.name
+                ),
+                None if owner == Owner::Log => format!(
+                    "`log` has no function `{}`; its functions are `log::debug`, `log::info`, \
+                     `log::warn`, and `log::error`",
+                    name.name
+                ),
+                None => format!(
+                    "`{type_name}` has no function `{}`; the only one is `{type_name}::new({})`",
+                    name.name,
+                    if owner == Owner::Error { ".." } else { "" }
+                ),
+                Some(id) => {
+                    let args = if id.get().params.is_empty() && owner != Owner::Log {
+                        ""
+                    } else {
+                        ".."
+                    };
+                    format!("`{full}` is a function, not a value; call it, as in `{full}({args})`")
                 }
             };
             self.diagnostics
@@ -291,11 +318,22 @@ impl FnChecker<'_> {
             return None;
         };
         let entry = id.get();
-        let subst = expected
-            .as_ref()
-            .and_then(Owner::of)
-            .filter(|(of, _)| *of == owner)
-            .map(|(_, subst)| subst);
+        self.uses_std |= entry.uses_std();
+        if matches!(owner, Owner::Json | Owner::Env) {
+            return self.convert_call(id, args, expected, span);
+        }
+        if owner == Owner::Log {
+            return self.log_call(entry.name, args, span);
+        }
+        // `Error::new` has no type to take from where it goes.
+        let subst = match owner {
+            Owner::Error => Some(builtins::Subst::default()),
+            _ => expected
+                .as_ref()
+                .and_then(Owner::of)
+                .filter(|(of, _)| *of == owner)
+                .map(|(_, subst)| subst),
+        };
         let Some(subst) = subst else {
             if args.len() == entry.params.len() {
                 let (found, what, shape) = match owner {
@@ -327,6 +365,151 @@ impl FnChecker<'_> {
             ty: entry.result.ty(&subst),
             span,
         })
+    }
+
+    /// `log::info(format, args..)` and its three siblings (`level` is the
+    /// call's name): the format is a string literal and the arguments are
+    /// checked as `println!`'s are (M5a spec 2.6).
+    fn log_call(&mut self, level: &'static str, args: &[Expr], span: Span) -> Option<HirExpr> {
+        let Some((first, rest)) = args.split_first() else {
+            let message =
+                format!("`log::{level}` needs a format string, as in `log::{level}(\"..\")`");
+            self.diagnostics
+                .push(Diagnostic::new(codes::V0202, span, message));
+            return None;
+        };
+        let ExprKind::String(format) = &first.kind else {
+            let message =
+                format!("the text of `log::{level}` must be written in quotes, as `println!`'s is");
+            self.diagnostics
+                .push(Diagnostic::new(codes::V0202, first.span, message));
+            return None;
+        };
+        let args = self.format_args(format, first.span, rest, span)?;
+        self.logs = true;
+        Some(HirExpr {
+            kind: HirExprKind::Log {
+                level,
+                format: format.clone(),
+                args,
+            },
+            ty: Ty::Unit,
+            span,
+        })
+    }
+
+    /// `json::parse(text)`, `json::stringify(value)` (M5a spec 2.4), or
+    /// `env::parse()` (spec 2.5): `parse` reads the type its `Result` is
+    /// expected to hold, and `stringify` the type of its argument. The type
+    /// must be convertible (V0210, at the call); what it reaches is
+    /// recorded for the derives.
+    fn convert_call(
+        &mut self,
+        id: builtins::BuiltinId,
+        args: &[Expr],
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Option<HirExpr> {
+        let entry = id.get();
+        let full = id.path();
+        let (subst, args, ty, direction) = if entry.result == builtins::Shape::ResultOfExpected {
+            let read = self.read_type(&full, expected.as_ref(), span)?;
+            let params: &[Ty] = match entry.owner {
+                Owner::Env => &[],
+                _ => &[Ty::String],
+            };
+            let args = self.arguments(&full, params, args, span)?;
+            let subst = builtins::Subst {
+                expected: read.clone(),
+                ..builtins::Subst::default()
+            };
+            (subst, args, read, Direction::Deserialize)
+        } else {
+            let [arg] = args else {
+                // Only the count is reported: the parameter's type is
+                // whatever the argument's is.
+                self.arguments(&full, &[Ty::Unit], args, span);
+                return None;
+            };
+            let arg = self.expr(arg, None)?;
+            let ty = arg.ty.clone();
+            let subst = builtins::Subst {
+                t: ty.clone(),
+                ..builtins::Subst::default()
+            };
+            (subst, vec![arg], ty, Direction::Serialize)
+        };
+        // An unfinished chain is V0208, from the walk after checking.
+        if !ty.has_chain() {
+            let (structs, enums) = (&self.symbols.structs, &self.symbols.enums);
+            let env = entry.owner == Owner::Env;
+            let medium = if env { Medium::Env } else { Medium::Json };
+            let judged = if env {
+                derives::env_readable(structs, enums, &ty)
+            } else {
+                derives::convertible(structs, enums, &ty)
+            };
+            if let Err(blocked) = judged {
+                let verb = match direction {
+                    Direction::Serialize => "turned into",
+                    Direction::Deserialize => "read from",
+                };
+                let message = format!("`{}` cannot be {verb} {}", self.ty_name(&ty), medium.name());
+                // The part in the way is labelled at the field holding
+                // it, or, when the call's type holds it directly, told.
+                let mut diagnostic = Diagnostic::new(codes::V0210, span, message);
+                diagnostic = match blocked.at {
+                    Some(at) => diagnostic.with_label(at, blocked.label(medium)),
+                    None => diagnostic.with_note(blocked.label(medium)),
+                };
+                for note in blocked.notes(medium) {
+                    diagnostic = diagnostic.with_note(note);
+                }
+                self.diagnostics.push(diagnostic);
+                return None;
+            }
+            let reached = if env {
+                &mut *self.env_reached
+            } else {
+                &mut *self.reached
+            };
+            reached.add(structs, &ty, direction, span);
+        }
+        Some(HirExpr {
+            kind: HirExprKind::Call {
+                callee: Callee::Builtin(id),
+                args,
+                rooted: None,
+            },
+            ty: entry.result.ty(&subst),
+            span,
+        })
+    }
+
+    /// The type `json::parse` or `env::parse` (`call`) reads: what the
+    /// `Result` it is expected to be holds, from where the call goes (M5a
+    /// spec 2.4). With nothing expected it is V0207.
+    fn read_type(&mut self, call: &str, expected: Option<&Ty>, span: Span) -> Option<Ty> {
+        let (args, what, name, binding) = match call {
+            "env::parse" => ("()", "the type `env::parse` reads", "Config", "c: Config"),
+            _ => ("(..)", "the type `json::parse` reads", "User", "u: User"),
+        };
+        match expected {
+            Some(Ty::Result(inner, _)) => Some((**inner).clone()),
+            Some(Ty::Option(..)) if self.option_try_operand == Some(span) => {
+                self.result_under_option_question(
+                    span,
+                    call,
+                    &format!("let r: Result<{name}, Error> = {call}{args};` then `r.ok()"),
+                );
+                None
+            }
+            _ => {
+                let shape = format!("let {binding} = {call}{args}?;");
+                self.type_hole(span, expected, "Result<_, Error>", what, &shape);
+                None
+            }
+        }
     }
 
     /// The variant `name` of enum `id` (written `path::name`) as a value:

@@ -1,0 +1,7 @@
+mod m;
+
+use m::checks;
+
+fn main() {
+    println!("hi");
+}

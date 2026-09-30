@@ -41,13 +41,26 @@ pub const V0110: &str = "V0110";
 /// `use` leading name that is a module declared elsewhere in the crate,
 /// reachable only through `crate::`.
 pub const V0111: &str = "V0111";
+/// An attribute Varyk does not have, in a place it cannot go, written
+/// twice, or with a value missing or not expected (M5a spec 2.2).
+pub const V0112: &str = "V0112";
+/// A name the standard library needs (M5a spec 2.10): a struct, enum, or
+/// module named `Error`, or a `.rs` module's `pub` struct or enum named so;
+/// a module named `json`, `env`, or `log`, or a `use` of one; a function
+/// named `assert` or `assert_eq`; any item, method, module, or `use` name
+/// starting with `varyk_`.
+pub const V0113: &str = "V0113";
+/// A `#[test]` function with parameters or a return type, called, or the
+/// entry `main` (M5a spec 2.7).
+pub const V0114: &str = "V0114";
 /// Type mismatch.
 pub const V0200: &str = "V0200";
 /// Wrong argument count.
 pub const V0201: &str = "V0201";
 /// `println!` placeholder count mismatch or unsupported placeholder.
 pub const V0202: &str = "V0202";
-/// `{}` or `==` applied to a struct.
+/// `{}` applied to a struct, enum, or container, or `==` or `.clone()`
+/// on a type that cannot have it; `Error` prints its message.
 pub const V0203: &str = "V0203";
 /// A `match` that does not handle every variant, naming one it misses.
 pub const V0204: &str = "V0204";
@@ -65,6 +78,14 @@ pub const V0207: &str = "V0207";
 /// a stored value (`get`) stored, passed, returned, used with `?`, or
 /// given any method (M4 spec 2.8).
 pub const V0208: &str = "V0208";
+/// A `#[rename]` or `#[default]` value that does not fit, or `#[default]`
+/// on a field whose type cannot have one; on a type a `json` or `env`
+/// call reaches, a skipped field that is read with no default, or two
+/// keys that are the same (M5a spec 2.2).
+pub const V0209: &str = "V0209";
+/// A type that cannot go through `json` or `env` at a call, naming the
+/// part in the way (M5a spec 2.9).
+pub const V0210: &str = "V0210";
 /// Mutation through a non-`mut` parameter.
 pub const V0300: &str = "V0300";
 /// Assignment to an immutable `let` binding.
@@ -97,6 +118,10 @@ pub const V0402: &str = "V0402";
 /// `[package]` `name`, an invalid or reserved `name`, or both or neither
 /// of `src/main.vr` and `src/lib.vr`.
 pub const V0403: &str = "V0403";
+/// A program that uses `varyk-std` whose `Cargo.toml` does not depend on
+/// it, depends on it from a `path` or `git` or with a version that is not
+/// the compiler's minor, or whose `Cargo.lock` holds an older one.
+pub const V0404: &str = "V0404";
 /// The Rust rustc compiled from a generated file was rejected, at the
 /// Varyk line that produced it; carries rustc's message and code and asks
 /// for a bug report, since Varyk's own checks should have caught this
@@ -108,9 +133,9 @@ pub const V0900: &str = "V0900";
 /// checks `docs/language.md` against.
 pub const ALL: &[&str] = &[
     V0001, V0002, V0003, V0010, V0011, V0012, V0100, V0101, V0102, V0103, V0104, V0105, V0106,
-    V0107, V0108, V0109, V0110, V0111, V0200, V0201, V0202, V0203, V0204, V0205, V0206, V0207,
-    V0208, V0300, V0301, V0302, V0303, V0304, V0305, V0306, V0307, V0308, V0400, V0401, V0402,
-    V0403, V0900,
+    V0107, V0108, V0109, V0110, V0111, V0112, V0113, V0114, V0200, V0201, V0202, V0203, V0204,
+    V0205, V0206, V0207, V0208, V0209, V0210, V0300, V0301, V0302, V0303, V0304, V0305, V0306,
+    V0307, V0308, V0400, V0401, V0402, V0403, V0404, V0900,
 ];
 
 #[cfg(test)]

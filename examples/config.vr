@@ -1,0 +1,48 @@
+// expected output (with PORT=8080, DB_URL=postgres://h/db?sslmode=require,
+// and MODE=live set, and TOKEN and TIMEOUT_SECS not set):
+// port 8080
+// database postgres://h/db?sslmode=require
+// mode live
+// token set: false
+// timeout 30s
+
+enum Mode {
+    Dev,
+    #[rename("live")]
+    Live,
+}
+
+struct Config {
+    port: u16,
+    #[rename("db_url")]
+    database_url: string,
+    mode: Mode,
+    token: Option<string>,
+    #[default(30)]
+    timeout_secs: u32,
+}
+
+fn mode_name(mode: Mode) -> string {
+    match mode {
+        Mode::Dev => "dev",
+        Mode::Live => "live",
+    }
+}
+
+fn load() -> Result<Config, Error> {
+    let c: Config = env::parse()?;
+    Ok(c)
+}
+
+fn main() {
+    match load() {
+        Ok(c) => {
+            println!("port {}", c.port);
+            println!("database {}", c.database_url);
+            println!("mode {}", mode_name(c.mode));
+            println!("token set: {}", c.token.is_some());
+            println!("timeout {}s", c.timeout_secs);
+        }
+        Err(e) => println!("error: {}", e),
+    }
+}

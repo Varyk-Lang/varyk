@@ -1,0 +1,53 @@
+// expected output:
+// 7 ann member
+// 2 tags, age 18, nickname: false
+// {"id":7,"userName":"ann","role":"member","nickname":null,"tags":["a","b"],"age":18}
+// error: invalid value: integer `300`, expected u8 at line 1 column 67
+
+enum Role {
+    Admin,
+    #[rename("member")]
+    Member,
+}
+
+struct User {
+    id: u32,
+    #[rename("userName")]
+    user_name: string,
+    role: Role,
+    nickname: Option<string>,
+    tags: Vec<string>,
+    #[default(18)]
+    age: u8,
+    #[skip]
+    password_hash: Option<string>,
+}
+
+fn role_name(role: Role) -> string {
+    match role {
+        Role::Admin => "admin",
+        Role::Member => "member",
+    }
+}
+
+fn load(body: string) -> Result<User, Error> {
+    let u: User = json::parse(body)?;
+    Ok(u)
+}
+
+fn main() {
+    let text = "{\"id\": 7, \"userName\": \"ann\", \"role\": \"member\", \"tags\": [\"a\", \"b\"], \"password_hash\": \"x\"}";
+    match load(text) {
+        Ok(u) => {
+            println!("{} {} {}", u.id, u.user_name, role_name(u.role));
+            println!("{} tags, age {}, nickname: {}", u.tags.len(), u.age, u.nickname.is_some());
+            println!("{}", json::stringify(u));
+        }
+        Err(e) => println!("error: {}", e),
+    }
+    let bad = "{\"id\": 1, \"userName\": \"bo\", \"role\": \"Admin\", \"tags\": [], \"age\": 300}";
+    match load(bad) {
+        Ok(u) => println!("{}", u.id),
+        Err(e) => println!("error: {}", e),
+    }
+}

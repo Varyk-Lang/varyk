@@ -1,0 +1,7 @@
+struct Config {
+    limits: HashMap<string, i32>,
+}
+
+fn main() {
+    let c: Result<Config, Error> = env::parse();
+}

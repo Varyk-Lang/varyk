@@ -1,0 +1,11 @@
+mod ext;
+
+struct Session {
+    name: string,
+    handle: ext::Handle,
+}
+
+fn main() {
+    let session = Session { name: "main", handle: ext::open() };
+    println!("{}", json::stringify(session));
+}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[test]` cannot go on a struct field
+ --> crates/varyk/tests/fixtures/errors/v0112_test_on_field/main.vr:2:5
+  |
+2 |     #[test]
+  |     ^^^^^^^ `#[test]` cannot go on a struct field
+  |
+  = note: `#[test]` goes before a top-level function

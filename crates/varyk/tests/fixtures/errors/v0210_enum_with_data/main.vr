@@ -1,0 +1,14 @@
+enum Payment {
+    Cash,
+    Card(string),
+}
+
+struct Order {
+    id: i32,
+    payment: Payment,
+}
+
+fn main() {
+    let order = Order { id: 1, payment: Payment::Cash };
+    println!("{}", json::stringify(order));
+}

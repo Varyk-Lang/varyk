@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: `#[rename]` needs a name in quotes, as in `#[rename("userName")]`
+ --> crates/varyk/tests/fixtures/errors/v0209_rename_not_a_string/main.vr:2:5
+  |
+2 |     #[rename(1)]
+  |     ^^^^^^^^^^^^ `#[rename]` needs a name in quotes, as in `#[rename("userName")]`

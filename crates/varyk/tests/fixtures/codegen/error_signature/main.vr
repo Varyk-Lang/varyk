@@ -1,0 +1,7 @@
+fn f() -> Result<i32, Error> {
+    Ok(1)
+}
+
+fn main() {
+    println!("{}", f().is_ok());
+}

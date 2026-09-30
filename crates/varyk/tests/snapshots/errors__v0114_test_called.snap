@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0114]: `adds` is a test and cannot be called
+ --> crates/varyk/tests/fixtures/errors/v0114_test_called/main.vr:7:5
+  |
+7 |     adds();
+  |     ^^^^ `adds` is a test and cannot be called
+  |
+  = note: `varyk test` runs each test on its own; put what the tests share in a function without `#[test]` and call that

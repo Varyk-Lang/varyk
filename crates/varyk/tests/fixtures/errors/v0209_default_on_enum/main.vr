@@ -1,0 +1,11 @@
+enum Role {
+    Admin,
+    Member,
+}
+
+struct User {
+    #[default(1)]
+    role: Role,
+}
+
+fn main() {}

@@ -1,0 +1,6 @@
+enum env {
+    Dev,
+    Prod,
+}
+
+fn main() {}

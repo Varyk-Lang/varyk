@@ -1,0 +1,10 @@
+enum Role {
+    #[rename("Member")]
+    Admin,
+    Member,
+}
+
+fn main() {
+    let role: Result<Role, Error> = json::parse("\"Member\"");
+    println!("{}", role.is_ok());
+}

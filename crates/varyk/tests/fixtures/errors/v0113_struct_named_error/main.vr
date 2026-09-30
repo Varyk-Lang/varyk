@@ -1,0 +1,5 @@
+struct Error {
+    message: string,
+}
+
+fn main() {}

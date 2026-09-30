@@ -1,14 +1,14 @@
-fn doubled(text: string) -> Option<i32> {
+fn doubled(text: string) -> Result<i32, Error> {
     let n: i32 = text.parse()?;
-    Some(n * 2)
+    Ok(n * 2)
 }
 
-fn flag(text: string) -> Option<bool> {
+fn flag(text: string) -> Result<bool, Error> {
     text.parse()
 }
 
-fn show(n: Option<u8>) {
-    if let Some(k) = n {
+fn show(n: Result<u8, Error>) {
+    if let Ok(k) = n {
         println!("{}", k);
     }
 }
@@ -23,11 +23,11 @@ fn main() {
     }
     println!("{} {}", counts.len(), counts.contains_key("apple"));
 
-    let a: Option<f64> = "1.5".parse();
-    println!("{}", a.is_some());
+    let a: Result<f64, Error> = "1.5".parse();
+    println!("{}", a.is_ok());
     show("7".parse());
-    println!("{}", doubled("21").is_some());
-    println!("{}", flag("maybe").is_some());
+    println!("{}", doubled("21").is_ok());
+    println!("{}", flag("maybe").is_ok());
 
     let names = vec!["ann", "bob"];
     let e = "eve";

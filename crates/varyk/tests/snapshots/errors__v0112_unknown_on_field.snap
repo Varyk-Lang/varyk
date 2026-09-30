@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: there is no attribute named `serde`
+ --> crates/varyk/tests/fixtures/errors/v0112_unknown_on_field/main.vr:2:5
+  |
+2 |     #[serde(rename = "userName")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ there is no attribute named `serde`
+  |
+  = note: the attributes are `#[rename("key")]`, `#[default(value)]`, `#[skip]`, and `#[test]`

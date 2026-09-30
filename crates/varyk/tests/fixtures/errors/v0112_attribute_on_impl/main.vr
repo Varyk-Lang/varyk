@@ -1,0 +1,12 @@
+struct Point {
+    x: i32,
+}
+
+#[test]
+impl Point {
+    fn x(self) -> i32 {
+        self.x
+    }
+}
+
+fn main() {}

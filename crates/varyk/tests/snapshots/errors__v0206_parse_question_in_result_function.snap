@@ -2,11 +2,11 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0206]: `?` works on a `Result`, and this is `Option<_>`; `read_age` returns `Result<i32, string>`
+error[V0206]: `?` hands the error of this `Result<i32, Error>` back to the caller, but `read_age` returns `Result<i32, string>`, whose error type is `string`
  --> crates/varyk/tests/fixtures/errors/v0206_parse_question_in_result_function/main.vr:2:20
   |
 2 |     let age: i32 = text.parse()?;
-  |                    ^^^^^^^^^^^^ `?` works on a `Result`, and this is `Option<_>`; `read_age` returns `Result<i32, string>`
+  |                    ^^^^^^^^^^^^^ `?` hands the error of this `Result<i32, Error>` back to the caller, but `read_age` returns `Result<i32, string>`, whose error type is `string`
   |
-  = note: `parse` gives an `Option`; in a function returning `Result`, write two statements: `let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?`
+  = note: the error types must be the same: an error is never converted into another type
   = note: in Rust terms, `?` returns early with the `Err` or the `None`, so the function's return type must be a `Result` with the same error type, or an `Option`

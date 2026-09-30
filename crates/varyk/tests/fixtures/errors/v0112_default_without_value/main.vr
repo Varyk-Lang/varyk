@@ -1,0 +1,6 @@
+struct Config {
+    #[default]
+    port: u16,
+}
+
+fn main() {}

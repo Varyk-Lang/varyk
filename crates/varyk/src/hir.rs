@@ -17,7 +17,8 @@ use crate::resolve::{
     Callee, DropCause, EnumId, FieldDef, FnId, ImportedFnId, ImportedSig, ModuleId, StructId,
     UserType, VariantDef,
 };
-use crate::types::{Derives, ParamMode, Ty};
+pub use crate::resolve::{FieldAttrs, HirDefault};
+use crate::types::{Derives, ParamMode, Serde, Ty};
 
 /// Index into [`HirFunction::locals`]. Parameters come first: parameter
 /// `i` is always `LocalId(i)`, so a local is a parameter exactly when its
@@ -40,6 +41,12 @@ pub struct HirProgram {
     /// mapped modes, types, and original signature text.
     pub imported: Vec<ImportedSig>,
     pub entry: ModuleId,
+    /// Whether the program uses `varyk-std` (M5a spec 1): it makes a
+    /// `varyk-std` call or names `Error`, so its crate depends on it.
+    pub uses_std: bool,
+    /// Whether the program makes a `log` call, so its `main` starts
+    /// logging (M5a spec 2.6, 7.5).
+    pub logs: bool,
 }
 
 impl HirProgram {
@@ -123,6 +130,9 @@ pub struct HirStruct {
     pub fields: Vec<FieldDef>,
     /// Which traits it derives (M4 spec 2.10), or, imported, lists.
     pub derives: Derives,
+    /// The ways a `json` call converts it (M5a spec 2.4): what it derives
+    /// of serde's `Serialize` and `Deserialize`.
+    pub serde: Serde,
     pub span: Span,
 }
 
@@ -141,6 +151,8 @@ pub struct HirEnum {
     pub drops: Option<DropCause>,
     /// Which traits it derives (M4 spec 2.10), or, imported, lists.
     pub derives: Derives,
+    /// The ways a `json` call converts it (M5a spec 2.4).
+    pub serde: Serde,
     pub span: Span,
 }
 
@@ -154,6 +166,8 @@ pub struct HirFunction {
     pub owner: Option<UserType>,
     pub name: String,
     pub is_pub: bool,
+    /// Marked `#[test]` (M5a spec 2.7).
+    pub is_test: bool,
     /// A method's receiver comes first, as `LocalId(0)` named `self`,
     /// with the `impl` type and the receiver's mode.
     pub params: Vec<HirParam>,
@@ -418,6 +432,22 @@ pub enum HirExprKind {
         format: String,
         args: Vec<HirExpr>,
     },
+    /// `log::debug`, `info`, `warn`, or `error` (M5a spec 2.6), checked
+    /// like `println!`: `level` is the call's name.
+    Log {
+        level: &'static str,
+        format: String,
+        args: Vec<HirExpr>,
+    },
+    /// `assert(cond)` or `assert_eq(a, b)` in a test (M5a spec 2.7), of
+    /// type `()`. For `assert_eq`, `cond` is the checked `a == b`.
+    /// `location` is the call's Varyk file and line (`src/store.vr:12`),
+    /// filled here since the backend sees only spans.
+    Assert {
+        cond: Box<HirExpr>,
+        location: String,
+        kind: AssertKind,
+    },
     /// `format!`, checked like `println!`: a new `string`.
     Format {
         format: String,
@@ -524,6 +554,16 @@ pub enum HirExprKind {
         body: HirBlock,
         returns_part: bool,
     },
+}
+
+/// Which check an [`HirExprKind::Assert`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssertKind {
+    /// `assert(cond)`.
+    Plain,
+    /// `assert_eq(a, b)`; `show` when the values print with `{}`, so a
+    /// failure shows them.
+    Eq { show: bool },
 }
 
 /// Which type a `?` works on.

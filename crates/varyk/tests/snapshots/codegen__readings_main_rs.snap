@@ -18,8 +18,8 @@ struct Reading {
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn parse_reading(text: &str) -> Result<Reading, String> {
-    let parsed: Option<f64> = text.trim().parse::<f64>().ok();
-    let value = parsed.ok_or(::std::format!("not a number: {}", text.trim()))?;
+    let parsed: Result<f64, ::varyk_std::Error> = ::varyk_std::parse::<f64>(text.trim());
+    let value = parsed.ok().ok_or(::std::format!("not a number: {}", text.trim()))?;
     Ok(Reading { value: value, unit: Unit::Celsius })
 }
 

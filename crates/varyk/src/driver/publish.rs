@@ -329,6 +329,10 @@ mod tests {
                 .expect("a valid manifest"),
             workspace: None,
             lock: None,
+            std_spans: crate::package::StdSpans {
+                anchor: varyk_syntax::Span::new(varyk_syntax::FileId(0), 0, 0),
+                entry: None,
+            },
         }
     }
 

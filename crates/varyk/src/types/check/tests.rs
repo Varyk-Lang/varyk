@@ -5,11 +5,11 @@ use varyk_syntax::{FileId, SourceFile, Span};
 use super::typecheck;
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
-    HirExpr, HirExprKind, HirForHead, HirFunction, HirProgram, HirStmt, MethodRef, TryKind,
-    VariantRef,
+    AssertKind, HirExpr, HirExprKind, HirForHead, HirFunction, HirProgram, HirStmt, MethodRef,
+    TryKind, VariantRef,
 };
 use crate::resolve::{Callee, resolve};
-use crate::types::{BUILTIN_TYPE_NAMES, Derives, FloatKind, IntKind, ParamMode, Ty};
+use crate::types::{BUILTIN_TYPE_NAMES, Derives, FloatKind, IntKind, ParamMode, Serde, Ty};
 
 const I32: Ty = Ty::Int(IntKind::I32);
 const I64: Ty = Ty::Int(IntKind::I64);
@@ -3184,7 +3184,7 @@ fn the_value_rows_type_as_the_table_says() {
     let h = s.to_uppercase();
     let i = s.replace(\"t\", \"T\");
     s.push_str(\"!\");
-    let j: Option<i32> = s.parse();
+    let j: Result<i32, Error> = s.parse();
     let o: Option<i32> = None;
     let k = o.is_some();
     let r: Result<i32, string> = Ok(1);
@@ -3207,7 +3207,7 @@ fn the_value_rows_type_as_the_table_says() {
         ("g", Ty::Bool),
         ("h", Ty::String),
         ("i", Ty::String),
-        ("j", opt(I32)),
+        ("j", Ty::Result(Box::new(I32), Box::new(Ty::Error))),
         ("k", Ty::Bool),
         ("l", Ty::Bool),
         ("m", Ty::Bool),
@@ -3276,34 +3276,10 @@ fn contains_and_sort_accept_integers_and_strings() {
 }
 
 #[test]
-fn parse_takes_its_type_from_where_it_goes() {
-    let program = ok("fn first(text: string) -> Option<i32> {
-    let n: i32 = text.parse()?;
-    Some(n)
-}
-fn flag(text: string) -> Option<bool> {
-    text.parse()
-}
-fn take(n: Option<u8>) {}
-fn main() {
-    let a: Option<f64> = \"1.5\".parse();
-    take(\"7\".parse());
-}
-");
-    let main = function(&program, "main");
-    assert_eq!(local_ty(main, "a"), opt(Ty::Float(FloatKind::F64)));
-    assert_eq!(
-        call_args(stmt_expr(main, 1))[0].ty,
-        opt(Ty::Int(IntKind::U8))
-    );
-    let first = function(&program, "first");
-    assert_eq!(local_ty(first, "n"), I32);
-}
-
-#[test]
 fn parse_into_a_string_is_v0200_and_with_nothing_expected_v0207() {
-    let (d, sources) =
-        one_error("fn main() {\n    let s = \"a\";\n    let t: Option<string> = s.parse();\n}\n");
+    let (d, sources) = one_error(
+        "fn main() {\n    let s = \"a\";\n    let t: Result<string, Error> = s.parse();\n}\n",
+    );
     assert_eq!(d.code, codes::V0200, "{d:#?}");
     assert_eq!(d.span, span_of(&sources, "s.parse()"));
     assert!(d.message.contains("`string`"), "{d:#?}");
@@ -3314,7 +3290,7 @@ fn parse_into_a_string_is_v0200_and_with_nothing_expected_v0207() {
     assert_eq!(d.span, span_of(&sources, "s.parse()"));
     assert!(
         d.message
-            .contains("`let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?`"),
+            .contains("`let parsed: Result<i32, Error> = text.parse();` then `parsed.ok()`"),
         "{d:#?}"
     );
 }
@@ -3422,25 +3398,15 @@ fn hash_map_as_a_let_name_is_v0103() {
 }
 
 #[test]
-fn parse_under_question_in_a_result_function_is_v0206_showing_two_statements() {
-    let (d, sources) = one_error(
-        "fn f(text: string) -> Result<i32, string> {\n    let n: i32 = text.parse()?;\n    Ok(n)\n}\nfn main() {}\n",
-    );
-    assert_eq!(d.code, codes::V0206, "{d:#?}");
-    assert_eq!(d.span, span_of(&sources, "text.parse()"));
-    assert!(d.message.contains("`Option<_>`"), "{d:#?}");
-    assert!(d.message.contains("`Result<i32, string>`"), "{d:#?}");
-    assert!(
-        d.notes.iter().any(
-            |n| n.contains("`let parsed: Option<i32> = text.parse();` then `parsed.ok_or(e)?`")
-        ),
-        "{d:#?}"
-    );
-    // A `Result` expected anywhere else is a plain mismatch.
-    let (d, _) = one_error(
-        "fn main() {\n    let s = \"1\";\n    let r: Result<i32, string> = s.parse();\n}\n",
-    );
-    assert_eq!(d.code, codes::V0200, "{d:#?}");
+fn parse_where_another_result_or_an_option_is_expected_is_a_mismatch_or_v0206() {
+    // A `Result` of another error type, or an `Option`, expected anywhere
+    // but under `?` is a plain mismatch.
+    for written in ["Result<i32, string>", "Option<i32>"] {
+        let (d, _) = one_error(&format!(
+            "fn main() {{\n    let s = \"1\";\n    let r: {written} = s.parse();\n}}\n"
+        ));
+        assert_eq!(d.code, codes::V0200, "{d:#?}");
+    }
     let (d, _) = one_error(
         "fn f(text: string) -> Result<i32, string> {\n    let r: Result<i32, string> = Ok(text.parse()?);\n    r\n}\nfn main() {}\n",
     );
@@ -3479,7 +3445,7 @@ fn parse_then_ok_or_under_question_is_v0207_showing_two_statements() {
         d.notes
             .iter()
             .chain(std::iter::once(&d.message))
-            .any(|n| n.contains("parsed.ok_or(e)?")),
+            .any(|n| n.contains("parsed.ok()")),
         "{d:#?}"
     );
 }
@@ -3683,4 +3649,617 @@ fn a_for_over_a_chain_types_its_variable_as_the_item() {
         d.span,
         span_of(&sources, "if true { v.iter() } else { v.iter() }")
     );
+}
+
+// --- `Error` and `parse` as a `Result` (M5a spec 2.3, 2.8) ------------------
+
+fn result_of(ok: Ty) -> Ty {
+    Ty::Result(Box::new(ok), Box::new(Ty::Error))
+}
+
+#[test]
+fn error_new_makes_an_error_and_message_is_part_of_it() {
+    let program = ok("fn main() {
+    let e = Error::new(\"x\");
+    let m = e.message();
+    println!(\"{}\", e);
+    let same = e == Error::new(\"y\");
+    let copy = e.clone();
+}
+");
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "e"), Ty::Error);
+    assert_eq!(local_ty(main, "m"), Ty::String);
+    assert_eq!(local_ty(main, "same"), Ty::Bool);
+    assert_eq!(local_ty(main, "copy"), Ty::Error);
+    // `message` is part of its receiver, as `trim` is (M4 spec 3.1).
+    let HirExprKind::MethodCall { rooted, .. } = &stmt_expr(main, 1).kind else {
+        panic!("a method call");
+    };
+    assert_eq!(*rooted, Some(0));
+    assert!(program.uses_std);
+}
+
+#[test]
+fn a_struct_holding_an_error_keeps_clone_and_eq() {
+    let program = ok("struct Failure {
+    error: Error,
+    code: i32,
+}
+fn main() {
+    let a = Failure { error: Error::new(\"x\"), code: 1 };
+    let b = a.clone();
+    let same = a == b;
+}
+");
+    assert_eq!(
+        program.structs[0].derives,
+        Derives {
+            clone: true,
+            eq: true
+        }
+    );
+}
+
+#[test]
+fn parse_gives_a_result_with_an_error() {
+    let program = ok("fn number(text: string) -> Result<i32, Error> {
+    let n: i32 = text.parse()?;
+    Ok(n)
+}
+fn maybe(text: string) -> Option<i32> {
+    let r: Result<i32, Error> = text.parse();
+    r.ok()
+}
+fn take(r: Result<u8, Error>) {}
+fn main() {
+    let a: Result<f64, Error> = \"1.5\".parse();
+    take(\"7\".parse());
+}
+");
+    let number = function(&program, "number");
+    assert_eq!(local_ty(number, "n"), I32);
+    let maybe = function(&program, "maybe");
+    assert_eq!(local_ty(maybe, "r"), result_of(I32));
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "a"), result_of(Ty::Float(FloatKind::F64)));
+    assert_eq!(
+        call_args(stmt_expr(main, 1))[0].ty,
+        result_of(Ty::Int(IntKind::U8))
+    );
+    assert!(program.uses_std);
+}
+
+#[test]
+fn parse_under_question_with_another_error_type_is_v0206() {
+    let (d, sources) = one_error(
+        "fn f(text: string) -> Result<i32, string> {\n    let n: i32 = text.parse()?;\n    Ok(n)\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0206, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "text.parse()?"));
+    assert!(d.message.contains("`Result<i32, Error>`"), "{d:#?}");
+    assert!(d.message.contains("`Result<i32, string>`"), "{d:#?}");
+}
+
+#[test]
+fn parse_under_question_in_an_option_function_is_v0206_showing_two_statements() {
+    let (d, sources) = one_error(
+        "fn f(text: string) -> Option<i32> {\n    let n: i32 = text.parse()?;\n    Some(n)\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0206, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "text.parse()"));
+    assert!(d.message.contains("`Result<_, Error>`"), "{d:#?}");
+    assert!(
+        d.notes
+            .iter()
+            .any(|n| n
+                .contains("`let parsed: Result<i32, Error> = text.parse();` then `parsed.ok()?`")),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn a_program_without_error_or_parse_does_not_use_varyk_std() {
+    let program = ok("fn main() {\n    let s = \"a\";\n    println!(\"{}\", s.trim());\n}\n");
+    assert!(!program.uses_std);
+    // `Error` named only in a signature is enough (M5a spec 1).
+    let program = ok("fn f() -> Result<i32, Error> {\n    Ok(1)\n}\nfn main() {}\n");
+    assert!(program.uses_std);
+    let program = ok("struct S {\n    e: Option<Error>,\n}\nfn main() {}\n");
+    assert!(program.uses_std);
+}
+
+#[test]
+fn a_type_named_error_is_v0113() {
+    for text in [
+        "struct Error {\n    n: i32,\n}\nfn main() {}\n",
+        "enum Error {\n    Bad,\n}\nfn main() {}\n",
+    ] {
+        let (d, sources) = one_error(text);
+        assert_eq!(d.code, codes::V0113, "{d:#?}");
+        assert_eq!(d.span, part_of(&sources, "Error {", "Error"));
+        assert!(d.message.contains("`Error`"), "{d:#?}");
+    }
+}
+
+#[test]
+fn a_call_error_does_not_have_is_v0100_listing_its_calls() {
+    let (d, _) =
+        one_error("fn main() {\n    let e = Error::new(\"x\");\n    let n = e.len();\n}\n");
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+    assert!(
+        d.message
+            .contains("the methods of an `Error` are `message`"),
+        "{d:#?}"
+    );
+    let (d, _) = one_error("fn main() {\n    let e = Error::other(\"x\");\n}\n");
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+    assert!(
+        d.message.contains("the only one is `Error::new(..)`"),
+        "{d:#?}"
+    );
+}
+
+// --- JSON (M5a spec 2.4, 2.9) -----------------------------------------------
+
+const WRITE: Serde = Serde {
+    serialize: true,
+    deserialize: false,
+};
+const READ: Serde = Serde {
+    serialize: false,
+    deserialize: true,
+};
+
+#[test]
+fn json_calls_type_from_the_expected_type_and_the_argument() {
+    let program = ok("struct Address {
+    city: string,
+}
+struct User {
+    name: string,
+    home: Option<Address>,
+}
+fn load(body: string) -> Result<User, Error> {
+    let u: User = json::parse(body)?;
+    Ok(u)
+}
+fn take(r: Result<Vec<i32>, Error>) {}
+fn main() {
+    let r: Result<User, Error> = json::parse(\"{}\");
+    take(json::parse(\"[1]\"));
+    let text = json::stringify(vec![1, 2]);
+    let n = json::stringify(3);
+}
+");
+    let load = function(&program, "load");
+    assert_eq!(local_ty(load, "u"), Ty::Struct(crate::resolve::StructId(1)));
+    let main = function(&program, "main");
+    assert_eq!(
+        local_ty(main, "r"),
+        result_of(Ty::Struct(crate::resolve::StructId(1)))
+    );
+    assert_eq!(
+        call_args(stmt_expr(main, 1))[0].ty,
+        result_of(Ty::Vec(Box::new(I32)))
+    );
+    assert_eq!(local_ty(main, "text"), Ty::String);
+    assert!(program.uses_std);
+    // Both structs are read; neither is written.
+    assert_eq!(program.structs[0].serde, READ);
+    assert_eq!(program.structs[1].serde, READ);
+}
+
+#[test]
+fn stringify_marks_what_it_reaches_serialize_only() {
+    let program = ok("enum Role {
+    Admin,
+}
+struct Address {
+    city: string,
+}
+struct User {
+    home: Address,
+    role: Role,
+}
+struct Unused {
+    n: i32,
+}
+fn main() {
+    let u = User { home: Address { city: \"x\" }, role: Role::Admin };
+    println!(\"{}\", json::stringify(u));
+}
+");
+    assert_eq!(program.structs[0].serde, WRITE);
+    assert_eq!(program.structs[1].serde, WRITE);
+    assert_eq!(program.structs[2].serde, Serde::default());
+    assert_eq!(program.enums[0].serde, WRITE);
+    // `Derives` is untouched.
+    assert!(program.structs[1].derives.clone);
+}
+
+#[test]
+fn json_parse_with_nothing_expected_is_v0207_showing_a_typed_let() {
+    let (d, sources) = one_error("fn main() {\n    let u = json::parse(\"{}\");\n}\n");
+    assert_eq!(d.code, codes::V0207, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "json::parse(\"{}\")"));
+    assert!(
+        d.message.contains("`let u: User = json::parse(..)?;`"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn json_parse_under_question_in_an_option_function_is_v0206() {
+    let (d, _) = one_error(
+        "fn f(text: string) -> Option<i32> {\n    let n: i32 = json::parse(text)?;\n    Some(n)\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0206, "{d:#?}");
+    assert!(d.message.contains("`Result<_, Error>`"), "{d:#?}");
+}
+
+#[test]
+fn an_unknown_json_call_is_v0100_listing_the_two() {
+    let (d, _) = one_error("fn main() {\n    let s = json::write(1);\n}\n");
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+    assert!(
+        d.message.contains("`json::parse` and `json::stringify`"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn an_enum_with_data_through_json_is_v0210_at_the_call() {
+    let (d, sources) = one_error(
+        "enum Payment {\n    Cash,\n    Card(string),\n}\nstruct Order {\n    payment: Payment,\n}\n\
+         fn main() {\n    let o = Order { payment: Payment::Cash };\n    let s = json::stringify(o);\n}\n",
+    );
+    assert_eq!(d.code, codes::V0210, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "json::stringify(o)"));
+    assert_eq!(d.message, "`Order` cannot be turned into JSON");
+    assert_eq!(d.labels[0].text, "`Card` carries data");
+    assert_eq!(d.labels[0].span, span_of(&sources, "payment: Payment"));
+    assert!(
+        d.notes.iter().any(|n| n.contains("#[rename(\"type\")]")),
+        "{d:#?}"
+    );
+    let (d, _) = one_error(
+        "enum Payment {\n    Card(string),\n}\nfn main() {\n    let p: Result<Vec<Payment>, Error> = json::parse(\"[]\");\n}\n",
+    );
+    assert_eq!(d.code, codes::V0210, "{d:#?}");
+    assert_eq!(d.message, "`Vec<Payment>` cannot be read from JSON");
+}
+
+#[test]
+fn a_map_with_integer_keys_and_an_error_are_v0210() {
+    for (text, label) in [
+        (
+            "fn main() {\n    let m: HashMap<i32, string> = HashMap::new();\n    let s = json::stringify(m);\n}\n",
+            "`HashMap<i32, string>` has keys that are not `string`",
+        ),
+        (
+            "struct Failed {\n    error: Error,\n}\nfn main() {\n    let r: Result<Failed, Error> = json::parse(\"{}\");\n}\n",
+            "`Error` holds a message, not data",
+        ),
+    ] {
+        let (d, _) = one_error(text);
+        assert_eq!(d.code, codes::V0210, "{d:#?}");
+        let said = d.labels.iter().map(|l| &l.text).chain(&d.notes);
+        assert!(said.into_iter().any(|t| t == label), "{d:#?}");
+    }
+}
+
+#[test]
+fn an_unreached_type_with_an_enum_with_data_is_fine() {
+    let program = ok(
+        "enum Payment {\n    Card(string),\n}\nstruct Order {\n    payment: Payment,\n}\n\
+         struct Point {\n    x: i32,\n}\nfn main() {\n    let s = json::stringify(Point { x: 1 });\n}\n",
+    );
+    assert_eq!(program.structs[0].serde, Serde::default());
+    assert_eq!(program.structs[1].serde, WRITE);
+}
+
+const SKIPPED_HASH: &str = "struct User {\n    name: string,\n    #[skip]\n    hash: string,\n}\n";
+
+/// Review focus 4: a `#[skip]` field that is not an `Option` and has no
+/// default is fine when only `json::stringify` reaches its struct.
+#[test]
+fn a_skipped_field_with_no_default_is_fine_when_only_written() {
+    let program = ok(&format!(
+        "{SKIPPED_HASH}fn main() {{\n    let u = User {{ name: \"a\", hash: \"h\" }};\n    println!(\"{{}}\", json::stringify(u));\n}}\n"
+    ));
+    assert_eq!(program.structs[0].serde, WRITE);
+}
+
+#[test]
+fn a_skipped_field_with_no_default_is_v0209_once_parsed() {
+    let (d, sources) = one_error(&format!(
+        "{SKIPPED_HASH}fn main() {{\n    let u: Result<User, Error> = json::parse(\"{{}}\");\n}}\n"
+    ));
+    assert_eq!(d.code, codes::V0209, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "hash: string"));
+    assert_eq!(d.labels[0].span, span_of(&sources, "json::parse(\"{}\")"));
+}
+
+#[test]
+fn two_keys_the_same_after_rename_are_v0209_only_when_reached() {
+    let types = "enum Role {\n    #[rename(\"Member\")]\n    Admin,\n    Member,\n}\nstruct User {\n    \
+                 #[rename(\"name\")]\n    user_name: string,\n    name: string,\n    role: Role,\n}\n";
+    ok(&format!("{types}fn main() {{}}\n"));
+    let (diagnostics, _) = errors(&format!(
+        "{types}fn main() {{\n    let u: Result<User, Error> = json::parse(\"{{}}\");\n}}\n"
+    ));
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(diagnostics.iter().all(|d| d.code == codes::V0209));
+}
+
+// --- Tests (M5a spec 2.7) ---------------------------------------------------
+
+#[test]
+fn a_call_to_a_test_is_v0114_at_the_callee() {
+    let (d, sources) = one_error("#[test]\nfn checks() {}\nfn main() { checks(); }");
+    assert_eq!(d.code, codes::V0114);
+    assert_eq!(d.message, "`checks` is a test and cannot be called");
+    assert_eq!(d.span, part_of(&sources, "checks();", "checks"));
+}
+
+#[test]
+fn a_test_lowers_marked_and_is_not_called() {
+    let program = ok("#[test]\nfn checks() {}\nfn helper() {}\nfn main() { helper(); }");
+    assert!(function(&program, "checks").is_test);
+    assert!(!function(&program, "helper").is_test);
+}
+
+// --- env::parse (M5a spec 2.5) ----------------------------------------------
+
+const CONFIG: &str = "enum Mode {\n    Dev,\n    Prod,\n}\nstruct Config {\n    port: u16,\n    \
+                      mode: Mode,\n    url: Option<string>,\n    \
+                      #[skip]\n    #[default(3)]\n    retries: i32,\n}\n";
+
+#[test]
+fn env_parse_types_from_the_expected_type_and_marks_reads() {
+    let program = ok(&format!(
+        "{CONFIG}fn load() -> Result<Config, Error> {{\n    let c: Config = env::parse()?;\n    Ok(c)\n}}\n\
+         fn main() {{\n    let r: Result<Config, Error> = env::parse();\n}}\n"
+    ));
+    let load = function(&program, "load");
+    assert_eq!(local_ty(load, "c"), Ty::Struct(crate::resolve::StructId(0)));
+    assert!(program.uses_std);
+    assert_eq!(program.structs[0].serde, READ);
+    assert_eq!(program.enums[0].serde, READ);
+}
+
+#[test]
+fn a_nested_struct_vec_or_map_field_is_v0210_naming_it() {
+    for (field, ty) in [
+        ("db: Db", "Db"),
+        ("tags: Vec<string>", "Vec<string>"),
+        ("m: HashMap<string, i32>", "HashMap<string, i32>"),
+        ("db: Option<Db>", "Db"),
+    ] {
+        let text = format!(
+            "struct Db {{\n    host: string,\n}}\nstruct Config {{\n    {field},\n}}\n\
+             fn main() {{\n    let r: Result<Config, Error> = env::parse();\n}}\n"
+        );
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0210, "{d:#?}");
+        assert_eq!(d.message, "`Config` cannot be read from the environment");
+        assert_eq!(d.labels[0].text, format!("`{ty}` is more than one value"));
+        assert_eq!(d.labels[0].span, span_of(&sources, field));
+        let said = d.notes.join(" ");
+        assert!(said.contains("a variable holds one value"), "{d:#?}");
+        assert!(!said.contains("JSON"), "{d:#?}");
+    }
+}
+
+#[test]
+fn a_skipped_nested_field_is_not_read() {
+    ok(
+        "struct Config {\n    n: i32,\n    #[skip]\n    tags: Option<Vec<string>>,\n    #[skip]\n    db: Option<Db>,\n}\nstruct Db {\n    host: string,\n}\n\
+        fn main() {\n    let r: Result<Config, Error> = env::parse();\n}\n",
+    );
+}
+
+#[test]
+fn env_parse_of_a_non_struct_or_an_enum_with_data_field_is_v0210() {
+    let (d, _) = one_error("fn main() {\n    let r: Result<i32, Error> = env::parse();\n}\n");
+    assert_eq!(d.code, codes::V0210, "{d:#?}");
+    assert_eq!(d.message, "`i32` cannot be read from the environment");
+    let (d, sources) = one_error(
+        "enum Card {\n    Visa(string),\n}\nstruct Config {\n    card: Card,\n}\n\
+         fn main() {\n    let r: Result<Config, Error> = env::parse();\n}\n",
+    );
+    assert_eq!(d.code, codes::V0210, "{d:#?}");
+    assert_eq!(d.labels[0].text, "`Visa` carries data");
+    assert_eq!(d.labels[0].span, span_of(&sources, "card: Card"));
+}
+
+#[test]
+fn two_fields_with_the_same_upper_cased_key_are_v0209() {
+    let (d, sources) = one_error(
+        "struct Config {\n    user_name: string,\n    #[rename(\"USER_NAME\")]\n    other: string,\n}\n\
+         fn main() {\n    let r: Result<Config, Error> = env::parse();\n}\n",
+    );
+    assert_eq!(d.code, codes::V0209, "{d:#?}");
+    assert_eq!(
+        d.message,
+        "two fields of `Config` have the variable `USER_NAME`: `user_name` and `other`"
+    );
+    assert_eq!(d.labels[0].span, span_of(&sources, "user_name: string"));
+    // The same struct is fine when only json reaches it.
+    ok(
+        "struct Config {\n    user_name: string,\n    #[rename(\"USER_NAME\")]\n    other: string,\n}\n\
+        fn main() {\n    let r: Result<Config, Error> = json::parse(\"{}\");\n}\n",
+    );
+}
+
+#[test]
+fn env_parse_with_nothing_expected_is_v0207() {
+    let (d, sources) = one_error("fn main() {\n    let c = env::parse();\n}\n");
+    assert_eq!(d.code, codes::V0207, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "env::parse()"));
+    assert!(
+        d.message.contains("`let c: Config = env::parse()?;`"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn the_head_of_a_match_needs_a_typed_let_for_env_parse() {
+    let (d, _) = one_error(&format!(
+        "{CONFIG}fn main() {{\n    match env::parse() {{\n        Ok(c) => {{}}\n        Err(e) => {{}}\n    }}\n}}\n"
+    ));
+    assert_eq!(d.code, codes::V0207, "{d:#?}");
+    ok(&format!(
+        "{CONFIG}fn main() {{\n    let r: Result<Config, Error> = env::parse();\n    match r {{\n        Ok(c) => {{}}\n        Err(e) => {{}}\n    }}\n}}\n"
+    ));
+}
+
+#[test]
+fn an_unknown_env_call_is_v0100_and_env_parse_takes_no_arguments() {
+    let (d, _) = one_error("fn main() {\n    let s = env::get(\"A\");\n}\n");
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+    assert!(d.message.contains("`env::parse()`"), "{d:#?}");
+    let (d, _) = one_error(&format!(
+        "{CONFIG}fn main() {{\n    let r: Result<Config, Error> = env::parse(1);\n}}\n"
+    ));
+    assert_eq!(d.code, codes::V0201, "{d:#?}");
+}
+
+// --- log (M5a spec 2.6) ------------------------------------------------------
+
+#[test]
+fn log_calls_are_unit_and_mark_the_program() {
+    let program = ok("fn main() {
+    let e = Error::new(\"boom\");
+    log::debug(\"a\");
+    log::info(\"n = {}\", 1);
+    log::warn(\"{} and {}\", \"x\", 2.5);
+    log::error(\"failed: {}\", e);
+}
+");
+    assert!(program.logs && program.uses_std);
+    let main = function(&program, "main");
+    let HirExprKind::Log { level, args, .. } = &stmt_expr(main, 3).kind else {
+        panic!("a log call");
+    };
+    assert_eq!((*level, args.len()), ("warn", 2));
+    assert_eq!(stmt_expr(main, 3).ty, Ty::Unit);
+}
+
+#[test]
+fn a_program_without_log_calls_does_not_log() {
+    assert!(!ok("fn main() {\n    println!(\"hi\");\n}\n").logs);
+}
+
+#[test]
+fn log_placeholder_count_mismatch_is_v0202() {
+    let (d, _) = one_error("fn main() {\n    log::info(\"{} {}\", 1);\n}\n");
+    assert_eq!(d.code, codes::V0202, "{d:#?}");
+}
+
+#[test]
+fn log_text_must_be_a_string_literal() {
+    let (d, sources) = one_error("fn main() {\n    let msg = \"hi\";\n    log::info(msg);\n}\n");
+    assert_eq!(d.code, codes::V0202, "{d:#?}");
+    assert!(d.message.contains("written in quotes"), "{}", d.message);
+    assert_eq!(d.span, part_of(&sources, "info(msg)", "msg"));
+}
+
+#[test]
+fn log_of_a_struct_is_v0203() {
+    let (d, _) = one_error(
+        "struct P {\n    x: i32,\n}\nfn main() {\n    let p = P { x: 1 };\n    log::error(\"{}\", p);\n}\n",
+    );
+    assert_eq!(d.code, codes::V0203, "{d:#?}");
+}
+
+#[test]
+fn an_unknown_log_function_is_v0100() {
+    let (d, _) = one_error("fn main() {\n    log::trace(\"x\");\n}\n");
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+}
+
+// --- assert and assert_eq (M5a spec 2.7) -------------------------------------
+
+#[test]
+fn assert_and_assert_eq_in_a_test_carry_their_location() {
+    let program = ok(
+        "fn main() {}\n#[test]\nfn checks() {\n    let x = 2;\n    assert(x > 1);\n    assert_eq(x, 2);\n    assert_eq(\"a\", \"a\");\n}\n",
+    );
+    let checks = function(&program, "checks");
+    let HirExprKind::Assert {
+        cond,
+        location,
+        kind: AssertKind::Plain,
+    } = &stmt_expr(checks, 1).kind
+    else {
+        panic!("an assert: {:?}", stmt_expr(checks, 1));
+    };
+    assert_eq!(location, "test.vr:5");
+    assert_eq!(cond.ty, Ty::Bool);
+    assert_eq!(stmt_expr(checks, 1).ty, Ty::Unit);
+    let HirExprKind::Assert {
+        cond,
+        location,
+        kind: AssertKind::Eq { show: true },
+    } = &stmt_expr(checks, 2).kind
+    else {
+        panic!("an assert_eq: {:?}", stmt_expr(checks, 2));
+    };
+    assert_eq!(location, "test.vr:6");
+    assert!(matches!(cond.kind, HirExprKind::Binary { .. }));
+    assert!(!program.uses_std);
+}
+
+#[test]
+fn assert_eq_of_values_without_a_printed_form_shows_no_values() {
+    let program = ok(
+        "enum E {\n    A,\n    B,\n}\nfn main() {}\n#[test]\nfn checks() {\n    assert_eq(E::A, E::A);\n}\n",
+    );
+    let checks = function(&program, "checks");
+    assert!(matches!(
+        stmt_expr(checks, 0).kind,
+        HirExprKind::Assert {
+            kind: AssertKind::Eq { show: false },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn assert_outside_a_test_is_v0114() {
+    let (d, sources) = one_error("fn main() {\n    assert(1 > 0);\n}\n");
+    assert_eq!(d.code, codes::V0114, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "assert(1 > 0)", "assert"));
+    let (d, _) =
+        one_error("fn helper() {\n    assert_eq(1, 1);\n}\nfn main() {\n    helper();\n}\n");
+    assert_eq!(d.code, codes::V0114, "{d:#?}");
+}
+
+#[test]
+fn assert_eq_on_differing_types_is_v0200() {
+    let (d, _) = one_error("fn main() {}\n#[test]\nfn checks() {\n    assert_eq(1, \"one\");\n}\n");
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+}
+
+#[test]
+fn assert_eq_on_a_struct_without_eq_is_v0203() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/errors/v0203_assert_eq_blocked/main.vr");
+    let Err(diagnostics) = result else {
+        panic!("expected diagnostics");
+    };
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0203, "{d:#?}");
+    assert!(d.message.contains("its field `handle`"), "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "assert_eq(a, b)"));
+}
+
+#[test]
+fn assert_takes_a_bool_and_counts_its_arguments() {
+    let (d, _) = one_error("fn main() {}\n#[test]\nfn checks() {\n    assert(1);\n}\n");
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    let (d, _) = one_error("fn main() {}\n#[test]\nfn checks() {\n    assert_eq(1);\n}\n");
+    assert_eq!(d.code, codes::V0201, "{d:#?}");
 }

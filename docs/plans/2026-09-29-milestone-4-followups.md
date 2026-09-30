@@ -64,7 +64,6 @@ Each of these is rejected though rustc would accept the Rust it stands for.
 - Two `derives.rs` test helpers fail with unclear panics.
 - The fix for Copy `for` variables has no committed test for the `let`-then-return form or the loop over a borrowed-return call.
 - `reference.rs` checks only that each code appears in `docs/language.md`, not that it has a `| Vxxxx |` row.
-- Three `packages.rs` tests that run plain `cargo build` in a temporary package fail when `CARGO_TARGET_DIR` is exported, because they expect the output under the package's own `target/`.
 
 ## Performance
 

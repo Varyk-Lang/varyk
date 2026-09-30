@@ -1088,7 +1088,9 @@ impl FnAnalyzer<'_> {
                     );
                 }
             }
-            HirExprKind::Unary { operand, .. } | HirExprKind::Cast { expr: operand, .. } => {
+            HirExprKind::Unary { operand, .. }
+            | HirExprKind::Cast { expr: operand, .. }
+            | HirExprKind::Assert { cond: operand, .. } => {
                 self.expr(operand);
             }
             HirExprKind::Binary { lhs, rhs, .. } => {
@@ -1164,7 +1166,9 @@ impl FnAnalyzer<'_> {
             HirExprKind::Closure { .. } => {
                 self.argument(expr, None, None);
             }
-            HirExprKind::Println { args, .. } | HirExprKind::Format { args, .. } => {
+            HirExprKind::Println { args, .. }
+            | HirExprKind::Log { args, .. }
+            | HirExprKind::Format { args, .. } => {
                 let mut reported = false;
                 for arg in args {
                     self.expr(arg);
@@ -1794,14 +1798,18 @@ impl FnAnalyzer<'_> {
                     self.uses_on_the_way(value, false, !value.ty.is_copy(), out);
                 }
             }
-            HirExprKind::Unary { operand, .. } | HirExprKind::Cast { expr: operand, .. } => {
+            HirExprKind::Unary { operand, .. }
+            | HirExprKind::Cast { expr: operand, .. }
+            | HirExprKind::Assert { cond: operand, .. } => {
                 self.uses_on_the_way(operand, false, false, out);
             }
             HirExprKind::Binary { lhs, rhs, .. } => {
                 self.uses_on_the_way(lhs, false, false, out);
                 self.uses_on_the_way(rhs, false, false, out);
             }
-            HirExprKind::Println { args, .. } | HirExprKind::Format { args, .. } => {
+            HirExprKind::Println { args, .. }
+            | HirExprKind::Log { args, .. }
+            | HirExprKind::Format { args, .. } => {
                 for arg in args {
                     self.uses_on_the_way(arg, false, false, out);
                 }

@@ -27,6 +27,7 @@ pub fn varyk_with_env(args: &[&str], env: &[(&str, &str)]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_varyk"))
         .args(args)
         .current_dir(&workspace_root)
+        .env("VARYK_STD_PATH", std_path())
         .envs(env.iter().copied())
         .output()
         .expect("failed to spawn the varyk binary")
@@ -37,8 +38,48 @@ pub fn varyk_in(cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_varyk"))
         .args(args)
         .current_dir(cwd)
+        .env("VARYK_STD_PATH", std_path())
         .output()
         .expect("failed to spawn the varyk binary")
+}
+
+/// Runs `varyk` with `args` from `dir`, with the variables in `set` set
+/// and those in `remove` removed from the environment it inherits, and
+/// `VARYK_STD_PATH` always set: for programs whose output depends on the
+/// environment or the current directory (`env::parse`, `log`, `.env`), so
+/// a tester's own variables cannot change it.
+pub fn varyk_run_with(args: &[&str], dir: &Path, set: &[(&str, &str)], remove: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_varyk"));
+    command.args(args).current_dir(dir);
+    for name in remove {
+        command.env_remove(name);
+    }
+    command
+        .envs(set.iter().copied())
+        .env("VARYK_STD_PATH", std_path())
+        .output()
+        .expect("failed to spawn the varyk binary")
+}
+
+/// The workspace's `crates/varyk-std`, which every generated crate a test
+/// builds depends on through `VARYK_STD_PATH` until a version is on
+/// crates.io (M5a spec 5.3).
+pub fn std_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../varyk-std")
+        .canonicalize()
+        .expect("crates/varyk-std should exist")
+}
+
+/// The value of cargo's `--config` that points `varyk-std` at the
+/// workspace's copy, for the tests that run plain cargo on a package: the
+/// driver is not involved there, so `VARYK_STD_PATH` does nothing (M5a
+/// spec 5.3).
+pub fn std_config() -> String {
+    format!(
+        "patch.crates-io.varyk-std.path=\"{}\"",
+        std_path().display()
+    )
 }
 
 /// A fresh, empty directory under `CARGO_TARGET_TMPDIR`, named `label`

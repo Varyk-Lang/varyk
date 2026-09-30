@@ -1,0 +1,5 @@
+fn assert_eq(a: i32, b: i32) -> bool {
+    a == b
+}
+
+fn main() {}

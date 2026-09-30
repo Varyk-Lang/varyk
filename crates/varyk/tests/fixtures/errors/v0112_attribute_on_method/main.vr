@@ -1,0 +1,10 @@
+struct Counter {
+    n: i32,
+}
+
+impl Counter {
+    #[test]
+    fn starts_at_zero() {}
+}
+
+fn main() {}

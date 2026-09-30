@@ -1,0 +1,10 @@
+struct User {
+    name: string,
+    #[skip]
+    password_hash: string,
+}
+
+fn main() {
+    let loaded: Result<User, Error> = json::parse("{\"name\": \"ann\"}");
+    println!("{}", loaded.is_ok());
+}

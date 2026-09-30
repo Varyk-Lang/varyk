@@ -1,0 +1,8 @@
+#[test]
+fn adds() {
+    println!("{}", 1 + 1);
+}
+
+fn main() {
+    adds();
+}

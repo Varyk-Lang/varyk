@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `Error` is already taken by the standard error type
+ --> crates/varyk/tests/fixtures/errors/v0113_struct_named_error/main.vr:1:8
+  |
+1 | struct Error {
+  |        ^^^^^ the name `Error` is already taken by the standard error type
+  |
+  = note: every standard call that can fail gives an `Error`, so a type of your own needs another name, such as `ParseError` or `Problem`

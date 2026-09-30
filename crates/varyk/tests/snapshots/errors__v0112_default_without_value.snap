@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[default]` needs a value, as in `#[default(8080)]`
+ --> crates/varyk/tests/fixtures/errors/v0112_default_without_value/main.vr:2:5
+  |
+2 |     #[default]
+  |     ^^^^^^^^^^ `#[default]` needs a value, as in `#[default(8080)]`

@@ -1,0 +1,50 @@
+// expected output (run in this directory, with its .env, which sets PORT,
+// DB_URL, and LOG=info; the log lines go to stderr):
+// added, 1 in the store
+// added, 2 in the store
+// rejected: a user needs a name
+// rejected: unknown variant `Root`, expected `Admin` or `member` at line 1 column 38
+// [{"id":1,"name":"ann","role":"member","email":null,"age":18},{"id":2,"name":"bo","role":"Admin","email":"bo@example.com","age":41}]
+
+mod store;
+
+struct Config {
+    port: u16,
+    #[rename("db_url")]
+    database_url: string,
+}
+
+fn add_user(mut users: store::Store, body: string) {
+    match users.add_json(body) {
+        Ok(n) => {
+            log::info("now {} users", n);
+            println!("added, {} in the store", n);
+        }
+        Err(e) => {
+            log::warn("rejected a user: {}", e);
+            println!("rejected: {}", e);
+        }
+    }
+}
+
+fn load_config() -> Result<Config, Error> {
+    let c: Config = env::parse()?;
+    Ok(c)
+}
+
+fn main() {
+    let config = match load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error("bad configuration: {}", e);
+            return;
+        }
+    };
+    log::info("serving on port {} with {}", config.port, config.database_url);
+    let mut users = store::Store::new();
+    add_user(users, "{\"id\": 1, \"name\": \"ann\", \"role\": \"member\"}");
+    add_user(users, "{\"id\": 2, \"name\": \"bo\", \"role\": \"Admin\", \"email\": \"bo@example.com\", \"age\": 41}");
+    add_user(users, "{\"id\": 3, \"name\": \"\", \"role\": \"member\"}");
+    add_user(users, "{\"id\": 4, \"name\": \"cy\", \"role\": \"Root\"}");
+    println!("{}", json::stringify(users.users()));
+}

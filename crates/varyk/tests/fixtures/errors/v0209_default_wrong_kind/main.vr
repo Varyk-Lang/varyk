@@ -1,0 +1,6 @@
+struct Config {
+    #[default("x")]
+    port: i32,
+}
+
+fn main() {}

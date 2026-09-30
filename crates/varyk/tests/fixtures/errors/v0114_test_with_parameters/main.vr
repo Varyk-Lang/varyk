@@ -1,0 +1,6 @@
+#[test]
+fn adds(a: i32) {
+    println!("{}", a);
+}
+
+fn main() {}

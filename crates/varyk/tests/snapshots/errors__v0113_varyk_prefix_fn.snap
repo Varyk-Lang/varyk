@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `varyk_default_port` starts with `varyk_`
+ --> crates/varyk/tests/fixtures/errors/v0113_varyk_prefix_fn/main.vr:1:4
+  |
+1 | fn varyk_default_port() -> u16 {
+  |    ^^^^^^^^^^^^^^^^^^ the name `varyk_default_port` starts with `varyk_`
+  |
+  = note: names starting with `varyk_` are kept for what Varyk adds to the Rust it writes, so this needs another name

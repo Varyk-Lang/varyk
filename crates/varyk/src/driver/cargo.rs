@@ -32,15 +32,25 @@ impl From<io::Error> for DriverError {
     }
 }
 
-/// Runs `cargo build` on the crate already written at `build_dir`, into
-/// the shared target directory `target_dir`, and returns the executable's
-/// path, read from cargo's `compiler-artifact` message (`None` for a
-/// library, `binary` false, which has none), alongside every compiler
-/// message cargo reported, classified against `map` and `copied` (spec
-/// 5). This is the only reliable way to find the executable: under a
-/// configured target (`CARGO_BUILD_TARGET` or `[build].target`), cargo
-/// nests the profile directory under an extra `<triple>/` path component
-/// that this cannot predict on its own.
+/// What [`run_cargo`] asks of cargo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Goal {
+    /// `cargo build`, with `--release` when `release` is set.
+    Build { release: bool },
+    /// `cargo test --no-run`: build the test executables, run none (M5a
+    /// spec 2.7).
+    Test,
+}
+
+/// Runs cargo for `goal` on the crate already written at `build_dir`,
+/// into the shared target directory `target_dir`, and returns cargo's
+/// JSON output (stdout), from which the caller reads the executables it
+/// built, and its stderr, alongside every compiler message cargo
+/// reported, classified against `map` and `copied` (spec 5). The executables are read from cargo's
+/// `compiler-artifact` messages because that is the only reliable way to
+/// find them: under a configured target (`CARGO_BUILD_TARGET` or
+/// `[build].target`), cargo nests the profile directory under an extra
+/// `<triple>/` path component that this cannot predict on its own.
 ///
 /// `--message-format=json` (not `-render-diagnostics`) is required so
 /// every diagnostic arrives as a `compiler-message` line with a
@@ -52,25 +62,26 @@ impl From<io::Error> for DriverError {
 pub(super) fn run_cargo(
     build_dir: &Path,
     target_dir: &Path,
-    release: bool,
-    package_name: &str,
-    binary: bool,
+    goal: Goal,
     map: &SourceMap<'_>,
     copied: &[(String, PathBuf)],
-) -> Result<(Option<PathBuf>, Vec<Message>), DriverError> {
+) -> Result<(String, String, Vec<Message>), DriverError> {
     let manifest = std::path::absolute(build_dir.join("Cargo.toml"))?;
     let target_dir = std::path::absolute(target_dir)?;
     let crate_src = std::path::absolute(build_dir)?;
 
     let mut cargo = Command::new("cargo");
+    match goal {
+        Goal::Build { .. } => cargo.arg("build"),
+        Goal::Test => cargo.arg("test").arg("--no-run"),
+    };
     cargo
-        .arg("build")
         .arg("--manifest-path")
         .arg(&manifest)
         .arg("--target-dir")
         .arg(&target_dir)
         .arg("--message-format=json");
-    if release {
+    if goal == (Goal::Build { release: true }) {
         cargo.arg("--release");
     }
     // Cargo finds `.cargo/config.toml`, and rustup a `rust-toolchain`
@@ -82,33 +93,17 @@ pub(super) fn run_cargo(
         .stdin(Stdio::null())
         .output()
         .map_err(DriverError::Spawn)?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let classified = classify_messages(stdout.lines(), map, copied, &crate_src);
 
     if !output.status.success() {
         return Err(DriverError::Cargo {
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stderr,
             messages: classified,
         });
     }
-
-    if !binary {
-        return Ok((None, classified));
-    }
-    match executable_from(stdout.lines(), package_name) {
-        Some(exe) => Ok((Some(PathBuf::from(exe)), classified)),
-        // Cargo exited 0 but named no binary artifact for this package: an
-        // anomaly, not a compile error, so `classified` (built from the
-        // same successful run) is the only messages worth carrying, not
-        // an empty list.
-        None => Err(DriverError::Cargo {
-            stderr: format!(
-                "cargo produced no executable\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-            messages: classified,
-        }),
-    }
+    Ok((stdout, stderr, classified))
 }
 
 /// Reads every `compiler-message` line of cargo's `--message-format=json`
@@ -134,7 +129,10 @@ fn classify_messages<'a>(
 /// The executable in cargo's JSON `lines`: the `compiler-artifact`
 /// message of the `bin` target named `package`. Other artifacts (a
 /// dependency's build script, say) may carry an `executable` too.
-fn executable_from<'a>(lines: impl Iterator<Item = &'a str>, package: &str) -> Option<String> {
+pub(super) fn executable_from<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    package: &str,
+) -> Option<String> {
     lines.into_iter().find_map(|line| {
         let message = serde_json::from_str::<serde_json::Value>(line).ok()?;
         if message.get("reason")?.as_str()? != "compiler-artifact" {
@@ -153,6 +151,23 @@ fn executable_from<'a>(lines: impl Iterator<Item = &'a str>, package: &str) -> O
     })
 }
 
+/// The test executables in cargo's JSON `lines`: the `executable` of
+/// every `compiler-artifact` message whose `profile.test` is set, in the
+/// order cargo reported them.
+pub(super) fn test_executables_from<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<PathBuf> {
+    lines
+        .filter_map(|line| {
+            let message = serde_json::from_str::<serde_json::Value>(line).ok()?;
+            if message.get("reason")?.as_str()? != "compiler-artifact"
+                || message.get("profile")?.get("test")?.as_bool() != Some(true)
+            {
+                return None;
+            }
+            Some(PathBuf::from(message.get("executable")?.as_str()?))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +184,19 @@ mod tests {
             Some("/t/debug/hello")
         );
         assert_eq!(executable_from(lines.into_iter(), "other"), None);
+    }
+
+    #[test]
+    fn test_executables_are_the_artifacts_built_as_tests() {
+        let lines = [
+            r#"{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"dep"},"profile":{"test":false},"executable":null}"#,
+            r#"{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"hello"},"profile":{"test":true},"executable":"/t/debug/deps/hello-1"}"#,
+            r#"{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"hello"},"profile":{"test":false},"executable":"/t/debug/hello"}"#,
+            r#"{"reason":"build-finished","success":true}"#,
+        ];
+        assert_eq!(
+            test_executables_from(lines.into_iter()),
+            [PathBuf::from("/t/debug/deps/hello-1")]
+        );
     }
 }

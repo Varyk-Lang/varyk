@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0209]: the default `"x"` does not fit the type `i32`
+ --> crates/varyk/tests/fixtures/errors/v0209_default_wrong_kind/main.vr:2:5
+  |
+2 |     #[default("x")]
+  |     ^^^^^^^^^^^^^^^ the default `"x"` does not fit the type `i32`

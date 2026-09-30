@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0112]: `#[rename]` cannot go on a field of a variant
+ --> crates/varyk/tests/fixtures/errors/v0112_rename_on_variant_field/main.vr:3:9
+  |
+3 |         #[rename("posX")]
+  |         ^^^^^^^^^^^^^^^^^ `#[rename]` cannot go on a field of a variant
+  |
+  = note: `#[rename]` goes before a struct field or a variant that carries no data

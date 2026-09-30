@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0114]: `main` is where the program starts and cannot be a test
+ --> crates/varyk/tests/fixtures/errors/v0114_test_named_main/main.vr:2:1
+  |
+2 | fn main() {
+  | ^^^^^^^ `main` is where the program starts and cannot be a test
+  |
+  = note: put the test in a function of its own, with another name

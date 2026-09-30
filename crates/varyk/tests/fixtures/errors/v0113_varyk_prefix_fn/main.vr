@@ -1,0 +1,5 @@
+fn varyk_default_port() -> u16 {
+    8080
+}
+
+fn main() {}

@@ -191,6 +191,20 @@ impl<'a> Lexer<'a> {
                 '[' => self.single(TokenKind::LBracket, start),
                 ']' => self.single(TokenKind::RBracket, start),
                 '?' => self.single(TokenKind::Question, start),
+                '#' => {
+                    self.chars.next();
+                    if self.eat_if('!') {
+                        let span = Span::new(self.file_id, start as u32, (start + 2) as u32);
+                        self.errors.push(SyntaxError::new(
+                            span,
+                            V0001,
+                            "`#!` attributes are not supported in Varyk; an attribute is \
+                             written `#[name]` before the item it applies to",
+                        ));
+                    } else {
+                        self.push(TokenKind::Hash, start, start + 1);
+                    }
+                }
                 other => {
                     self.chars.next();
                     self.unknown_char(start, other);
@@ -413,7 +427,6 @@ impl<'a> Lexer<'a> {
     fn unknown_char(&mut self, start: usize, c: char) {
         let span = Span::new(self.file_id, start as u32, (start + c.len_utf8()) as u32);
         let message = match c {
-            '#' => "attributes (`#`) are not supported in Varyk yet".to_string(),
             '@' => "`@` bindings in patterns are not supported in Varyk; bind the whole value \
                     with a name and match on that name inside the arm"
                 .to_string(),
@@ -779,15 +792,30 @@ mod tests {
     }
 
     #[test]
-    fn hash_names_attributes() {
-        let f = file("#");
+    fn hash_starts_an_attribute() {
+        assert_eq!(
+            lex_kinds("#[test]"),
+            vec![
+                TokenKind::Hash,
+                TokenKind::LBracket,
+                TokenKind::Identifier("test".to_string()),
+                TokenKind::RBracket,
+            ]
+        );
+    }
+
+    #[test]
+    fn hash_bang_is_v0001() {
+        let f = file("#![allow(unused)]");
         let (_tokens, errors) = lex(&f);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].code, V0001);
         assert_eq!(
             errors[0].message,
-            "attributes (`#`) are not supported in Varyk yet"
+            "`#!` attributes are not supported in Varyk; an attribute is written `#[name]` \
+             before the item it applies to"
         );
+        assert_eq!((errors[0].span.start, errors[0].span.end), (0, 2));
     }
 
     // --- Milestone-2 tokens ---------------------------------------------

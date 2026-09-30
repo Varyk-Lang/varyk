@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0210]: `Config` cannot be read from the environment
+ --> crates/varyk/tests/fixtures/errors/v0210_env_map/main.vr:6:36
+  |
+2 |     limits: HashMap<string, i32>,
+  |     ---------------------------- `HashMap<string, i32>` is more than one value
+...
+6 |     let c: Result<Config, Error> = env::parse();
+  |                                    ^^^^^^^^^^^^ `Config` cannot be read from the environment
+  |
+  = note: a variable holds one value, so the fields of a struct read from the environment can be numbers, `bool`, `string`, enums whose variants carry no data, or an `Option` of one of these; a field the program fills itself can be made an `Option` and marked `#[skip]`
