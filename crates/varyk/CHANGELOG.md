@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.3.0...varyk-v0.4.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* async and await are keywords, and Task, Shared, and time are reserved names; a program with its own struct named Task must rename it.
+
+### Features
+
+* milestone 5b1, async functions and tasks ([249393e](https://github.com/Varyk-Lang/varyk/commit/249393e0db12a1f37ca0c15513b564d6f03e9ac9))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * varyk-syntax bumped from 0.3.0 to 0.4.0
+
 ## [0.3.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.2.0...varyk-v0.3.0) (2026-10-01)
 
 
