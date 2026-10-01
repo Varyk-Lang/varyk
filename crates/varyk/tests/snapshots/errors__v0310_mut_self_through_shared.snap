@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0310]: `bump` may change the struct this `Shared` holds, which can only be read
+  --> crates/varyk/tests/fixtures/errors/v0310_mut_self_through_shared/main.vr:13:5
+   |
+12 |     let counter = Shared::new(Counter { hits: 0 });
+   |         ------- `counter` is a `Shared`
+13 |     counter.bump();
+   |     ^^^^^^^ `bump` may change the struct this `Shared` holds, which can only be read
+   |
+   = note: a `Shared` lets many tasks read one value at once, so nothing reached through it may change
+   = note: in Rust terms, an `Arc<T>` gives only shared references to its `T`

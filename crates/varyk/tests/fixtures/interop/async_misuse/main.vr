@@ -1,0 +1,11 @@
+mod ext;
+
+fn plain() -> i64 {
+    ext::fetch(1)
+}
+
+async fn main() {
+    ext::fetch(2);
+    let s = ext::first("x").await;
+    println!("{} {}", s, plain());
+}

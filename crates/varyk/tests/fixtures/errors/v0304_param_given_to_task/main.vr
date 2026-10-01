@@ -1,0 +1,16 @@
+struct User {
+    name: string,
+}
+
+async fn send_email(u: User) {
+    println!("mail to {}", u.name);
+}
+
+async fn welcome(u: User) {
+    let task = send_email(u);
+    task.await;
+}
+
+async fn main() {
+    welcome(User { name: "ann" }).await;
+}

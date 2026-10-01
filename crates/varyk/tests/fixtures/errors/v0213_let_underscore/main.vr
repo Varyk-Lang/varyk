@@ -1,0 +1,7 @@
+async fn fetch(id: i64) -> i64 {
+    id * 2
+}
+
+async fn main() {
+    let _ = fetch(1);
+}

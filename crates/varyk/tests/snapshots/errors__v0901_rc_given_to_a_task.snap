@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0901]: the task started here holds `Rc<i64>`, which cannot be sent to another thread
+ --> crates/varyk/tests/fixtures/errors/v0901_rc_given_to_a_task/main.vr:5:5
+  |
+5 |     let t = ext::report(session);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the task started here holds `Rc<i64>`, which cannot be sent to another thread
+  |
+  = note: a started task may run on another thread, so what it is given, and what it holds while it waits, must be able to go there; this value comes from Rust code, a `.rs` module or a crate it uses
+  = note: in Rust terms, `Rc<i64>` is not `Send`; in the Rust code, use `Arc` in place of `Rc`, and `Mutex` or an atomic in place of `Cell` or `RefCell`, or wait for the call with `.await` instead of starting it
+error: the generated Rust did not compile; run `varyk build --emit-rust` to inspect it

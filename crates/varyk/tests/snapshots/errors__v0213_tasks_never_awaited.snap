@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0213]: the tasks in `tasks` are never waited for, so they are stopped as soon as `tasks` goes out of scope
+ --> crates/varyk/tests/fixtures/errors/v0213_tasks_never_awaited/main.vr:6:9
+  |
+6 |     let tasks = vec![fetch(1), fetch(2)];
+  |         ^^^^^ the tasks in `tasks` are never waited for, so they are stopped as soon as `tasks` goes out of scope
+  |
+  = note: wait for all of them with `Task::all(tasks).await`

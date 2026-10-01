@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0214]: async functions cannot call each other in a cycle: `ping` calls `pong`, which calls `ping`
+ --> crates/varyk/tests/fixtures/errors/v0214_async_cycle/main.vr:5:5
+  |
+5 |     pong(n - 1).await
+  |     ^^^^^^^^^^^ async functions cannot call each other in a cycle: `ping` calls `pong`, which calls `ping`
+  |
+  = note: an async function's waiting is planned out before it runs, which cannot be done for one that waits on itself; make one of them an ordinary function, or use a loop
+  = note: in Rust terms, the future would contain itself and have no fixed size

@@ -1,0 +1,8 @@
+async fn fetch(id: i64) -> i64 {
+    id * 2
+}
+
+async fn main() {
+    let fresh = true;
+    let n = if fresh { fetch(1) } else { fetch(2).await };
+}

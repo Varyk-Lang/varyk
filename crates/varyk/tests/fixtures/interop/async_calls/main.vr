@@ -1,0 +1,12 @@
+mod ext;
+
+async fn main() {
+    let a = ext::fetch(1, "a").await;
+    let t = ext::fetch(2, "b");
+    let b = t.await;
+    let c = ext::Counter { n: 1 };
+    let n = c.total(2).await;
+    let u = c.total(3);
+    let m = u.await;
+    println!("{} {} {} {}", a, b, n, m);
+}

@@ -10,8 +10,9 @@ Recorded, deliberately unanswered.
   Rust.
 - Should mutation be inferred from the body instead of declared on parameters?
 - What syntax should explicit ownership transfer use for Varyk-declared
-  functions? `move` is a candidate. The async runtime decision depends on it. Moved
-  to 5b1.
+  functions? `move` is a candidate. Answered in milestone 5b1: none; the
+  arguments of a started call are the one transfer, and parameters still
+  borrow.
 - How should owned versus borrowed return values be expressed and inferred?
   Answered in milestone 4: inferred from the body, never written; every
   return is new, or every return is part of one read-only parameter.
@@ -29,7 +30,15 @@ Recorded, deliberately unanswered.
   for the types a `json` or `env` call reaches; the attributes adjust
   names, defaults, and skipping, never whether to derive.
 - Multi-threaded or current-thread async runtime, and how do `Send` and `Sync`
-  failures surface to a writer who never sees those bounds? Moved to 5b1.
+  failures surface to a writer who never sees those bounds? Answered in
+  milestone 5b1: multi-threaded; Varyk types are always `Send` and `Sync`,
+  and a `.rs` type that is not is V0901.
+- Should Varyk infer which functions are async, as it infers borrows, and
+  await every call implicitly, with concurrency spelled `go f(x)`? That is
+  Go's surface on Rust's runtime; 5b1 keeps waiting explicit.
+- Should tasks race, time out, or talk through channels, and in what shape?
+- Should tasks change a shared value, and through what (`Mutex`, an actor, a
+  channel)?
 - Which Rust spellings, such as `&x` at a call site, should be accepted with a
   warning as a transition aid rather than rejected? Milestone 1 rejects them
   with a fix-it.
@@ -41,7 +50,7 @@ Recorded, deliberately unanswered.
   milestone 3: enums are imported automatically; generic types remain open.
 - Should `match` on an owned local move it, as in Rust, so that its parts
   can be taken out without a copy? Milestone 2 borrows every place it
-  matches on, so an owned `Option<Task>` local can only be opened by
+  matches on, so an owned `Option<Item>` local can only be opened by
   matching on the call that produced it.
 - Should Varyk code ever `use` a crate directly, once traits exist? Milestone 3
   reaches every crate through a facade `.rs` module in the package; that rule

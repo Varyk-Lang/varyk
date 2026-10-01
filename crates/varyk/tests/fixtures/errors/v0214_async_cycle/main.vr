@@ -1,0 +1,14 @@
+async fn ping(n: i64) -> i64 {
+    if n == 0 {
+        return 0;
+    }
+    pong(n - 1).await
+}
+
+async fn pong(n: i64) -> i64 {
+    ping(n).await
+}
+
+async fn main() {
+    println!("{}", ping(3).await);
+}

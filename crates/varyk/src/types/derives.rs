@@ -328,6 +328,8 @@ pub fn ty_name(structs: &[StructDef], enums: &[EnumDef], ty: &Ty) -> String {
         Ty::Vec(inner) => format!("Vec<{}>", name(inner)),
         Ty::HashMap(key, value) => format!("HashMap<{}, {}>", name(key), name(value)),
         Ty::Chain(item) => format!("chain of {}", name(item)),
+        Ty::Task(t) => format!("Task<{}>", name(t)),
+        Ty::Shared(t) => format!("Shared<{}>", name(t)),
         Ty::Error => "Error".to_string(),
         Ty::Unit => "()".to_string(),
     }
@@ -396,6 +398,8 @@ pub enum Part {
     Rust(String),
     /// Any other type (`Result`, `()`), named.
     Other(String),
+    /// A `Shared` (milestone 5b1 spec 2.6), named: a handle, not data.
+    Shared(String),
     /// `env` only: the type read is not a struct, named.
     NotStruct(String),
     /// `env` only: a field that is not a single value (a struct, `Vec`, or
@@ -444,6 +448,7 @@ impl NotConvertible {
             Part::Other(name) => {
                 format!("`{name}` is not a type that {} can hold", medium.name())
             }
+            Part::Shared(name) => format!("`{name}` is a handle to a value, not data"),
             Part::NotStruct(name) => format!("`{name}` is not a struct"),
             Part::NotFlat(name) => format!("`{name}` is more than one value"),
         }
@@ -488,6 +493,10 @@ impl NotConvertible {
                     .to_string(),
                 Medium::Env => ENV_FIELDS.to_string(),
             },
+            Part::Shared(_) => format!(
+                "a `Shared` cannot go through {through}; read the fields through it into a \
+                 value of a type that can"
+            ),
             Part::NotStruct(_) => {
                 "`env::parse` fills a struct, one field from each variable; read into a \
                  struct and use its fields"
@@ -520,6 +529,9 @@ pub fn env_readable(
         path: Vec::new(),
         at: None,
     };
+    if let Ty::Shared(_) = ty {
+        return Err(whole(Part::Shared(ty_name(structs, enums, ty))));
+    }
     let Ty::Struct(id) = ty else {
         return Err(whole(Part::NotStruct(ty_name(structs, enums, ty))));
     };
@@ -630,7 +642,12 @@ fn walk(
             }
         }
         Ty::Error => Err(Part::Error),
-        Ty::Result(..) | Ty::Chain(_) | Ty::Unit => Err(Part::Other(ty_name(structs, enums, ty))),
+        // A `Shared` is a handle, not a value to write or read
+        // (milestone 5b1 spec 2.6).
+        Ty::Shared(_) => Err(Part::Shared(ty_name(structs, enums, ty))),
+        Ty::Result(..) | Ty::Chain(_) | Ty::Task(_) | Ty::Unit => {
+            Err(Part::Other(ty_name(structs, enums, ty)))
+        }
     }
 }
 

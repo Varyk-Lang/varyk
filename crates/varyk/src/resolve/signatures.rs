@@ -67,6 +67,7 @@ impl<'a> Mapper<'a> {
             note,
             within: None,
             redefined_in,
+            is_async: imported.is_async,
         }
     }
 
@@ -219,6 +220,11 @@ fn uncallable_note(imported: &ImportedFn) -> Option<String> {
         }
     }
     match &imported.ret {
+        RustTy::Opaque(text) if imported.is_async && text.starts_with('&') => Some(
+            "Varyk does not import an async Rust function that returns a reference (its result \
+             outlives the call); return an owned value, such as `String` instead of `&str`"
+                .to_string(),
+        ),
         RustTy::Opaque(text) if *text == imported.signature => Some(
             "Varyk cannot call a generic function; add a `pub fn` without type parameters to \
              the Rust module that calls it"

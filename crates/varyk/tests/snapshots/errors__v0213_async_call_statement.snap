@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0213]: this starts `send_email` and then throws its task away, which stops it
+ --> crates/varyk/tests/fixtures/errors/v0213_async_call_statement/main.vr:6:5
+  |
+6 |     send_email("ann@example.com");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this starts `send_email` and then throws its task away, which stops it
+  |
+  = note: wait for it with `.await`, or let it run on its own with `.detach()`
+help: insert `.await`

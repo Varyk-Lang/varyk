@@ -133,7 +133,7 @@ impl Symbols {
         item_reach: ModuleId,
     ) -> Option<Diagnostic> {
         let (name, module, is_pub, decl, keyword) = match ty {
-            Ty::Option(inner) | Ty::Vec(inner) => {
+            Ty::Option(inner) | Ty::Vec(inner) | Ty::Shared(inner) => {
                 return self.private_in_public(inner, span, item, item_reach);
             }
             Ty::Result(ok, err) | Ty::HashMap(ok, err) => {

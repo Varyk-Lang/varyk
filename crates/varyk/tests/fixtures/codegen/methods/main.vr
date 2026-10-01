@@ -1,6 +1,6 @@
 mod tally;
 
-struct Task {
+struct Item {
     label: string,
     done: bool,
 }
@@ -10,9 +10,9 @@ enum Size {
     Large,
 }
 
-impl Task {
-    fn new(label: string) -> Task {
-        Task { label: label.clone(), done: false }
+impl Item {
+    fn new(label: string) -> Item {
+        Item { label: label.clone(), done: false }
     }
 
     fn complete(mut self) {
@@ -34,7 +34,7 @@ impl Size {
     }
 }
 
-fn count_done(tasks: Vec<Task>) -> usize {
+fn count_done(tasks: Vec<Item>) -> usize {
     let mut n: usize = 0;
     let mut i: usize = 0;
     while i < tasks.len() {
@@ -46,14 +46,14 @@ fn count_done(tasks: Vec<Task>) -> usize {
     n
 }
 
-fn finish_first(mut tasks: Vec<Task>) {
+fn finish_first(mut tasks: Vec<Item>) {
     tasks[0].complete();
 }
 
 fn main() {
-    let mut tasks: Vec<Task> = Vec::new();
-    tasks.push(Task::new("write"));
-    tasks.push(Task::new("test"));
+    let mut tasks: Vec<Item> = Vec::new();
+    tasks.push(Item::new("write"));
+    tasks.push(Item::new("test"));
     finish_first(tasks);
     tasks[1].complete();
     let first = tasks[0];

@@ -69,6 +69,9 @@ pub(super) enum Classification {
     Rootless(Span),
     /// A return that is part of a parameter, in a recursive group: V0304.
     Recursive(Span),
+    /// A return that is part of a parameter, of an async function: V0311
+    /// (milestone 5b1 spec 2.2).
+    Async(Span),
 }
 
 /// One function's classification, with what its first pass found.
@@ -168,6 +171,19 @@ fn classify_function(cx: &Context, function: &mut HirFunction, in_group: bool) -
         locals: &function.locals,
         allowed: &allowed,
     };
+    // Every value an async function returns is new (milestone 5b1 spec
+    // 2.2).
+    let class = match class {
+        Classification::Part(root) if function.is_async => {
+            let part = returns
+                .leaves
+                .iter()
+                .find(|leaf| roots.terminal(leaf).contains(&root))
+                .map_or(function.span, |leaf| leaf.span);
+            Classification::Async(part)
+        }
+        class => class,
+    };
     let leaf_root = |span: Span| {
         returns
             .leaves
@@ -180,7 +196,10 @@ fn classify_function(cx: &Context, function: &mut HirFunction, in_group: bool) -
         | Classification::OfMutParam(root)
         | Classification::TwoRoots(root, _) => Some(root),
         Classification::Mixed(part, _) | Classification::Recursive(part) => leaf_root(part),
-        Classification::New | Classification::OfLocal(_) | Classification::Rootless(_) => None,
+        Classification::New
+        | Classification::OfLocal(_)
+        | Classification::Rootless(_)
+        | Classification::Async(_) => None,
     };
     let (buffered, marks) = match class {
         Classification::Part(_) => (Vec::new(), Vec::new()),
@@ -434,7 +453,9 @@ impl ClosureRoots<'_> {
                     .with_note(BORROWED_NOTE);
                 (at_b, diagnostic)
             }
-            Classification::Rootless(span) | Classification::Recursive(span) => {
+            Classification::Rootless(span)
+            | Classification::Recursive(span)
+            | Classification::Async(span) => {
                 let diagnostic = Diagnostic::new(
                     codes::V0304,
                     span,
@@ -671,6 +692,28 @@ impl Report<'_> {
                 );
                 clone_fix_it(diagnostic, span, ret)
             }
+            Classification::Async(span) => {
+                let root = self
+                    .root_at(span)
+                    .map_or("a parameter".to_string(), |r| format!("`{}`", self.name(r)));
+                let diagnostic = Diagnostic::new(
+                    codes::V0311,
+                    span,
+                    format!(
+                        "`{}` is an async function, so it cannot return part of {root}; {copy}",
+                        self.function.name
+                    ),
+                )
+                .with_note(
+                    "every value an async function returns must be new, since it is handed over \
+                     after the function has stopped and started again",
+                )
+                .with_note(
+                    "in Rust terms, the returned future would borrow its arguments, which Varyk \
+                     does not support",
+                );
+                clone_fix_it(diagnostic, span, ret)
+            }
             Classification::New | Classification::Part(_) => return None,
         };
         Some(diagnostic)
@@ -733,7 +776,7 @@ fn mark_rooted(
 /// The strongly connected components of `graph` (edges from a function
 /// to its callees), callees first: every component comes after the
 /// components it calls into (Tarjan's algorithm).
-fn components(graph: &[Vec<usize>]) -> Vec<Vec<usize>> {
+pub(crate) fn components(graph: &[Vec<usize>]) -> Vec<Vec<usize>> {
     struct State<'a> {
         graph: &'a [Vec<usize>],
         index: Vec<Option<usize>>,
@@ -873,7 +916,8 @@ fn walk_expr(expr: &mut HirExpr, visit: &mut impl FnMut(&mut HirExpr)) {
         HirExprKind::Unary { operand, .. }
         | HirExprKind::Cast { expr: operand, .. }
         | HirExprKind::Try { operand, .. }
-        | HirExprKind::Assert { cond: operand, .. } => walk_expr(operand, visit),
+        | HirExprKind::Assert { cond: operand, .. }
+        | HirExprKind::Await(operand) => walk_expr(operand, visit),
         HirExprKind::Binary { lhs, rhs, .. } => {
             walk_expr(lhs, visit);
             walk_expr(rhs, visit);

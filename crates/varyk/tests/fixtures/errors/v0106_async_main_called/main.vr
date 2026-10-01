@@ -1,0 +1,7 @@
+async fn restart() {
+    main().await;
+}
+
+async fn main() {
+    println!("started");
+}

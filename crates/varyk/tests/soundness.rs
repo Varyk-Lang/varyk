@@ -242,6 +242,126 @@ impl P {
     fn fresh() -> P {
         mk_p()
     }
+
+    async fn a_n(self) -> i32 {
+        self.n
+    }
+
+    async fn a_inc(mut self) {
+        self.n = self.n + 1;
+    }
+}
+
+async fn a_i(n: i32) -> i32 {
+    n
+}
+
+async fn a_len(s: string) -> usize {
+    s.len()
+}
+
+async fn a_p(p: P) -> P {
+    P { s: p.s.clone(), n: a_i(p.n).await }
+}
+
+async fn a_r(n: i32) -> Result<i32, string> {
+    if n > 0 {
+        Ok(n)
+    } else {
+        Err(\"negative\")
+    }
+}
+
+async fn a_try(n: i32) -> Result<i32, string> {
+    let m = a_r(n).await?;
+    Ok(m + a_r(m).await?)
+}
+
+async fn a_bump(mut p: P) {
+    p.n = p.n + 1;
+}
+
+async fn a_loops(v: Vec<P>, w: Vec<string>) -> i32 {
+    let mut n = 0;
+    for p in v {
+        n = n + p.a_n().await;
+    }
+    for s in w.iter().filter(|x| x.len() > 0) {
+        n = n + a_len(s).await as i32;
+    }
+    for i in 0..2 {
+        n = n + a_i(i).await;
+    }
+    n
+}
+
+async fn a_while(c: bool, s: string) -> i32 {
+    let mut n = 0;
+    while c {
+        n = n + a_len(s).await as i32;
+        break;
+    }
+    while a_i(n).await > 100 {
+        n = n - 1;
+    }
+    n
+}
+
+async fn a_branches(n: i32, o: Option<P>) -> i32 {
+    let mut m = match a_r(n).await {
+        Ok(k) => k,
+        Err(e) => a_len(e).await as i32,
+    };
+    match o {
+        Some(p) => {
+            m = m + p.a_n().await;
+        }
+        None => {}
+    }
+    if let Ok(k) = a_r(m).await {
+        m = m + k;
+    }
+    m
+}
+
+async fn a_print(s: string, p: P) -> string {
+    println!(\"{} {}\", a_len(s).await, p.a_n().await);
+    format!(\"{}\", a_i(p.n).await)
+}
+
+struct Cfg {
+    factor: i32,
+    name: string,
+    tags: Vec<string>,
+    items: Vec<P>,
+    e: E,
+}
+
+fn mk_cfg() -> Cfg {
+    Cfg { factor: 2, name: \"cfg\", tags: vec![\"a\", \"bb\"], items: vec![mk_p()], e: E::A(mk_s()) }
+}
+
+impl Cfg {
+    fn twice(self) -> i32 {
+        self.factor * 2
+    }
+
+    fn cname(self) -> string {
+        self.name
+    }
+
+    async fn a_twice(self) -> i32 {
+        a_i(self.factor).await * 2
+    }
+}
+
+fn read_shared(c: Shared<Cfg>) -> i32 {
+    read_s(c.cname());
+    c.factor + c.twice() + c.items.len() as i32
+}
+
+async fn a_cfg(c: Shared<Cfg>) -> i32 {
+    a_i(c.factor).await + c.twice() + c.a_twice().await
 }
 
 struct G {
@@ -341,6 +461,11 @@ pub fn tallies() -> Vec<Tally> { vec![Tally::new()] }
 pub enum Kind { Word(String), Number(i32), Tallied(Tally) }
 pub fn make_kind(s: &str) -> Kind { Kind::Word(s.to_string()) }
 pub fn refnum(x: &i32) -> &str { if *x > 0 { \"pos\" } else { \"neg\" } }
+pub async fn a_take(s: String) -> usize { s.len() }
+pub async fn a_bump_tally(t: &mut Tally) { t.total += 1; }
+impl Tally {
+    pub async fn a_count(&self) -> i32 { self.total }
+}
 ";
 
 /// Every case function's parameters: one of each kind of place.
@@ -1298,6 +1423,61 @@ const MUST_PASS: &[&str] = &[
     // An owned local, a parameter, a `mut` parameter, a borrowed return,
     // an element, a field, and block-like operands compared, and copies
     // made from each and given away.
+    // Async functions and methods awaited (milestone 5b1 spec 2.3), their
+    // arguments lent as any call's are; `?` after `.await` is in the
+    // prelude's `a_try`.
+    "async: let n = a_len(ls).await;\n    let q = a_p(lp).await;\n    let m = lp.a_n().await + pp.a_n().await + mp.a_n().await;\n    let k = a_try(li).await;\n    let j = a_len(ps).await + a_len(ms).await + a_len(lp.s).await;\n    read_p(q);\n    read_s(ls);",
+    // `.await` inside `for` (over a `Vec` and over a chain with a
+    // closure), `while`, `match`, `if let`, and `println!`.
+    "async: for p in lv {\n        let n = p.a_n().await;\n    }\n    for s in lw.iter().filter(|w| w.len() > 0) {\n        let n = a_len(s).await;\n    }\n    for i in 0..2 {\n        let n = a_i(i).await;\n    }",
+    "async: while c {\n        let n = a_len(ps).await;\n        break;\n    }\n    while a_i(li).await > 100 {\n        li = li + 1;\n    }",
+    "async: match a_r(li).await {\n        Ok(n) => read_i(n),\n        Err(e) => read_s(e),\n    }\n    match lo {\n        Some(p) => {\n            let n = p.a_n().await;\n        }\n        None => {}\n    }",
+    "async: if let Ok(n) = a_r(li).await {\n        read_i(n);\n    }\n    if let Some(p) = lo {\n        let q = a_p(p).await;\n    }",
+    "async: println!(\"{} {}\", a_len(ls).await, lp.a_n().await);\n    let t = format!(\"{}\", a_i(mi).await);\n    read_s(t);",
+    // Started calls (milestone 5b1 spec 2.3, 3): every kind of argument
+    // given to a task that owns it (a number, an owned local, a string
+    // literal and a literal local, a `.clone()`, a `mut` number
+    // parameter), kept in a `let` and awaited.
+    "async: let t1 = a_i(li);\n    let t2 = a_len(ls);\n    let t3 = a_p(lp);\n    let t4 = a_len(\"lit\");\n    let t5 = a_p(pp.clone());\n    let t6 = a_len(ms.clone());\n    let t7 = a_i(pi);\n    let t8 = a_len(ll);\n    let t9 = a_r(mi);\n    let n = t1.await + t7.await;\n    let k = t2.await + t4.await + t6.await + t8.await;\n    read_p(t3.await);\n    read_p(t5.await);\n    let r = t9.await;",
+    // Detached at once and from a local.
+    "async: a_i(li).detach();\n    let t = a_len(ls);\n    t.detach();\n    a_p(lp).detach();\n    let u = a_p(mk_p());\n    u.detach();",
+    // A started method, its receiver an owned local, a call result, and
+    // a struct literal; an awaited argument; `time::sleep`.
+    "async: let t = lp.a_n();\n    let u = mk_p().a_n();\n    let w = P { s: \"x\", n: 2 }.a_n();\n    let n = t.await + u.await + w.await;\n    let a = a_p(a_p(mk_p()).await);\n    read_p(a.await);\n    let s = time::sleep(10);\n    s.await;",
+    // Async functions with `.await` in `for` (over a chain with a
+    // closure among them), `while`, `match`, `if let`, and `println!`,
+    // started, so their futures are checked `Send`.
+    "async: let t1 = a_loops(lv, lw);\n    let t2 = a_while(c, ls);\n    let t3 = a_branches(li, lo);\n    let t4 = a_print(mk_s(), lp);\n    let n = t1.await + t2.await + t3.await;\n    read_s(t4.await);",
+    // Started inside loops.
+    "async: for i in 0..3 {\n        let t = a_i(i);\n        let n = t.await;\n    }\n    let mut k = 0;\n    while k < 2 {\n        a_i(k).detach();\n        k = k + 1;\n    }",
+    // `Task::all` and `Task::all_settled` (milestone 5b1 spec 2.5) over
+    // a `vec!` of started calls and over a local holding one; plain tasks
+    // (`Task::all`), tasks giving a `Result` (`Task::try_all`), and
+    // `all_settled`; a started method in `vec!` and detached.
+    "async: let a = Task::all(vec![a_i(li), a_i(pi), a_i(mi), lp.clone().a_n()]).await;\n    pp.clone().a_n().detach();\n    let ts = vec![a_r(1), a_try(li)];\n    let b = Task::all(ts).await;\n    let c = Task::all_settled(vec![a_r(li), a_try(3)]).await;\n    let us = vec![a_p(lp), a_p(pp.clone())];\n    let d = Task::all(us).await;\n    read_i(a[0]);\n    read_p(d[0]);",
+    // ... and over a collected `map` of started calls: over copied
+    // numbers, and over borrowed structs and strings given as `.clone()`,
+    // a started method among them.
+    "async: let a = Task::all(ln.iter().map(|x| a_i(x)).collect()).await;\n    let b = Task::all(pv.iter().map(|p| a_p(p.clone())).collect()).await;\n    let c = Task::all(lw.iter().map(|w| a_len(w.clone())).collect()).await;\n    let d = Task::all(ln.iter().map(|x| a_r(x)).collect()).await;\n    let e = Task::all_settled(lw.iter().map(|w| a_r(w.len() as i32)).collect()).await;\n    let f = Task::all(lv.iter().map(|p| p.clone().a_n()).collect()).await;\n    let g = Task::all_settled(mv.iter().map(|p| {\n        a_try(p.n)\n    }).collect()).await;\n    read_p(b[0]);",
+    // `Shared<T>` (milestone 5b1 spec 2.6, 5): `Arc<T>`, its fields read
+    // and lent, copied, and aliased through auto-deref.
+    "let s = Shared::new(mk_cfg());\n    let n = s.factor + 1;\n    read_s(s.name);\n    read_p(s.items[0]);\n    let t = s.name;\n    read_s(t);\n    let k = s.items[0].n + s.items[0].s.len() as i32;\n    read_v(s.items);\n    read_e(s.e);\n    let mut v: Vec<string> = Vec::new();\n    v.push(s.name.clone());\n    let p = s.items[0].clone();\n    read_p(p);\n    let u: Shared<Cfg> = Shared::new(Cfg { factor: 1, name: \"lit\", tags: lw.clone(), items: vec![], e: E::C });\n    read_i(u.factor);",
+    // ... its methods by path, on a local and a parameter, and the
+    // handle lent and cloned.
+    "let s = Shared::new(mk_cfg());\n    let n = s.twice() + read_shared(s);\n    read_s(s.cname());\n    let u = s.clone();\n    let m = read_shared(u) + u.twice();\n    let hs = vec![s.clone(), u.clone()];\n    for h in hs {\n        read_i(h.factor);\n    }\n    let o = Some(s.clone());\n    match o {\n        Some(h) => read_s(h.name),\n        None => {}\n    }",
+    // ... table reads and chains through it.
+    "let s = Shared::new(mk_cfg());\n    let a = s.items.len() + s.tags.len() + s.name.len();\n    let b = s.tags.contains(\"a\") && s.name.contains(\"c\") && !s.items.is_empty();\n    read_s(s.name.trim());\n    let c = s.tags.iter().filter(|t| t.len() > 1).count();\n    let d: Vec<string> = s.tags.iter().map(|t| t.clone()).collect();\n    let w = s.tags.join(\",\");\n    match s.tags.get(0) {\n        Some(t) => read_s(t),\n        None => {}\n    }",
+    // ... a `match`, `if let`, and `for` on its fields.
+    "let s = Shared::new(mk_cfg());\n    match s.e {\n        E::A(x) => read_s(x),\n        E::B(p) => read_p(p),\n        E::C => {}\n    }\n    if let E::A(x) = s.e {\n        read_s(x);\n    }\n    for p in s.items {\n        read_p(p);\n    }\n    for t in s.tags.iter() {\n        read_s(t);\n    }",
+    // ... and given to started calls as `s.clone()`, then moved into the
+    // last; a started method through it.
+    // `.rs` async functions and methods (milestone 5b1 spec 2.8), awaited
+    // and started as Varyk ones are: an owned parameter, a `&self`
+    // method, and a `&mut` parameter awaited.
+    "async: let n = ext::a_take(ls).await;\n    let t = ext::a_take(mk_s());\n    let u = ext::a_take(ms.clone());\n    let w = ext::a_take(\"lit\");\n    let k = n + t.await + u.await + w.await;",
+    "async: let tl = ext::Tally::new();\n    let a = tl.a_count().await + pt.a_count().await;\n    let t = tl.a_count();\n    let u = ext::Tally::new().a_count();\n    let k = a + t.await + u.await;",
+    "async: let mut tl = ext::Tally::new();\n    ext::a_bump_tally(tl).await;\n    read_i(tl.count());",
+    "async: let s = Shared::new(mk_cfg());\n    let t1 = a_cfg(s.clone());\n    let t2 = a_cfg(s.clone());\n    let n = t1.await + t2.await;\n    let all = Task::all(vec![a_cfg(s.clone()), a_cfg(s.clone())]).await;\n    let m = s.clone().a_twice();\n    let k = m.await + s.a_twice().await;\n    let t3 = a_cfg(s);\n    read_i(t3.await);",
     "let b = lp == pp && pp == lp && mp == pp && lp == first_of(pv) && first_of(lv) == mp && lv[0] == pp && lq.p == pp && pp == lq.p && (if c { lp } else { pp }) == mp && pp == { mk_p() } && (if c { mk_p() } else { mk_p() }) == lp;\n    let p2 = pp.clone();\n    read_p(p2);\n    let v2 = pv.clone();\n    read_v(v2);\n    let p3 = first_of(pv).clone();\n    let mut q = Q { p: p3, n: 1, e: pe.clone(), v: mv.clone() };\n    change_q(q);\n    let copies: Vec<P> = lv.iter().map(|p| p.clone()).collect();\n    let same = copies == lv && lv.iter().any(|p| p == pp) && lv.iter().filter(|p| p != mp).count() > 0;\n    lv.push(pp.clone());\n    let last = lv[0].clone();\n    read_p(last);",
 ];
 
@@ -1306,6 +1486,83 @@ const MUST_PASS: &[&str] = &[
 /// with): accepting one is unsound. The rustc code is empty for a case
 /// in [`STRICTER_THAN_RUST`] or [`UNEMITTED`].
 const MUST_REJECT: &[(&str, &str, &str)] = &[
+    // Nothing reached through a `Shared` changes (milestone 5b1 spec
+    // 2.6): an assignment, a changing table call, and a `mut` parameter.
+    (
+        "let mut s = Shared::new(mk_cfg());\n    s.factor = 3;",
+        "V0310",
+        "E0594",
+    ),
+    (
+        "let mut s = Shared::new(mk_cfg());\n    s.items.push(mk_p());",
+        "V0310",
+        "E0596",
+    ),
+    (
+        "let mut s = Shared::new(mk_cfg());\n    let n = pick(s.items);",
+        "V0310",
+        "E0596",
+    ),
+    // A started call's arguments are owned slots the task keeps
+    // (milestone 5b1 spec 3): a parameter, an element, a value moved in
+    // and used again, a task awaited twice, and one detached inside a
+    // closure; and no task may be lent to a `mut` parameter or `mut self`.
+    (
+        "async: let t = a_p(pp);\n    read_p(t.await);",
+        "V0304",
+        "E0521",
+    ),
+    (
+        "async: let t = a_p(lv[0]);\n    read_p(t.await);",
+        "V0304",
+        "E0507",
+    ),
+    (
+        "async: let t = a_len(pp.s);\n    t.await;",
+        "V0304",
+        "E0507",
+    ),
+    (
+        "async: let t = a_p(lp);\n    read_p(lp);\n    read_p(t.await);",
+        "V0305",
+        "E0382",
+    ),
+    (
+        "async: let t = a_i(li);\n    let a = t.await;\n    let b = t.await;",
+        "V0305",
+        "E0382",
+    ),
+    (
+        "async: let t = a_i(li);\n    let n: Vec<i32> = ln.iter().map(|x| {\n        t.detach();\n        x\n    }).collect();",
+        "V0304",
+        "E0507",
+    ),
+    ("async: let t = a_bump(lp);\n    t.await;", "V0309", "E0308"),
+    // A collected `map` of started calls given borrowed items, and a
+    // list of tasks given to `Task::all` twice.
+    (
+        "async: let c = Task::all(lw.iter().map(|w| a_len(w)).collect()).await;",
+        "V0304",
+        "E0597",
+    ),
+    (
+        "async: let b = Task::all(lv.iter().map(|p| a_p(p)).collect()).await;",
+        "V0304",
+        "E0597",
+    ),
+    (
+        "async: let ts = vec![a_i(li)];\n    let a = Task::all(ts).await;\n    let b = Task::all(ts).await;",
+        "V0305",
+        "E0382",
+    ),
+    ("async: let t = lp.a_inc();\n    t.await;", "V0309", "E0308"),
+    // A started `.rs` async function given a `&mut` parameter: the task
+    // lends its own copy as `&`, so the Rust does not build either.
+    (
+        "async: let mut tl = ext::Tally::new();\n    let t = ext::a_bump_tally(tl);\n    t.await;",
+        "V0309",
+        "E0308",
+    ),
     // A `Vec` of borrowed items has no Varyk type (M4 spec 3.3), and a
     // looked-into `find` on them none of its own (M4 spec 2.8).
     (
@@ -2008,11 +2265,20 @@ fn cases() -> Vec<(String, String, &'static str)> {
     cases
 }
 
+/// The marker starting the body of a case of an async function
+/// (milestone 5b1): the harness writes the case as an `async fn`.
+const ASYNC_CASE: &str = "async: ";
+
 /// The case function `name`: setup, the case, then the epilogue unless
-/// the case ends in a returned value.
+/// the case ends in a returned value; an `async fn` for a body starting
+/// with [`ASYNC_CASE`].
 fn function(name: &str, body: &str, ret: &str) -> String {
     let epilogue = if ret.is_empty() { EPILOGUE } else { "" };
-    format!("fn {name}({PARAMS}){ret} {{\n{SETUP}    {body}\n{epilogue}}}\n")
+    let (asyncness, body) = match body.strip_prefix(ASYNC_CASE) {
+        Some(body) => ("async ", body),
+        None => ("", body),
+    };
+    format!("{asyncness}fn {name}({PARAMS}){ret} {{\n{SETUP}    {body}\n{epilogue}}}\n")
 }
 
 /// This test process's scratch directory, `soundness/<pid>`, cleared once
@@ -2662,6 +2928,14 @@ const MUST_RUN_TREES: &[(&str, Files, &str)] = &[
         ],
         "2 items\n",
     ),
+    (
+        "a task started and then cancelled by a `?` that returns before it is awaited (milestone 5b1 spec 2.4)",
+        &[(
+            "main.vr",
+            "async fn shout() {\n    time::sleep(50).await;\n    println!(\"the task ran\");\n}\n\nasync fn fail() -> Result<i32, Error> {\n    Err(Error::new(\"no\"))\n}\n\nasync fn work() -> Result<i32, Error> {\n    let t = shout();\n    let n = fail().await?;\n    t.await;\n    Ok(n)\n}\n\nasync fn main() {\n    match work().await {\n        Ok(n) => println!(\"{}\", n),\n        Err(e) => println!(\"failed: {}\", e.message()),\n    }\n    time::sleep(300).await;\n    println!(\"done\");\n}\n",
+        )],
+        "failed: no\ndone\n",
+    ),
 ];
 
 #[test]
@@ -2719,12 +2993,25 @@ const MUST_TEST: &[&str] = &[
     "lv.push(mk_p());\n    assert_eq(lv.len(), 2);\n    assert_eq(lv.pop(), Some(mk_p()));\n    assert_eq(lv.len(), 1);",
 ];
 
+/// Bodies of `#[test] async fn`s (milestone 5b1 spec 2.2), written and run
+/// as [`MUST_TEST`]'s are.
+const MUST_TEST_ASYNC: &[&str] = &[
+    "let t = a_i(3);\n    let u = lp.a_n();\n    assert_eq(t.await + u.await, 4);\n    a_i(1).detach();",
+    "time::sleep(1).await;\n    assert_eq(a_len(ls).await, 4);\n    assert_eq(lp.a_n().await, 1);\n    assert_eq(a_p(lp).await, lp);\n    assert_eq(a_try(2).await, Ok(4));\n    assert(a_r(0).await.is_err());\n    read_s(ls);",
+    "assert_eq(Task::all(ln.iter().map(|x| a_i(x)).collect()).await, vec![1, 2]);\n    assert_eq(Task::all(vec![a_r(1), a_r(2)]).await, Ok(vec![1, 2]));\n    assert_eq(Task::all(vec![a_r(1), a_r(0)]).await, Err(\"negative\"));\n    let rs = Task::all_settled(vec![a_r(2), a_r(0)]).await;\n    assert_eq(rs, vec![Ok(2), Err(\"negative\")]);",
+];
+
 #[test]
 fn tests_with_asserts_build_and_pass() {
     let mut source = format!("{PRELUDE}\nfn main() {{}}\n");
     for (index, body) in MUST_TEST.iter().enumerate() {
         source.push_str(&format!(
             "\n#[test]\nfn t{index:02}() {{\n{SETUP}    let c = true;\n    {body}\n}}\n"
+        ));
+    }
+    for (index, body) in MUST_TEST_ASYNC.iter().enumerate() {
+        source.push_str(&format!(
+            "\n#[test]\nasync fn a{index:02}() {{\n{SETUP}    let c = true;\n    {body}\n}}\n"
         ));
     }
     let entry = write_program("tests", &[("main.vr", &source), ("ext.rs", EXT_RS)]);

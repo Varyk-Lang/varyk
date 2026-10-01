@@ -3,7 +3,6 @@ mod ext;
 fn main() {
     let x = ext::A::new();
     let y = ext::A::c();
-    x.a();
     x.t();
     x.g(1);
     x.clone();

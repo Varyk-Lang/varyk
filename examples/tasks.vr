@@ -1,0 +1,79 @@
+// expected output:
+// fetched user 7
+// sent receipt to ann
+// fast then slow: 7 and 2
+// total of ten squares: 385
+// doubled 21 is 42
+// slow task done
+
+struct Counter {
+    step: i64,
+}
+
+impl Counter {
+    async fn next(self, from: i64) -> i64 {
+        time::sleep(5).await;
+        from + self.step
+    }
+}
+
+async fn fetch_user(id: i64) -> string {
+    time::sleep(30).await;
+    format!("user {}", id)
+}
+
+async fn send_receipt(to: string) -> string {
+    time::sleep(30).await;
+    format!("receipt to {}", to)
+}
+
+async fn square(n: i64) -> i64 {
+    time::sleep(5).await;
+    n * n
+}
+
+async fn slow(n: i64) -> i64 {
+    time::sleep(40).await;
+    n
+}
+
+async fn double(n: i64) -> i64 {
+    time::sleep(5).await;
+    n * 2
+}
+
+async fn main() {
+    // Both start at once, so together they take as long as the slower one.
+    let user = fetch_user(7);
+    let receipt = send_receipt("ann".clone());
+    println!("fetched {}", user.await);
+    println!("sent {}", receipt.await);
+
+    let late = slow(2);
+    let early = Counter { step: 1 }.next(6);
+    println!("fast then slow: {} and {}", early.await, late.await);
+
+    let ids: Vec<i64> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    let squares = Task::all(ids.iter().map(|id| square(id)).collect()).await;
+    let mut total: i64 = 0;
+    for s in squares.iter() {
+        total = total + s;
+    }
+    println!("total of ten squares: {}", total);
+
+    println!("doubled 21 is {}", double(21).await);
+    slow(1).detach();
+    time::sleep(100).await;
+    println!("slow task done");
+}
+
+#[test]
+async fn doubles() {
+    assert_eq(double(4).await, 8);
+}
+
+#[test]
+async fn counts() {
+    let c = Counter { step: 3 };
+    assert_eq(c.next(1).await, 4);
+}

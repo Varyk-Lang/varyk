@@ -1,0 +1,33 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct User {
+    name: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+impl User {
+    pub async fn greet(&self, times: i64) -> String {
+        ::std::format!("{} x{}", self.name, times)
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn load(u: &User) -> i64 {
+    ::varyk_std::time::sleep(10u64).await;
+    (u.name.len() as i64)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    ::varyk_std::run(async {
+        ::varyk_std::start();
+        ::varyk_std::tracing::info!("starting");
+        let u = User { name: "ann".to_string() };
+        let n = load(&u).await;
+        ::std::println!("{} {}", n, User::greet(&u, 2i64).await);
+    })
+}

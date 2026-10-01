@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0305]: `u` was given away earlier and cannot be used again
+  --> crates/varyk/tests/fixtures/errors/v0305_used_after_given_to_task/main.vr:12:20
+   |
+11 |     let task = send_email(u);
+   |                           - `u` is given away here
+12 |     println!("{}", u.name);
+   |                    ^ `u` was given away earlier and cannot be used again

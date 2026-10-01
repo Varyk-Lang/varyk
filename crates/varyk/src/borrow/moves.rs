@@ -27,7 +27,7 @@ use varyk_syntax::Span;
 
 use super::chains::source_receiver;
 use super::slots::clone_fix_it;
-use super::{Context, captured_in, roots};
+use super::{Context, captured_in, roots, started_modes};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
     HirBlock, HirExpr, HirExprKind, HirForHead, HirFunction, HirPattern, HirStmt, LocalId,
@@ -503,8 +503,14 @@ impl<R: Rule> Walker<'_, R> {
             | HirExprKind::Bool(_)
             | HirExprKind::String(_) => {}
             HirExprKind::Local(id) => self.access(*id, expr.span, access),
-            HirExprKind::Call { callee, args, .. } => {
+            HirExprKind::Call {
+                callee,
+                args,
+                started,
+                ..
+            } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
+                let (modes, keeps) = started_modes(*started, modes, keeps);
                 self.call(args.iter(), &modes, keeps);
             }
             // The receiver is an argument: a changing method changes it.
@@ -512,9 +518,11 @@ impl<R: Rule> Walker<'_, R> {
                 receiver,
                 method,
                 args,
+                started,
                 ..
             } => {
                 let (_, modes, keeps) = self.cx.method(*method);
+                let (modes, keeps) = started_modes(*started, modes, keeps);
                 self.call(std::iter::once(&**receiver).chain(args), &modes, keeps);
             }
             // Reading or moving a field or an element reads its base;
@@ -539,6 +547,9 @@ impl<R: Rule> Walker<'_, R> {
             | HirExprKind::Assert { cond: operand, .. } => {
                 self.expr(operand, Access::Read);
             }
+            // `.await` takes a task local (milestone 5b1 spec 3); a call
+            // is run in place.
+            HirExprKind::Await(operand) => self.expr(operand, Access::Move),
             HirExprKind::Binary { lhs, rhs, .. } => {
                 self.expr(lhs, Access::Read);
                 self.expr(rhs, Access::Read);

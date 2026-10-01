@@ -32,6 +32,8 @@ pub const KEYWORDS: &[(&str, TokenKind)] = &[
     ("super", TokenKind::SuperKw),
     ("use", TokenKind::UseKw),
     ("as", TokenKind::As),
+    ("async", TokenKind::Async),
+    ("await", TokenKind::Await),
     ("true", TokenKind::BoolLiteral(true)),
     ("false", TokenKind::BoolLiteral(false)),
 ];
@@ -46,9 +48,9 @@ fn keyword_kind(word: &str) -> Option<TokenKind> {
 /// Every other Rust keyword and reserved word, including the 2024-edition
 /// ones.
 pub const RESERVED_KEYWORDS: &[&str] = &[
-    "async", "await", "const", "dyn", "extern", "loop", "move", "ref", "Self", "static", "trait",
-    "type", "unsafe", "where", "abstract", "become", "box", "do", "final", "gen", "macro",
-    "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
+    "const", "dyn", "extern", "loop", "move", "ref", "Self", "static", "trait", "type", "unsafe",
+    "where", "abstract", "become", "box", "do", "final", "gen", "macro", "override", "priv", "try",
+    "typeof", "unsized", "virtual", "yield",
 ];
 
 /// Lexes `file` into tokens and any syntax errors found along the way.
@@ -482,6 +484,8 @@ mod tests {
             ("super", TokenKind::SuperKw),
             ("use", TokenKind::UseKw),
             ("as", TokenKind::As),
+            ("async", TokenKind::Async),
+            ("await", TokenKind::Await),
             ("true", TokenKind::BoolLiteral(true)),
             ("false", TokenKind::BoolLiteral(false)),
         ];

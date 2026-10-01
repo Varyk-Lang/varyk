@@ -106,7 +106,7 @@ generated Rust have no stability guarantee before 1.0.
 | Rust-layer errors | a line-level source map reports a rejection of Varyk's own generated code as a Varyk diagnostic, V0900, at the Varyk line responsible; a rejection inside a user's own `.rs` module passes through verbatim at their file | the two-layer model's promised net (M1 §6.5): generated-code failures read in Varyk's terms, the user's own Rust stays in the user's terms (M3 §5) |
 | rustc warnings | `#[allow(warnings, arithmetic_overflow, unconditional_panic)]` on every generated item, none on copied `.rs` files, and none on `mod` lines but `#[allow(non_snake_case)]` for a `.vr` module whose name is not in snake case (M3) | one tree for all three build destinations, works under `include!`, the user's own `.rs` warnings stay visible; verified with rustc |
 | Diagnostics renderer | `annotate-snippets` | maintained by the Rust project; no renderer to own |
-| Concurrency | Rust async, JavaScript surface, built-in runtime | the Rust ecosystem is already async |
+| Concurrency | Rust async, JavaScript surface, built-in runtime (settled in 5b1 below) | the Rust ecosystem is already async |
 | License | MIT or Apache-2.0 | Rust ecosystem convention |
 | Learnability | designed to be learnable by a developer building services who has never written Rust; plain-word diagnostics | backend developers coming from Go, TypeScript, or Python come first, then developers coming from Rust, then AI agents |
 | AI agents | first-class writers, humans win on conflicts | agents already write good code and the slow part is reviewing it; a small, concrete language with one way to do each thing keeps agent output reviewable, rustc checks its safety, and structured diagnostics close the loop |
@@ -158,3 +158,14 @@ generated Rust have no stability guarantee before 1.0.
 | Versioning | a version range in `Cargo.toml`, minor and lock checked by `varyk check` | upgrades are `cargo update`; a mismatch is a diagnostic, never a rustc error |
 | Single files | depend on `varyk-std` at the compiler's exact version | there is no manifest to respect |
 | TOML | not in 5a | nothing on the golden path needs it; the same machinery adds it later |
+| Waiting (5b1) | explicit `async fn` and `.await` | familiar to JavaScript and Rust writers and to models; a waiting point is visible |
+| Starting (5b1) | a call without `.await` starts a task at once; no `spawn` | JavaScript's eager promises; two unawaited calls really overlap |
+| Runtime (5b1) | multi-threaded tokio inside `varyk-std` | tokio, the HTTP server, and the database need `Send` anyway; tasks spread over cores |
+| Ownership transfer (5b1) | a started call's arguments are owned slots; no new syntax | the only place a value outlives its function; parameters still borrow |
+| Dropped tasks (5b1) | cancelled; `detach` to keep running | no work leaks past the code that started it; a forgotten `.await` is an error, not a background job |
+| Waiting on many (5b1) | `Task::all` (first `Err` cancels the rest) and `Task::all_settled` (every outcome) | `Promise.all` and `Promise.allSettled`; two names keep cancellation visible |
+| Names (5b1) | `Task` reserved; `todo`'s `Task` renamed | `Task::all` reads as in other languages; a type with associated functions follows `Vec::new()` |
+| Shared values (5b1) | `Shared<T>` of a struct, read-only, `Arc` underneath, in parameters and `let`s only | one value for thousands of tasks without a copy each; 5b2's application state |
+| Where tasks live (5b1) | made by a `let`, `.detach()`, `vec!`, or collected `map`; only awaited, detached, or given to `Task::all` or `Task::all_settled` | no task is dropped by accident or moved out of a borrowed place |
+| Async recursion (5b1) | refused | Rust needs a boxed future for it; nothing in the examples recurses |
+| Concurrency model (5b1) | a task is a Rust future spawned on the tokio runtime `varyk_std::run` starts; `Task<T>` wraps its join handle and aborts on drop; every Varyk type is `Send` and `Sync`, so a `.rs` type that is not is refused at build (V0901) | the model runs on the Rust ecosystem unchanged, and the writer never sees `Send`, `Sync`, or `Pin` |

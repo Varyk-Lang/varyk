@@ -8,13 +8,14 @@ use std::collections::HashMap;
 
 use varyk_syntax::{Expr, ExprKind, Ident, Path, Span};
 
+use super::asyncs::{TaskPlace, started_ty};
 use super::{FnChecker, is_builtin_variant, opaque_variant, unsupported_rust_signature};
-use crate::builtins::{self, Owner};
+use crate::builtins::{self, BuiltinId, Owner};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirExpr, HirExprKind, VariantRef};
 use crate::resolve::{
     Callee, EnumId, LookupError, UserType, VariantFieldsDef, display_path, no_parent, not_visible,
-    path_text, split_last,
+    path_text, shared_of_other, split_last,
 };
 use crate::types::Ty;
 use crate::types::derives::{self, Direction, Medium};
@@ -74,9 +75,11 @@ impl FnChecker<'_> {
             return self.builtin_variant(&name.name, None, expected, span);
         }
         let id = self.lookup_local(name)?;
+        let ty = self.locals[id.0 as usize].ty.clone();
+        self.task_local(id, &ty, span)?;
         Some(HirExpr {
             kind: HirExprKind::Local(id),
-            ty: self.locals[id.0 as usize].ty.clone(),
+            ty,
             span,
         })
     }
@@ -101,11 +104,16 @@ impl FnChecker<'_> {
             "Vec" => Some(Owner::Vec),
             "HashMap" => Some(Owner::HashMap),
             "Error" => Some(Owner::Error),
+            // Reserved (milestone 5b1 spec 2.8): no type of the program can
+            // be called `Task`.
+            "Task" => Some(Owner::Task),
+            "Shared" => Some(Owner::Shared),
             // A module of the standard library (M5a spec 2.10): no module
             // or type of the program can be called `json`.
             "json" => Some(Owner::Json),
             "env" => Some(Owner::Env),
             "log" => Some(Owner::Log),
+            "time" => Some(Owner::Time),
             _ => None,
         };
         if let (None, Some(owner)) = (&prefix, builtin) {
@@ -252,14 +260,26 @@ impl FnChecker<'_> {
         } else if args.is_none() {
             format!("`{full}` is a function, not a value; call it, as in `{full}(..)`")
         } else {
+            let started = match id {
+                Callee::Varyk(fn_id) if self.symbols.fns[fn_id.0 as usize].is_async => {
+                    self.async_call(Some(fn_id), &full, span)?
+                }
+                Callee::Imported(imported)
+                    if self.symbols.imported[imported.0 as usize].is_async =>
+                {
+                    self.async_call(None, &full, span)?
+                }
+                _ => false,
+            };
             let args = self.arguments(&full, &params, args.unwrap_or_default(), span)?;
             return Some(HirExpr {
                 kind: HirExprKind::Call {
                     callee: id,
                     args,
                     rooted: None,
+                    started,
                 },
-                ty: ret,
+                ty: started_ty(started, ret),
                 span,
             });
         };
@@ -294,6 +314,15 @@ impl FnChecker<'_> {
                     "`env` has no function `{}`; its only function is `env::parse()`",
                     name.name
                 ),
+                None if owner == Owner::Time => format!(
+                    "`time` has no function `{}`; its only function is `time::sleep(..)`",
+                    name.name
+                ),
+                None if owner == Owner::Task => format!(
+                    "`Task` has no function `{}`; its functions are `Task::all` and \
+                     `Task::all_settled`",
+                    name.name
+                ),
                 None if owner == Owner::Log => format!(
                     "`log` has no function `{}`; its functions are `log::debug`, `log::info`, \
                      `log::warn`, and `log::error`",
@@ -302,7 +331,11 @@ impl FnChecker<'_> {
                 None => format!(
                     "`{type_name}` has no function `{}`; the only one is `{type_name}::new({})`",
                     name.name,
-                    if owner == Owner::Error { ".." } else { "" }
+                    if matches!(owner, Owner::Error | Owner::Shared) {
+                        ".."
+                    } else {
+                        ""
+                    }
                 ),
                 Some(id) => {
                     let args = if id.get().params.is_empty() && owner != Owner::Log {
@@ -319,6 +352,13 @@ impl FnChecker<'_> {
         };
         let entry = id.get();
         self.uses_std |= entry.uses_std();
+        if owner == Owner::Task {
+            return self.task_all(id, args, span);
+        }
+        if owner == Owner::Shared {
+            return self.shared_new(id, args, expected, span);
+        }
+        let started = entry.is_async && self.async_call(None, &full, span)?;
         if matches!(owner, Owner::Json | Owner::Env) {
             return self.convert_call(id, args, expected, span);
         }
@@ -327,7 +367,7 @@ impl FnChecker<'_> {
         }
         // `Error::new` has no type to take from where it goes.
         let subst = match owner {
-            Owner::Error => Some(builtins::Subst::default()),
+            Owner::Error | Owner::Time => Some(builtins::Subst::default()),
             _ => expected
                 .as_ref()
                 .and_then(Owner::of)
@@ -361,8 +401,45 @@ impl FnChecker<'_> {
                 callee: Callee::Builtin(id),
                 args,
                 rooted: None,
+                started,
             },
-            ty: entry.result.ty(&subst),
+            ty: started_ty(started, entry.result.ty(&subst)),
+            span,
+        })
+    }
+
+    /// `Shared::new(value)` (milestone 5b1 spec 2.6): `value` typed with the
+    /// struct an expected `Shared` holds, and a struct whether or not a
+    /// type is written (V0216).
+    fn shared_new(
+        &mut self,
+        id: BuiltinId,
+        args: &[Expr],
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Option<HirExpr> {
+        let [value] = args else {
+            self.arguments("Shared::new", &[Ty::Unit], args, span);
+            return None;
+        };
+        let inner = match expected {
+            Some(Ty::Shared(inner)) => Some(*inner),
+            _ => None,
+        };
+        let value = self.expr(value, inner)?;
+        if !matches!(value.ty, Ty::Struct(_)) {
+            self.diagnostics.push(shared_of_other(span));
+            return None;
+        }
+        let ty = Ty::Shared(Box::new(value.ty.clone()));
+        Some(HirExpr {
+            kind: HirExprKind::Call {
+                callee: Callee::Builtin(id),
+                args: vec![value],
+                rooted: None,
+                started: false,
+            },
+            ty,
             span,
         })
     }
@@ -480,6 +557,7 @@ impl FnChecker<'_> {
                 callee: Callee::Builtin(id),
                 args,
                 rooted: None,
+                started: false,
             },
             ty: entry.result.ty(&subst),
             span,
@@ -793,7 +871,7 @@ impl FnChecker<'_> {
             if failed && element_ty.is_none() {
                 break;
             }
-            let value = self.expr(element, element_ty.clone());
+            let value = self.expr_in(element, element_ty.clone(), TaskPlace::VecElement);
             let value = match (&element_ty, value) {
                 (Some(ty), Some(value)) => self.expect(value, ty),
                 (_, value) => value,
@@ -814,7 +892,7 @@ impl FnChecker<'_> {
             self.type_hole(span, expected.as_ref(), "Vec<_>", what, shape);
             return None;
         };
-        Some(HirExpr {
+        self.tasks_made(HirExpr {
             kind: HirExprKind::VecLit(lowered),
             ty: Ty::Vec(Box::new(element_ty)),
             span,

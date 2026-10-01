@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0311]: `name_of` is an async function, so it cannot return part of `user`; return a copy instead, with `.clone()`
+ --> crates/varyk/tests/fixtures/errors/v0311_async_returns_part/main.vr:6:5
+  |
+6 |     user.name
+  |     ^^^^^^^^^ `name_of` is an async function, so it cannot return part of `user`; return a copy instead, with `.clone()`
+  |
+  = note: every value an async function returns must be new, since it is handed over after the function has stopped and started again
+  = note: in Rust terms, the returned future would borrow its arguments, which Varyk does not support
+help: insert `.clone()` after `name`

@@ -1,0 +1,25 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct User {
+    name: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn take(n: i64, u: &User, c: &User, s: &str) -> i64 {
+    n
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    ::varyk_std::run(async {
+        let u = User { name: "ann".to_string() };
+        let v = User { name: "bo".to_string() };
+        let a = take(1i64, &v, &u.clone(), "x").await;
+        let t = match (2i64, u, (User { name: "c".to_string() }).clone(), "y".to_string(),) { (varyk_0, varyk_1, varyk_2, varyk_3,) => ::varyk_std::Task::start(async move { take(varyk_0, &varyk_1, &varyk_2, &varyk_3).await }) };
+        ::std::println!("{} {}", a, t.await);
+    })
+}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0203]: a `Shared<Config>` cannot be printed with `{}`; print the fields you read through it instead
+ --> crates/varyk/tests/fixtures/errors/v0203_print_shared/main.vr:7:20
+  |
+7 |     println!("{}", config);
+  |                    ^^^^^^ a `Shared<Config>` cannot be printed with `{}`; print the fields you read through it instead
+  |
+  = note: only numbers, `bool`, `string`, and `Error` have a printed form

@@ -1930,7 +1930,7 @@ fn giving_away_the_root_of_an_alias_into_a_payload_is_v0307() {
 
 // --- Methods, the built-in table, and indexing (spec 2.5, 2.6, 3.1) ---------
 
-const TASK: &str = "struct Task {\n    label: string,\n    done: bool,\n}\nimpl Task {\n    fn new(label: string) -> Task {\n        Task { label: label.clone(), done: false }\n    }\n\n    fn complete(mut self) {\n        self.done = true;\n    }\n\n    fn label(self) -> string {\n        self.label.clone()\n    }\n}\nfn read(s: string) {}\nfn show(t: Task) {}\nfn mk() -> Task {\n    Task::new(\"m\")\n}\n";
+const TASK: &str = "struct Item {\n    label: string,\n    done: bool,\n}\nimpl Item {\n    fn new(label: string) -> Item {\n        Item { label: label.clone(), done: false }\n    }\n\n    fn complete(mut self) {\n        self.done = true;\n    }\n\n    fn label(self) -> string {\n        self.label.clone()\n    }\n}\nfn read(s: string) {}\nfn show(t: Item) {}\nfn mk() -> Item {\n    Item::new(\"m\")\n}\n";
 
 fn with_task(body: &str) -> String {
     format!("{TASK}{body}{MAIN}")
@@ -1965,9 +1965,9 @@ fn a_mut_self_method_on_a_let_binding_is_v0302_with_its_fix_it() {
 
 #[test]
 fn a_mut_self_method_on_a_non_mut_parameter_is_v0303() {
-    let (d, sources) = one_error(&with_task("fn f(t: Task) {\n    t.complete();\n}\n"));
+    let (d, sources) = one_error(&with_task("fn f(t: Item) {\n    t.complete();\n}\n"));
     assert_eq!(d.code, codes::V0303, "{d:#?}");
-    assert_mut_fix_it(&d, &sources, "fn f(t: Task)", "t: Task");
+    assert_mut_fix_it(&d, &sources, "fn f(t: Item)", "t: Item");
 }
 
 #[test]
@@ -1986,14 +1986,14 @@ fn a_changing_built_in_on_a_non_mut_place_is_v0300_or_v0301() {
 #[test]
 fn reading_methods_and_changes_on_mutable_places_are_accepted() {
     ok(&with_task(
-        "fn f(t: Task, v: Vec<Task>, mut w: Vec<Task>) {\n    read(t.label());\n    let n = v.len();\n    w.push(mk());\n    w[0].complete();\n    mk().complete();\n    let mut tasks = vec![mk()];\n    tasks[0].complete();\n    tasks.push(Task::new(\"b\"));\n    let last = tasks.pop();\n}\n",
+        "fn f(t: Item, v: Vec<Item>, mut w: Vec<Item>) {\n    read(t.label());\n    let n = v.len();\n    w.push(mk());\n    w[0].complete();\n    mk().complete();\n    let mut tasks = vec![mk()];\n    tasks[0].complete();\n    tasks.push(Item::new(\"b\"));\n    let last = tasks.pop();\n}\n",
     ));
 }
 
 #[test]
 fn an_element_let_is_an_alias_of_its_vec_unless_copy() {
     let program = ok(&with_task(
-        "fn f(v: Vec<Task>) {\n    let mut tasks = vec![mk()];\n    let first = tasks[0];\n    show(first);\n    let mut second = tasks[0];\n    second.complete();\n    let from_param = v[0];\n    let ns = vec![1, 2];\n    let n = ns[1];\n    show(from_param);\n}\n",
+        "fn f(v: Vec<Item>) {\n    let mut tasks = vec![mk()];\n    let first = tasks[0];\n    show(first);\n    let mut second = tasks[0];\n    second.complete();\n    let from_param = v[0];\n    let ns = vec![1, 2];\n    let n = ns[1];\n    show(from_param);\n}\n",
     ));
     let f = function(&program, "f");
     let tasks = f
@@ -2028,7 +2028,7 @@ fn an_element_let_is_an_alias_of_its_vec_unless_copy() {
 #[test]
 fn an_element_is_changed_only_through_a_mutable_vec() {
     let (d, _) = one_error(&with_task(
-        "fn f(v: Vec<Task>) {\n    v[0].complete();\n}\n",
+        "fn f(v: Vec<Item>) {\n    v[0].complete();\n}\n",
     ));
     assert_eq!(d.code, codes::V0303, "{d:#?}");
     let (d, _) = one_error("fn main() {\n    let v = vec![1];\n    v[0] = 2;\n}\n");
@@ -2038,7 +2038,7 @@ fn an_element_is_changed_only_through_a_mutable_vec() {
 #[test]
 fn an_element_is_an_owned_slot_when_assigned() {
     let (d, sources) = one_error(&with_task(
-        "fn f(t: Task) {\n    let mut v = vec![mk()];\n    v[0] = t;\n}\n",
+        "fn f(t: Item) {\n    let mut v = vec![mk()];\n    v[0] = t;\n}\n",
     ));
     assert_v0304(&d, part_of(&sources, "= t;", "t"), "`t`");
     let program = ok(&with_task(
@@ -2050,7 +2050,7 @@ fn an_element_is_an_owned_slot_when_assigned() {
 #[test]
 fn push_takes_an_owned_slot() {
     let (d, sources) = one_error(&with_task(
-        "fn f(t: Task) {\n    let mut v = vec![mk()];\n    v.push(t);\n}\n",
+        "fn f(t: Item) {\n    let mut v = vec![mk()];\n    v.push(t);\n}\n",
     ));
     assert_v0304(&d, part_of(&sources, "push(t)", "t"), "`t`");
 
@@ -2140,7 +2140,7 @@ fn an_index_using_its_vec_in_a_changing_place_is_v0306() {
         ),
     ] {
         let (d, sources) = one_error(&with_task(&format!(
-            "fn change(mut t: Task) {{}}\nfn f() {{\n    {stmts}\n}}\n"
+            "fn change(mut t: Item) {{}}\nfn f() {{\n    {stmts}\n}}\n"
         )));
         assert_eq!(d.code, codes::V0306, "{stmts}: {d:#?}");
         let root = at.split('.').next().expect("root");
@@ -2167,7 +2167,7 @@ fn a_string_element_of_a_temporary_vec_bound_by_let_is_a_reference_to_a_string()
 
 // --- `match`: bindings borrow from a place, own from a temporary (3.2) ---
 
-const MATCHING: &str = "enum Status {\n    Open,\n    Done,\n    Named(string),\n    Count(i32),\n    Held(Task),\n}\nstruct Board {\n    status: Status,\n}\nimpl Board {\n    fn reopen(mut self) {\n        match self.status {\n            Status::Done => {\n                self.status = Status::Open;\n            }\n            Status::Count(n) => {\n                self.status = Status::Open;\n                println!(\"{}\", n);\n            }\n            _ => {}\n        }\n    }\n}\nfn mk_o() -> Option<Task> {\n    Some(mk())\n}\nfn mk_os() -> Option<string> {\n    None\n}\nfn change_i(mut n: i32) {}\nfn change_t(mut t: Task) {}\n";
+const MATCHING: &str = "enum Status {\n    Open,\n    Done,\n    Named(string),\n    Count(i32),\n    Held(Item),\n}\nstruct Board {\n    status: Status,\n}\nimpl Board {\n    fn reopen(mut self) {\n        match self.status {\n            Status::Done => {\n                self.status = Status::Open;\n            }\n            Status::Count(n) => {\n                self.status = Status::Open;\n                println!(\"{}\", n);\n            }\n            _ => {}\n        }\n    }\n}\nfn mk_o() -> Option<Item> {\n    Some(mk())\n}\nfn mk_os() -> Option<string> {\n    None\n}\nfn change_i(mut n: i32) {}\nfn change_t(mut t: Item) {}\n";
 
 fn with_matching(body: &str) -> String {
     format!("{TASK}{MATCHING}{body}{MAIN}")
@@ -2186,7 +2186,7 @@ fn local_id(function: &HirFunction, name: &str) -> LocalId {
 #[test]
 fn bindings_on_a_place_are_read_only_aliases_and_on_a_temporary_owned() {
     let program = ok(&with_matching(
-        "fn f(b: Board, o: Option<Task>) {\n    let lo = mk_o();\n    match lo {\n        Some(a) => show(a),\n        None => {}\n    }\n    match o {\n        Some(p) => show(p),\n        None => {}\n    }\n    match b.status {\n        Status::Held(h) => show(h),\n        Status::Count(n) => println!(\"{}\", n),\n        _ => {}\n    }\n    match mk_o() {\n        Some(t) => show(t),\n        None => {}\n    }\n}\n",
+        "fn f(b: Board, o: Option<Item>) {\n    let lo = mk_o();\n    match lo {\n        Some(a) => show(a),\n        None => {}\n    }\n    match o {\n        Some(p) => show(p),\n        None => {}\n    }\n    match b.status {\n        Status::Held(h) => show(h),\n        Status::Count(n) => println!(\"{}\", n),\n        _ => {}\n    }\n    match mk_o() {\n        Some(t) => show(t),\n        None => {}\n    }\n}\n",
     ));
     let f = function(&program, "f");
     let alias = |origin| PlaceInfo {
@@ -2223,7 +2223,7 @@ fn a_binding_of_a_matched_owned_local_pushed_into_a_vec_is_v0304_saying_to_match
     // `found` holds a call result in a `let`, so matching on `found` and
     // pushing its binding is V0304; matching on the call directly is fine.
     let (d, sources) = one_error(&with_matching(
-        "fn f() {\n    let mut tasks: Vec<Task> = Vec::new();\n    let found = mk_o();\n    match found {\n        Some(task) => tasks.push(task),\n        None => {}\n    }\n}\n",
+        "fn f() {\n    let mut tasks: Vec<Item> = Vec::new();\n    let found = mk_o();\n    match found {\n        Some(task) => tasks.push(task),\n        None => {}\n    }\n}\n",
     ));
     assert_v0304(&d, part_of(&sources, "push(task)", "task"), "`found`");
     assert!(
@@ -2231,7 +2231,7 @@ fn a_binding_of_a_matched_owned_local_pushed_into_a_vec_is_v0304_saying_to_match
         "{d:#?}"
     );
     ok(&with_matching(
-        "fn f() {\n    let mut tasks: Vec<Task> = Vec::new();\n    match mk_o() {\n        Some(task) => tasks.push(task),\n        None => {}\n    }\n}\n",
+        "fn f() {\n    let mut tasks: Vec<Item> = Vec::new();\n    match mk_o() {\n        Some(task) => tasks.push(task),\n        None => {}\n    }\n}\n",
     ));
 }
 
@@ -2260,7 +2260,7 @@ fn an_arm_may_change_the_root_when_no_alias_from_the_pattern_is_used_after() {
 #[test]
 fn a_match_read_as_a_value_follows_the_if_rule() {
     let program = ok(&with_matching(
-        "fn f(o: Option<Task>, d: Task) {\n    let x = match o {\n        Some(t) => t,\n        None => d,\n    };\n    show(x);\n    let y = match mk_o() {\n        Some(t) => t,\n        None => mk(),\n    };\n    show(y);\n}\n",
+        "fn f(o: Option<Item>, d: Item) {\n    let x = match o {\n        Some(t) => t,\n        None => d,\n    };\n    show(x);\n    let y = match mk_o() {\n        Some(t) => t,\n        None => mk(),\n    };\n    show(y);\n}\n",
     ));
     let f = function(&program, "f");
     assert!(place(f, "x").borrowed, "{:?}", place(f, "x"));
@@ -2271,7 +2271,7 @@ fn a_match_read_as_a_value_follows_the_if_rule() {
     ));
     assert_eq!(d.code, codes::V0304, "{d:#?}");
     let (d, sources) = one_error(&with_matching(
-        "fn f(o: Option<Task>) {\n    show(match o {\n        Some(t) => t,\n        None => mk(),\n    });\n}\n",
+        "fn f(o: Option<Item>) {\n    show(match o {\n        Some(t) => t,\n        None => mk(),\n    });\n}\n",
     ));
     assert_eq!(d.code, codes::V0304, "{d:#?}");
     assert_eq!(d.span.start, span_of(&sources, "match o").start, "{d:#?}");
@@ -2327,7 +2327,7 @@ fn changing_a_binding_is_v0301_or_v0303_worded_for_what_it_is() {
 #[test]
 fn a_temporary_matched_on_gives_its_bindings_away_and_a_moved_head_cannot_be_matched() {
     let (d, _) = one_error(&with_matching(
-        "fn f() {\n    let mut tasks: Vec<Task> = Vec::new();\n    match mk_o() {\n        Some(t) => {\n            tasks.push(t);\n            show(t);\n        }\n        None => {}\n    }\n}\n",
+        "fn f() {\n    let mut tasks: Vec<Item> = Vec::new();\n    match mk_o() {\n        Some(t) => {\n            tasks.push(t);\n            show(t);\n        }\n        None => {}\n    }\n}\n",
     ));
     assert_eq!(d.code, codes::V0305, "{d:#?}");
     let (d, _) = one_error(&with_matching(
@@ -2338,7 +2338,7 @@ fn a_temporary_matched_on_gives_its_bindings_away_and_a_moved_head_cannot_be_mat
 
 // --- `for`: the variable borrows from a place, owns from a temporary (3.1, 3.2)
 
-const LOOPS: &str = "fn change_t(mut t: Task) {}\nfn change_i(mut n: i32) {}\nfn all() -> Vec<Task> {\n    vec![mk()]\n}\nfn words() -> Vec<string> {\n    vec![\"a\"]\n}\n";
+const LOOPS: &str = "fn change_t(mut t: Item) {}\nfn change_i(mut n: i32) {}\nfn all() -> Vec<Item> {\n    vec![mk()]\n}\nfn words() -> Vec<string> {\n    vec![\"a\"]\n}\n";
 
 fn with_loops(body: &str) -> String {
     format!("{TASK}{LOOPS}{body}{MAIN}")
@@ -2389,7 +2389,7 @@ fn an_alias_made_through_a_mutable_alias_keeps_its_root_from_being_used() {
     // A `let` of a part, a `match` binding, and a loop over the mutable
     // alias all reborrow it, so its root cannot be read while they are used.
     let (d, sources) = one_error(&with_loops(
-        "fn f(mut ts: Vec<Task>) {\n    let mut a = ts[0];\n    let s = a.label;\n    println!(\"{} {}\", ts.len(), s);\n}\n",
+        "fn f(mut ts: Vec<Item>) {\n    let mut a = ts[0];\n    let s = a.label;\n    println!(\"{} {}\", ts.len(), s);\n}\n",
     ));
     assert_eq!(d.code, codes::V0307, "{d:#?}");
     assert_eq!(d.span, part_of(&sources, "ts.len()", "ts"));
@@ -2418,7 +2418,7 @@ fn an_alias_made_through_a_mutable_alias_keeps_its_root_from_being_used() {
     );
     // Reading the mutable alias itself while its reborrow is used is fine.
     ok(&with_loops(
-        "fn f(mut ts: Vec<Task>) {\n    let mut a = ts[0];\n    let s = a.label;\n    println!(\"{} {}\", a.done, s);\n}\n",
+        "fn f(mut ts: Vec<Item>) {\n    let mut a = ts[0];\n    let s = a.label;\n    println!(\"{} {}\", a.done, s);\n}\n",
     ));
 }
 
@@ -2450,7 +2450,7 @@ fn the_vec_looped_over_may_change_after_the_loop_or_when_it_is_a_temporary() {
 #[test]
 fn a_for_variable_is_an_alias_a_copy_or_an_owned_value() {
     let program = ok(&with_loops(
-        "fn f(tasks: Vec<Task>) {\n    let mine = all();\n    for t in tasks {\n        show(t);\n    }\n    for m in mine {\n        show(m);\n    }\n    for o in all() {\n        show(o);\n    }\n    let ns = vec![1];\n    for n in ns {\n        println!(\"{}\", n);\n    }\n    for i in 0..3 {\n        println!(\"{}\", i);\n    }\n}\n",
+        "fn f(tasks: Vec<Item>) {\n    let mine = all();\n    for t in tasks {\n        show(t);\n    }\n    for m in mine {\n        show(m);\n    }\n    for o in all() {\n        show(o);\n    }\n    let ns = vec![1];\n    for n in ns {\n        println!(\"{}\", n);\n    }\n    for i in 0..3 {\n        println!(\"{}\", i);\n    }\n}\n",
     ));
     let f = function(&program, "f");
     let alias = |origin| PlaceInfo {
@@ -2478,18 +2478,18 @@ fn a_string_for_variable_refers_into_a_place_and_owns_from_a_temporary() {
 #[test]
 fn reading_through_a_for_variable_passes() {
     ok(&with_loops(
-        "fn f(tasks: Vec<Task>, values: Vec<i32>) -> i32 {\n    for t in tasks {\n        t.label();\n    }\n    let mut total = 0;\n    for value in values {\n        total = total + value;\n    }\n    total\n}\n",
+        "fn f(tasks: Vec<Item>, values: Vec<i32>) -> i32 {\n    for t in tasks {\n        t.label();\n    }\n    let mut total = 0;\n    for value in values {\n        total = total + value;\n    }\n    total\n}\n",
     ));
 }
 
 #[test]
 fn a_for_variable_over_a_place_cannot_be_kept_and_one_over_a_temporary_can() {
     let (d, sources) = one_error(&with_loops(
-        "fn f(tasks: Vec<Task>) {\n    let mut out: Vec<Task> = Vec::new();\n    for t in tasks {\n        out.push(t);\n    }\n}\n",
+        "fn f(tasks: Vec<Item>) {\n    let mut out: Vec<Item> = Vec::new();\n    for t in tasks {\n        out.push(t);\n    }\n}\n",
     ));
     assert_v0304(&d, part_of(&sources, "push(t)", "t"), "`tasks`");
     ok(&with_loops(
-        "fn f() {\n    let mut out: Vec<Task> = Vec::new();\n    for t in all() {\n        out.push(t);\n    }\n}\n",
+        "fn f() {\n    let mut out: Vec<Item> = Vec::new();\n    for t in all() {\n        out.push(t);\n    }\n}\n",
     ));
 }
 
@@ -2501,7 +2501,7 @@ fn changing_a_for_variable_is_v0301_or_v0303_worded_for_what_it_is() {
         ("change_t(t);", codes::V0303),
     ] {
         let (d, _) = one_error(&with_loops(&format!(
-            "fn f(mut tasks: Vec<Task>) {{\n    for t in tasks {{\n        {stmt}\n    }}\n}}\n"
+            "fn f(mut tasks: Vec<Item>) {{\n    for t in tasks {{\n        {stmt}\n    }}\n}}\n"
         )));
         assert_eq!(d.code, code, "{stmt}: {d:#?}");
         assert!(d.message.contains("change `tasks` itself"), "{d:#?}");
@@ -2534,7 +2534,7 @@ fn changing_a_for_variable_is_v0301_or_v0303_worded_for_what_it_is() {
 #[test]
 fn a_for_variable_passed_to_a_mut_parameter_suggests_looping_by_index() {
     let (d, _) = one_error(&with_loops(
-        "fn f(mut tasks: Vec<Task>) {\n    for t in tasks {\n        change_t(t);\n    }\n}\n",
+        "fn f(mut tasks: Vec<Item>) {\n    for t in tasks {\n        change_t(t);\n    }\n}\n",
     ));
     assert_eq!(d.code, codes::V0303, "{d:#?}");
     assert!(
@@ -2549,7 +2549,7 @@ fn a_for_variable_passed_to_a_mut_parameter_suggests_looping_by_index() {
 #[test]
 fn a_for_variable_assigned_to_suggests_looping_by_index() {
     let (d, _) = one_error(&with_loops(
-        "fn f(mut tasks: Vec<Task>) {\n    for t in tasks {\n        t.label = \"x\";\n    }\n}\n",
+        "fn f(mut tasks: Vec<Item>) {\n    for t in tasks {\n        t.label = \"x\";\n    }\n}\n",
     ));
     assert_eq!(d.code, codes::V0301, "{d:#?}");
     assert!(
@@ -2565,7 +2565,7 @@ fn a_for_variable_assigned_to_suggests_looping_by_index() {
 fn a_for_body_follows_itself_for_moves_and_aliases() {
     // Given away in one round, used in the next.
     let (d, _) = one_error(&with_loops(
-        "fn f() {\n    let t = mk();\n    let mut out: Vec<Task> = Vec::new();\n    for i in 0..3 {\n        out.push(t);\n    }\n}\n",
+        "fn f() {\n    let t = mk();\n    let mut out: Vec<Item> = Vec::new();\n    for i in 0..3 {\n        out.push(t);\n    }\n}\n",
     ));
     assert_eq!(d.code, codes::V0305, "{d:#?}");
     assert!(has_note(&d, "previous time through the loop"), "{d:#?}");
@@ -2577,7 +2577,7 @@ fn a_for_body_follows_itself_for_moves_and_aliases() {
     assert_eq!(d.labels[0].span, part_of(&sources, "show(first)", "first"));
     // An owned variable given away, then used in the same round.
     let (d, _) = one_error(&with_loops(
-        "fn f() {\n    let mut out: Vec<Task> = Vec::new();\n    for t in all() {\n        out.push(t);\n        show(t);\n    }\n}\n",
+        "fn f() {\n    let mut out: Vec<Item> = Vec::new();\n    for t in all() {\n        out.push(t);\n        show(t);\n    }\n}\n",
     ));
     assert_eq!(d.code, codes::V0305, "{d:#?}");
     // A `Vec` given away before the loop.
@@ -4207,4 +4207,275 @@ fn changing_a_vec_of_numbers_inside_a_for_over_it_is_v0307() {
         part_of(&sources, "in v {", "v"),
         "v",
     );
+}
+
+// --- Async functions (milestone 5b1 spec 2.2) -------------------------------
+
+#[test]
+fn an_async_function_returning_part_of_a_parameter_is_v0311() {
+    let (d, sources) = one_error(
+        "struct User {\n    name: string,\n}\nasync fn name(u: User) -> string {\n    u.name\n}\n\
+         async fn main() {\n    let u = User { name: \"a\" };\n    let n = name(u).await;\n}\n",
+    );
+    assert_eq!(d.code, codes::V0311, "{d:#?}");
+    assert_eq!(
+        d.message,
+        "`name` is an async function, so it cannot return part of `u`; return a copy instead, \
+         with `.clone()`"
+    );
+    assert_eq!(d.span, part_of(&sources, "u.name\n", "u.name"));
+    assert!(d.fix_it.is_some(), "{d:#?}");
+}
+
+#[test]
+fn an_awaited_call_gives_a_new_value() {
+    let program = ok(
+        "struct User {\n    name: string,\n}\nasync fn name(u: User) -> string {\n    u.name.clone()\n}\n\
+         async fn main() {\n    let u = User { name: \"a\" };\n    let n = name(u).await;\n    \
+         let again = name(u).await;\n    println!(\"{} {}\", n, again);\n}\n",
+    );
+    assert!(program.functions().all(|f| f.ret_root.is_none()));
+}
+
+// --- Started calls (milestone 5b1 spec 3) ----------------------------------
+
+const STARTED_HEAD: &str = "struct User {\n    name: string,\n}\nimpl User {\n    \
+    async fn load(self) -> i64 {\n        1\n    }\n    async fn bump(mut self) {\n        \
+    self.name = \"b\";\n    }\n}\nasync fn greet(u: User) -> i64 {\n    1\n}\n\
+    async fn rename(mut u: User) {\n    u.name = \"b\";\n}\nasync fn shout(s: string) {}\n";
+
+fn started_program(body: &str) -> String {
+    format!(
+        "{STARTED_HEAD}async fn run(p: User, ps: Vec<User>) {{\n{body}}}\nasync fn main() {{}}\n"
+    )
+}
+
+#[test]
+fn a_borrowed_place_given_to_a_started_call_is_v0304_with_the_task_note() {
+    for (body, needle) in [
+        ("    let t = greet(p);\n    t.await;\n", "p)"),
+        ("    let t = shout(p.name);\n    t.await;\n", "p.name"),
+        ("    let t = greet(ps[0]);\n    t.await;\n", "ps[0]"),
+        ("    let t = p.load();\n    t.await;\n", "p.load"),
+        (
+            "    let mut u = User { name: \"a\" };\n    let v = u;\n    let t = greet(v);\n    t.await;\n",
+            "",
+        ),
+    ] {
+        let text = started_program(body);
+        if needle.is_empty() {
+            // An owned local moved into another is still owned: no error.
+            let _ = ok(&text);
+            continue;
+        }
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0304, "{text}\n{d:#?}");
+        assert_eq!(d.span.start, span_of(&sources, needle).start, "{text}");
+        assert!(
+            d.notes
+                .iter()
+                .any(|note| note.contains("may outlive this function")
+                    && note.contains(".clone()")
+                    && note.contains("Shared")),
+            "{d:#?}"
+        );
+    }
+    // An alias of a parameter's element.
+    let text = started_program("    let first = ps[0];\n    let t = greet(first);\n    t.await;\n");
+    let (diagnostics, _) = errors(&text);
+    assert!(
+        diagnostics.iter().any(|d| d.code == codes::V0304),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn an_owned_local_given_to_a_started_call_moves_into_it() {
+    let (d, sources) = one_error(&started_program(
+        "    let u = User { name: \"a\" };\n    let t = greet(u);\n    println!(\"{}\", u.name);\n    t.await;\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    let at = span_of(&sources, "u.name);").start;
+    assert_eq!((d.span.start, d.span.end), (at, at + 1));
+    // A number, a literal, a new value, and a clone are fine.
+    ok(&started_program(
+        "    let u = User { name: \"a\" };\n    let a = greet(u.clone());\n    let b = shout(\"x\");\n    \
+         let c = greet(User { name: \"c\" });\n    let d = time::sleep(5);\n    let e = u.load();\n    \
+         a.await;\n    b.await;\n    c.await;\n    d.await;\n    e.await;\n",
+    ));
+}
+
+#[test]
+fn a_started_call_lending_to_a_mut_parameter_is_v0309() {
+    for (body, needle) in [
+        (
+            "    let mut u = User { name: \"a\" };\n    let t = rename(u);\n    t.await;\n",
+            "u)",
+        ),
+        (
+            "    let mut u = User { name: \"a\" };\n    let t = u.bump();\n    t.await;\n",
+            "u.bump",
+        ),
+    ] {
+        let text = started_program(body);
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0309, "{text}\n{d:#?}");
+        assert_eq!(d.span.start, span_of(&sources, needle).start, "{text}");
+    }
+}
+
+#[test]
+fn a_task_detached_inside_a_closure_is_v0304() {
+    let (d, sources) = one_error(&started_program(
+        "    let t = greet(User { name: \"a\" });\n    let v: Vec<i64> = vec![1];\n    \
+         let w: Vec<i64> = v.iter().map(|x| {\n        t.detach();\n        x\n    }).collect();\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "t.detach", "t"));
+}
+
+#[test]
+fn a_task_awaited_twice_is_v0305() {
+    let (d, sources) = one_error(&started_program(
+        "    let t = greet(User { name: \"a\" });\n    let a = t.await;\n    let b = t.await;\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "b = t.await", "t"));
+    let (d, _) = one_error(&started_program(
+        "    let t = greet(User { name: \"a\" });\n    t.detach();\n    t.await;\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+}
+
+// --- `Task::all` and `Task::all_settled` (milestone 5b1 spec 3) -----------
+
+#[test]
+fn a_list_of_tasks_given_to_task_all_is_taken() {
+    let (d, sources) = one_error(&started_program(
+        "    let ts = vec![greet(User { name: \"a\" })];\n    let a = Task::all(ts).await;\n    \
+         let b = Task::all(ts).await;\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "b = Task::all(ts)", "ts"));
+}
+
+#[test]
+fn a_collected_map_of_started_calls_owns_what_it_gives_them() {
+    // Copied numbers and `.clone()`d values are the tasks' own.
+    ok(&started_program(
+        "    let ids: Vec<i64> = vec![1, 2];\n    \
+         let a = Task::all(ids.iter().map(|id| time::sleep(id as u64)).collect()).await;\n    \
+         let b = Task::all(ps.iter().map(|u| greet(u.clone())).collect()).await;\n    \
+         let names: Vec<string> = vec![\"a\"];\n    \
+         let c = Task::all(names.iter().map(|n| shout(n.clone())).collect()).await;\n",
+    ));
+    // A borrowed item is not.
+    for (body, needle) in [
+        (
+            "    let names: Vec<string> = vec![\"a\"];\n    \
+             let c = Task::all(names.iter().map(|n| shout(n)).collect()).await;\n",
+            "n)).",
+        ),
+        (
+            "    let b = Task::all(ps.iter().map(|u| greet(u)).collect()).await;\n",
+            "u)).",
+        ),
+    ] {
+        let text = started_program(body);
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0304, "{text}\n{d:#?}");
+        assert_eq!(d.span.start, span_of(&sources, needle).start, "{text}");
+    }
+}
+
+// --- `Shared<T>` (milestone 5b1 spec 2.6, 3) -------------------------------
+
+const SHARED_HEAD: &str = "struct Inner {\n    n: i64,\n}\nimpl Inner {\n    fn grow(mut self) {\n        self.n = self.n + 1;\n    }\n}\n\
+    struct Config {\n    factor: i64,\n    name: string,\n    items: Vec<i64>,\n    inner: Inner,\n}\n\
+    impl Config {\n    fn describe(self) -> string {\n        self.name.clone()\n    }\n    \
+    fn bump(mut self) {\n        self.factor = self.factor + 1;\n    }\n}\n\
+    fn add(mut v: Vec<i64>) {\n    v.push(1);\n}\n\
+    async fn work(c: Shared<Config>) -> i64 {\n    c.factor\n}\n";
+
+/// `body` inside `async fn run(p: Shared<Config>)`, with a `let mut s`
+/// sharing a new `Config` in front of it.
+fn shared_program(body: &str) -> String {
+    format!(
+        "{SHARED_HEAD}async fn run(p: Shared<Config>) {{\n    \
+         let mut s = Shared::new(Config {{ factor: 1, name: \"a\", items: vec![1], inner: Inner {{ n: 1 }} }});\n\
+         {body}}}\nasync fn main() {{}}\n"
+    )
+}
+
+#[test]
+fn changing_something_reached_through_a_shared_is_v0310() {
+    for (body, needle) in [
+        ("    s.factor = 2;\n", "s.factor"),
+        ("    p.factor = 2;\n", "p.factor"),
+        ("    s.items[0] = 2;\n", "s.items[0]"),
+        ("    s.inner.n = 2;\n", "s.inner.n"),
+        ("    add(s.items);\n", "s.items"),
+        ("    s.items.push(2);\n", "s.items"),
+        ("    p.items.push(2);\n", "p.items"),
+        ("    s.bump();\n", "s"),
+        ("    s.inner.grow();\n", "s.inner"),
+        ("    let mut v = s.items;\n    v.push(2);\n", "v.push"),
+    ] {
+        let text = shared_program(body);
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0310, "{text}\n{d:#?}");
+        let at = text.find(body).expect("the body") + body.find(needle).expect("the needle");
+        assert_eq!(
+            d.span.start as usize,
+            at,
+            "{text}\n{d:#?}\n{:?}",
+            &sources[0].text[d.span.start as usize..d.span.end as usize]
+        );
+    }
+}
+
+#[test]
+fn reading_through_a_shared_and_changing_the_handle_are_accepted() {
+    ok(&shared_program(
+        "    let a = s.factor + p.factor;\n    let b = s.items.len();\n    let c = s.describe();\n    \
+         let d = s.name.clone();\n    let e = s.items[0];\n    \
+         s = p.clone();\n    let f = s.name;\n",
+    ));
+}
+
+#[test]
+fn moving_a_field_out_of_a_shared_is_v0304() {
+    let text =
+        shared_program("    let mut names: Vec<string> = Vec::new();\n    names.push(s.name);\n");
+    let (d, sources) = one_error(&text);
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "s.name"));
+}
+
+#[test]
+fn shared_new_takes_its_argument() {
+    let (d, sources) = one_error(&shared_program(
+        "    let c = Config { factor: 1, name: \"b\", items: vec![], inner: Inner { n: 1 } };\n    \
+         let t = Shared::new(c);\n    let n = c.factor;\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "n = c.factor", "c"));
+}
+
+#[test]
+fn a_shared_clone_given_to_a_started_call_is_its_own_handle() {
+    ok(&shared_program(
+        "    let a = work(s.clone());\n    let b = work(s.clone());\n    let x = a.await + b.await;\n    \
+         let c = work(s);\n    let y = c.await;\n",
+    ));
+    let (d, sources) = one_error(&shared_program(
+        "    let a = work(s);\n    let x = a.await;\n    let n = s.factor;\n",
+    ));
+    assert_eq!(d.code, codes::V0305, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "n = s.factor", "s"));
+    // A parameter is borrowed: the task needs its own handle.
+    let (d, _) = one_error(&shared_program(
+        "    let a = work(p);\n    let x = a.await;\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
 }

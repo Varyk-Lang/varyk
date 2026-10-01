@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `u` belongs to the caller of this function, so it cannot be given to the task that runs `send_email`, which keeps it
+  --> crates/varyk/tests/fixtures/errors/v0304_param_given_to_task/main.vr:10:27
+   |
+10 |     let task = send_email(u);
+   |                           ^ `u` belongs to the caller of this function, so it cannot be given to the task that runs `send_email`, which keeps it
+   |
+   = note: a started task may outlive this function, so it must own what it is given: give it a copy with `.clone()`, or share one value between tasks with `Shared`
+   = note: in Rust terms, a borrowed value cannot move into a place that owns it

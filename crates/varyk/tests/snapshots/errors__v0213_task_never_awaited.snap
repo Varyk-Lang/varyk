@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0213]: the task in `task` is never waited for or let go, so it is stopped as soon as `task` goes out of scope
+ --> crates/varyk/tests/fixtures/errors/v0213_task_never_awaited/main.vr:6:9
+  |
+6 |     let task = fetch(1);
+  |         ^^^^ the task in `task` is never waited for or let go, so it is stopped as soon as `task` goes out of scope
+  |
+  = note: wait for it with `task.await`, or let it run on its own with `task.detach()`

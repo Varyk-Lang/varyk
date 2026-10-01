@@ -3,14 +3,14 @@ pub enum Status {
     Done,
 }
 
-pub struct Task {
+pub struct Item {
     title: string,
     status: Status,
 }
 
-impl Task {
-    pub fn new(title: string) -> Task {
-        Task { title: title.clone(), status: Status::Open }
+impl Item {
+    pub fn new(title: string) -> Item {
+        Item { title: title.clone(), status: Status::Open }
     }
 
     pub fn complete(mut self) {

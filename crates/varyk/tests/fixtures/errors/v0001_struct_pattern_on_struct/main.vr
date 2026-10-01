@@ -1,10 +1,10 @@
-struct Task {
+struct Item {
     done: bool,
 }
 
-fn finished(task: Option<Task>) -> bool {
+fn finished(task: Option<Item>) -> bool {
     match task {
-        Some(Task { done }) => done,
+        Some(Item { done }) => done,
         None => false,
     }
 }

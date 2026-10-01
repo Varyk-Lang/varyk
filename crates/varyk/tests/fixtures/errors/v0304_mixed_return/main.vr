@@ -1,15 +1,15 @@
-struct Task {
+struct Item {
     title: string,
     done: bool,
 }
 
-impl Task {
+impl Item {
     fn label(self) -> string {
         if self.done { "done" } else { self.title }
     }
 }
 
 fn main() {
-    let task = Task { title: "write", done: false };
+    let task = Item { title: "write", done: false };
     println!("{}", task.label());
 }

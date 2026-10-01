@@ -1,14 +1,14 @@
 mod m;
 
-fn take(t: m::Task, s: m::Shape) -> i32 {
+fn take(t: m::Item, s: m::Shape) -> i32 {
     t.id
 }
 
-fn make() -> m::Task {
-    m::Task { id: 1 }
+fn make() -> m::Item {
+    m::Item { id: 1 }
 }
 
 fn main() {
-    let t: m::Task = make();
+    let t: m::Item = make();
     println!("{}", t.id);
 }

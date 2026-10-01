@@ -6,7 +6,7 @@ mod tally;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 #[derive(Clone, PartialEq)]
-struct Task {
+struct Item {
     label: String,
     done: bool,
 }
@@ -19,9 +19,9 @@ enum Size {
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-impl Task {
-    fn new(label: &str) -> Task {
-        Task { label: label.to_string(), done: false }
+impl Item {
+    fn new(label: &str) -> Item {
+        Item { label: label.to_string(), done: false }
     }
 
     fn complete(&mut self) {
@@ -45,11 +45,11 @@ impl Size {
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-fn count_done(tasks: &Vec<Task>) -> usize {
+fn count_done(tasks: &Vec<Item>) -> usize {
     let mut n = 0usize;
     let mut i = 0usize;
     while i < tasks.len() {
-        if Task::is_done(&tasks[i]) {
+        if Item::is_done(&tasks[i]) {
             n = n + 1usize;
         }
         i = i + 1usize;
@@ -58,19 +58,19 @@ fn count_done(tasks: &Vec<Task>) -> usize {
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-fn finish_first(tasks: &mut Vec<Task>) {
-    Task::complete(&mut tasks[0usize]);
+fn finish_first(tasks: &mut Vec<Item>) {
+    Item::complete(&mut tasks[0usize]);
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
-    let mut tasks: Vec<Task> = Vec::new();
-    tasks.push(Task::new("write"));
-    tasks.push(Task::new("test"));
+    let mut tasks: Vec<Item> = Vec::new();
+    tasks.push(Item::new("write"));
+    tasks.push(Item::new("test"));
     finish_first(&mut tasks);
-    Task::complete(&mut tasks[1usize]);
+    Item::complete(&mut tasks[1usize]);
     let first = &tasks[0usize];
-    ::std::println!("{} done: {}", Task::label(first), Task::is_done(first));
+    ::std::println!("{} done: {}", Item::label(first), Item::is_done(first));
     ::std::println!("{} of {}", count_done(&tasks), tasks.len());
     let mut words: Vec<String> = ::std::vec!["a".to_string(), "b".to_string()];
     words[1usize] = "c".to_string();

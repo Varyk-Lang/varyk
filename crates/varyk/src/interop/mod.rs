@@ -85,6 +85,9 @@ pub struct ImportedFn {
     /// when `ret` is `&str` or `&S` and lifetime elision roots it there
     /// (M4 spec 2.12); `None` for an owned or opaque return.
     pub ret_root: Option<usize>,
+    /// `async fn` (milestone 5b1 spec 2.8): called awaited or started, as
+    /// a Varyk async function is.
+    pub is_async: bool,
 }
 
 /// Whether an [`ImportedField`] is `pub` (plain `pub`) or not visible

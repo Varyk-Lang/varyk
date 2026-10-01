@@ -1,0 +1,9 @@
+struct Config {
+    port: i64,
+}
+
+struct Server {
+    config: Shared<Config>,
+}
+
+fn main() {}

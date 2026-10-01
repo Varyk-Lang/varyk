@@ -7,12 +7,12 @@ enum Status {
     Count(i32),
 }
 
-struct Task {
+struct Item {
     title: string,
     status: Status,
 }
 
-impl Task {
+impl Item {
     fn reopen(mut self) {
         match self.status {
             Status::Done => {
@@ -56,7 +56,7 @@ fn parse(text: string) -> Result<i32, string> {
 }
 
 fn main() {
-    let mut tasks = vec![Task { title: "write", status: Status::Done }];
+    let mut tasks = vec![Item { title: "write", status: Status::Done }];
     tasks[0].reopen();
     match tasks[0].status {
         Status::Open => println!("open"),
@@ -71,7 +71,7 @@ fn main() {
         Ok(value) => println!("{}", value),
         Err(message) => println!("{}", message),
     }
-    let picked = Some(Task { title: "pick", status: Status::Named("x") });
+    let picked = Some(Item { title: "pick", status: Status::Named("x") });
     let title = match picked {
         Some(task) => task.title,
         None => "none",

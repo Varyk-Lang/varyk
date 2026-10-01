@@ -109,10 +109,11 @@ impl<'a> Parser<'a> {
         if is_pub && self.peek() == Some(&TokenKind::LParen) {
             self.reject_pub_paren(start_span);
         }
+        let is_async = self.parse_async()?;
         match self.peek() {
             Some(TokenKind::Fn) => self
                 .parse_function(start_span, is_pub, false)
-                .map(Item::Function),
+                .map(|f| Item::Function(Function { is_async, ..f })),
             Some(TokenKind::Struct) => self.parse_struct(start_span, is_pub).map(Item::Struct),
             Some(TokenKind::Enum) => self.parse_enum(start_span, is_pub).map(Item::Enum),
             Some(TokenKind::Impl) if !is_pub => self.parse_impl(start_span).map(Item::Impl),
@@ -150,6 +151,20 @@ impl<'a> Parser<'a> {
                 self.push_expected(what);
                 Err(())
             }
+        }
+    }
+
+    /// An optional `async`, which must be followed by `fn` (milestone 5b1
+    /// spec 2.2); anything else after it is `V0002`.
+    fn parse_async(&mut self) -> Result<bool, ()> {
+        if !self.bump_if(&TokenKind::Async) {
+            return Ok(false);
+        }
+        if self.peek() == Some(&TokenKind::Fn) {
+            Ok(true)
+        } else {
+            self.push_expected("`fn` after `async`");
+            Err(())
         }
     }
 
@@ -196,6 +211,7 @@ impl<'a> Parser<'a> {
             attrs: Vec::new(),
             name,
             is_pub,
+            is_async: false,
             self_mode,
             self_span,
             params,
@@ -764,10 +780,15 @@ impl<'a> Parser<'a> {
             let attrs = self.parse_attributes()?;
             let fn_start = self.current_span();
             let is_pub = self.bump_if(&TokenKind::Pub);
+            let is_async = self.parse_async()?;
             match self.peek() {
                 Some(TokenKind::Fn) => {
                     let function = self.parse_function(fn_start, is_pub, true)?;
-                    functions.push(Function { attrs, ..function });
+                    functions.push(Function {
+                        attrs,
+                        is_async,
+                        ..function
+                    });
                 }
                 _ => {
                     self.push_expected("a function in the `impl` block");
@@ -1675,5 +1696,66 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].code, V0002);
         assert_eq!(errors[0].message, "expected a number after `-`");
+    }
+
+    #[test]
+    fn async_function_and_pub_async_function() {
+        let program = parse_program_ok("async fn load() -> i32 { 1 }\npub async fn save() { }");
+        let functions: Vec<(&str, bool, bool)> = program
+            .items
+            .iter()
+            .map(|item| match item {
+                Item::Function(f) => (f.name.name.as_str(), f.is_pub, f.is_async),
+                other => panic!("expected a function, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(functions, vec![("load", false, true), ("save", true, true)]);
+        let plain = parse_program_ok("fn f() { }");
+        assert!(!only_function(&plain).is_async);
+    }
+
+    #[test]
+    fn async_methods_in_an_impl() {
+        let program = parse_program_ok(
+            "impl S {\n    async fn a(self) { }\n    pub async fn b(mut self, x: i32) { }\n    fn c() { }\n}",
+        );
+        let i = only_impl(&program);
+        let methods: Vec<(bool, bool, SelfMode)> = i
+            .functions
+            .iter()
+            .map(|f| (f.is_pub, f.is_async, f.self_mode))
+            .collect();
+        assert_eq!(
+            methods,
+            vec![
+                (false, true, SelfMode::Shared),
+                (true, true, SelfMode::Mutable),
+                (false, false, SelfMode::None),
+            ]
+        );
+    }
+
+    #[test]
+    fn async_before_anything_but_fn_is_v0002() {
+        for src in [
+            "async struct S { }",
+            "pub async mod m;",
+            "async pub fn f() { }",
+            "impl S { async self }",
+        ] {
+            let (_, errors) = parse_program(src);
+            assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+            assert_eq!(errors[0].code, V0002, "{src}");
+            assert_eq!(errors[0].message, "expected `fn` after `async`", "{src}");
+        }
+    }
+
+    #[test]
+    fn async_and_await_are_not_names() {
+        for src in ["fn async() { }", "fn f(await: i32) { }"] {
+            let (_, errors) = parse_program(src);
+            assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+            assert_eq!(errors[0].code, V0001, "{src}");
+        }
     }
 }

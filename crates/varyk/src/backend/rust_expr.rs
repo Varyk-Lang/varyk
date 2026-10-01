@@ -353,6 +353,32 @@ impl<'a> FnEmitter<'a> {
             HirExprKind::Bool(value) => value.to_string(),
             HirExprKind::String(text) => format!("\"{text}\""),
             HirExprKind::Local(id) => self.local_name(*id).to_string(),
+            HirExprKind::Call {
+                callee,
+                args,
+                started: true,
+                ..
+            } => {
+                let (path, modes) = self.callee(*callee);
+                let args: Vec<&HirExpr> = args.iter().collect();
+                self.started_call(&path, &args, &modes, indent)
+            }
+            HirExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+                started: true,
+                ..
+            } => {
+                let callee = match method {
+                    MethodRef::Varyk(id) => Callee::Varyk(*id),
+                    MethodRef::Imported(id) => Callee::Imported(*id),
+                    MethodRef::Builtin(id) => Callee::Builtin(*id),
+                };
+                let (path, modes) = self.callee(callee);
+                let args: Vec<&HirExpr> = std::iter::once(&**receiver).chain(args).collect();
+                self.started_call(&path, &args, &modes, indent)
+            }
             HirExprKind::Call { callee, args, .. } => {
                 let (mut path, modes) = self.callee(*callee);
                 // `json::parse` and `env::parse` name the type they read (M5a spec 7.5).
@@ -360,6 +386,18 @@ impl<'a> FnEmitter<'a> {
                     if matches!(id.get().owner, Owner::Json | Owner::Env) {
                         let read = rust_type(self.program, read, self.module);
                         path = format!("{path}::<{read}>");
+                    }
+                }
+                // `Task::all` over tasks giving a `Result` returns at the
+                // first `Err`, `varyk-std`'s `try_all`; `Task::all_settled`
+                // is the plain `all` (milestone 5b1 spec 5).
+                if let Callee::Builtin(id) = callee {
+                    if id.get().owner == Owner::Task {
+                        let name = match expr.ty {
+                            Ty::Result(..) => "try_all",
+                            _ => "all",
+                        };
+                        path = format!("::varyk_std::Task::{name}");
                     }
                 }
                 format!("{path}({})", self.args(args, &modes, indent))
@@ -462,6 +500,8 @@ impl<'a> FnEmitter<'a> {
                 let text = self.expr(operand, Need::Value, indent);
                 format!("{}?", postfix(operand, text))
             }
+            // The operand is a call, which `.await` follows as it is.
+            HirExprKind::Await(operand) => format!("{}.await", self.raw(operand, indent)),
             // Written with its own parentheses, so no context regroups it.
             HirExprKind::Cast { expr: operand, ty } => {
                 self.in_cast.set(self.in_cast.get() + 1);
@@ -1004,6 +1044,39 @@ impl<'a> FnEmitter<'a> {
         )
     }
 
+    /// A started call of `path` (milestone 5b1 spec 5): every argument is
+    /// evaluated in order into `varyk_N` by a `match`, as a direct call
+    /// would evaluate it, before anything is bound; the task then owns
+    /// them and passes each as its parameter takes it, by value to an
+    /// owned one and by reference otherwise.
+    fn started_call(
+        &self,
+        path: &str,
+        args: &[&HirExpr],
+        modes: &[ParamMode],
+        indent: usize,
+    ) -> String {
+        let values: Vec<String> = args
+            .iter()
+            .map(|arg| format!("{},", self.expr(arg, Need::Value, indent)))
+            .collect();
+        let names: Vec<String> = (0..args.len()).map(|i| format!("varyk_{i},")).collect();
+        let passed: Vec<String> = modes
+            .iter()
+            .enumerate()
+            .map(|(i, mode)| match mode {
+                ParamMode::Owned => format!("varyk_{i}"),
+                _ => format!("&varyk_{i}"),
+            })
+            .collect();
+        format!(
+            "match ({}) {{ ({}) => ::varyk_std::Task::start(async move {{ {path}({}).await }}) }}",
+            values.join(" "),
+            names.join(" "),
+            passed.join(", ")
+        )
+    }
+
     /// An operator operand, parenthesized when it is a binary expression
     /// that binds looser than its `parent` (the binary operator and whether
     /// this is its right operand; `None` under a unary operator), or a
@@ -1056,7 +1129,8 @@ impl<'a> FnEmitter<'a> {
             HirExprKind::Local(_)
             | HirExprKind::Call { .. }
             | HirExprKind::MethodCall { .. }
-            | HirExprKind::Try { .. } => self.raw(base, indent),
+            | HirExprKind::Try { .. }
+            | HirExprKind::Await(_) => self.raw(base, indent),
             // A block or `if` base is read by reference rather than by
             // value: field access auto-derefs, so this keeps a place leaf
             // (a local or field ending a branch) unmoved. Each branch
@@ -1124,10 +1198,19 @@ impl<'a> FnEmitter<'a> {
             Callee::Builtin(id)
                 if matches!(
                     id.get().owner,
-                    Owner::Error | Owner::Json | Owner::Env | Owner::Log
+                    Owner::Error
+                        | Owner::Json
+                        | Owner::Env
+                        | Owner::Log
+                        | Owner::Time
+                        | Owner::Task
                 ) =>
             {
                 (format!("::varyk_std::{}", id.path()), id.modes())
+            }
+            // Std's own pointer, in full (milestone 5b1 spec 5).
+            Callee::Builtin(id) if id.get().owner == Owner::Shared => {
+                ("::std::sync::Arc::new".to_string(), id.modes())
             }
             Callee::Builtin(id) => (id.path(), id.modes()),
         }

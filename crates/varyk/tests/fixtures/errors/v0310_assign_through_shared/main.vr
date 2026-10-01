@@ -1,0 +1,12 @@
+struct Config {
+    port: i64,
+}
+
+fn reset(config: Shared<Config>) {
+    config.port = 80;
+}
+
+fn main() {
+    let config = Shared::new(Config { port: 8080 });
+    reset(config);
+}

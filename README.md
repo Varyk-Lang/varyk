@@ -23,8 +23,8 @@ cargo install varyk
 ```
 
 JSON, configuration from the environment, logging, and `varyk test` are in
-milestone 5a; the rest of the service batteries (`async`, HTTP, databases)
-are milestones 5b1 and 5b2 on the [roadmap](docs/roadmap.md); what works today is under
+milestone 5a, and `async` functions and tasks in 5b1; HTTP and databases
+are milestone 5b2 on the [roadmap](docs/roadmap.md); what works today is under
 [Status](#status).
 
 ## Use Varyk until you need Rust
@@ -201,16 +201,21 @@ in the example above.
 
 Varyk is experimental and pre-1.0: anything may change, including any
 syntax, error code, or command-line flag, and a breaking change bumps the
-minor version. This is milestone 5a: data, configuration, logging, and
-tests, on top of milestone 4's closures, iterators, and patterns.
+minor version. This is milestone 5b1: async functions and tasks, on top of milestone 5a's data, configuration, logging, and tests and milestone 4's closures, iterators, and patterns.
 Structs, enums, and `match`, `for` loops, methods, `Option`, `Result`,
 `Vec`, `?`, and `format!` work, and so do packages with dependencies,
 modules at any depth, `use`, private fields, and Rust structs and enums
 imported from `.rs` files; the compiler builds and runs every program in
 `examples/`, and it reports every error it knows about with a code, a
-plain-word message, and, where it can, a suggested fix. Async, HTTP,
+plain-word message, and, where it can, a suggested fix. HTTP,
 databases, and much more are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
+
+Milestone 5b1 adds `async fn` and `.await`; a call without `.await` starts
+a task, and `Task::all`, `Task::all_settled`, `.detach()`, `Shared<T>`, and
+`time::sleep` wait for, share with, and time tasks, on a built-in
+multi-threaded runtime. `Task`, `Shared`, and `time` are now reserved names,
+a breaking change. See `examples/tasks.vr`, `fanout.vr`, and `shared.vr`.
 
 Milestone 5a adds a built-in `Error`, so `parse` returns a `Result`;
 attributes `#[rename]`, `#[default]`, `#[skip]`, and `#[test]`; `json::parse`

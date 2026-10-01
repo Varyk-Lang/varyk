@@ -1,0 +1,7 @@
+async fn send_email(to: string) {
+    println!("sending to {}", to);
+}
+
+async fn main() {
+    send_email("ann@example.com");
+}

@@ -25,9 +25,16 @@ pub enum Owner {
     Env,
     /// The `log` module (M5a spec 2.6): `log::info(format, args..)`.
     Log,
+    /// The `time` module (milestone 5b1 spec 2.7): `time::sleep(ms)`.
+    Time,
     /// The checks of a `#[test]` function (M5a spec 2.7), `assert` and
     /// `assert_eq`, called by their bare names.
     Test,
+    /// `Task<T>` (milestone 5b1 spec 2.4), a started call's task.
+    Task,
+    /// `Shared<T>` (milestone 5b1 spec 2.6): std's `Arc`, not a
+    /// `varyk-std` call.
+    Shared,
 }
 
 impl Owner {
@@ -44,7 +51,10 @@ impl Owner {
             Owner::Json => "json",
             Owner::Env => "env",
             Owner::Log => "log",
+            Owner::Time => "time",
             Owner::Test => "test",
+            Owner::Task => "Task",
+            Owner::Shared => "Shared",
         }
     }
 
@@ -100,6 +110,20 @@ impl Owner {
                 },
             ),
             Ty::Error => (Owner::Error, subst),
+            Ty::Task(t) => (
+                Owner::Task,
+                Subst {
+                    t: (**t).clone(),
+                    ..subst
+                },
+            ),
+            Ty::Shared(t) => (
+                Owner::Shared,
+                Subst {
+                    t: (**t).clone(),
+                    ..subst
+                },
+            ),
             _ => return None,
         })
     }
@@ -131,6 +155,8 @@ pub enum Shape {
     VecOfT,
     OptionOfT,
     Usize,
+    /// `u64` (`time::sleep`'s milliseconds).
+    U64,
     String,
     Unit,
     Bool,
@@ -167,6 +193,11 @@ pub enum Shape {
     ChainOfString,
     /// A chain of `R` items.
     ChainOfR,
+    /// `Vec<Task<T>>`, the tasks `Task::all` waits for (milestone 5b1
+    /// spec 2.5).
+    TasksOfT,
+    /// `Shared<T>` (milestone 5b1 spec 2.6).
+    SharedOfT,
 }
 
 /// A closure parameter of a row: the type it hands its closure and what
@@ -237,6 +268,7 @@ impl Shape {
             Shape::VecOfT => Ty::Vec(boxed(&subst.t)),
             Shape::OptionOfT => Ty::Option(boxed(&subst.t)),
             Shape::Usize => Ty::Int(IntKind::Usize),
+            Shape::U64 => Ty::Int(IntKind::U64),
             Shape::String | Shape::ReadString => Ty::String,
             Shape::Unit => Ty::Unit,
             Shape::Bool => Ty::Bool,
@@ -260,6 +292,8 @@ impl Shape {
             Shape::ChainOfV => Ty::Chain(boxed(&subst.v)),
             Shape::ChainOfString => Ty::Chain(Box::new(Ty::String)),
             Shape::ChainOfR => Ty::Chain(boxed(&subst.r)),
+            Shape::TasksOfT => Ty::Vec(Box::new(Ty::Task(boxed(&subst.t)))),
+            Shape::SharedOfT => Ty::Shared(boxed(&subst.t)),
         }
     }
 
@@ -344,6 +378,9 @@ pub struct Builtin {
     pub result_kind: ResultKind,
     /// What the row asks of a `Vec`'s element type.
     pub element: ElementRule,
+    /// An async call (milestone 5b1 spec 2.7), awaited like a call to an
+    /// async function.
+    pub is_async: bool,
 }
 
 /// A row whose result is a plain value and which asks nothing of the
@@ -363,6 +400,7 @@ const fn row(
         result,
         result_kind: ResultKind::Value,
         element: ElementRule::Any,
+        is_async: false,
     }
 }
 
@@ -637,15 +675,62 @@ pub const TABLE: &[Builtin] = &[
         &[Shape::T, Shape::T],
         Shape::Unit,
     ),
+    // `time::sleep(ms)` waits without holding up other tasks (milestone
+    // 5b1 spec 2.7).
+    Builtin {
+        is_async: true,
+        ..row(
+            Owner::Time,
+            "sleep",
+            Receiver::None,
+            &[Shape::U64],
+            Shape::Unit,
+        )
+    },
+    // `t.detach()` takes the task and lets it run on (milestone 5b1 spec
+    // 2.4).
+    row(Owner::Task, "detach", Takes, &[], Shape::Unit),
+    // `Task::all(tasks).await` and `Task::all_settled(tasks).await` take
+    // the tasks and wait for every one (milestone 5b1 spec 2.5). The
+    // checker types their results itself: `all` on tasks giving a
+    // `Result` gives a `Result` of the values.
+    task_all_row("all"),
+    task_all_row("all_settled"),
+    // `Shared::new(value)` takes the struct it shares, and `s.clone()`
+    // gives another handle to it (milestone 5b1 spec 2.6); the checker
+    // asks that `T` be a struct.
+    row(
+        Owner::Shared,
+        "new",
+        Receiver::None,
+        &[Shape::T],
+        Shape::SharedOfT,
+    ),
+    row(Owner::Shared, "clone", Reads, &[], Shape::SharedOfT),
 ];
+
+/// `Task::all` or `Task::all_settled`: async, taking a `Vec` of tasks.
+const fn task_all_row(name: &'static str) -> Builtin {
+    Builtin {
+        is_async: true,
+        ..row(
+            Owner::Task,
+            name,
+            Receiver::None,
+            &[Shape::TasksOfT],
+            Shape::VecOfT,
+        )
+    }
+}
 
 impl Builtin {
     /// Whether the call is a `varyk-std` call (M5a spec 1): a row of
-    /// `Error` or `json`, or `parse`, whose `Error` `varyk-std` makes.
+    /// `Error`, `json`, `env`, `log`, `time`, or `Task` (milestone 5b1 spec
+    /// 4), or `parse`, whose `Error` `varyk-std` makes.
     pub fn uses_std(&self) -> bool {
         matches!(
             self.owner,
-            Owner::Error | Owner::Json | Owner::Env | Owner::Log
+            Owner::Error | Owner::Json | Owner::Env | Owner::Log | Owner::Time | Owner::Task
         ) || (self.owner == Owner::String && self.name == "parse")
     }
 }
@@ -1173,6 +1258,46 @@ mod tests {
         assert_eq!(parse.get().result, Shape::ResultOfExpected);
         assert!(parse.get().uses_std());
         assert_eq!(Owner::Env.name(), "env");
+    }
+
+    #[test]
+    fn the_shared_rows_of_milestone_5b1_spec_2_6() {
+        assert_eq!(names(Owner::Shared, false), ["new"]);
+        assert_eq!(names(Owner::Shared, true), ["clone"]);
+        let new = lookup(Owner::Shared, "new", false).expect("Shared::new");
+        assert_eq!(new.path(), "Shared::new");
+        assert_eq!(new.modes(), [ParamMode::Owned]);
+        let clone = lookup(Owner::Shared, "clone", true).expect("clone on Shared");
+        assert_eq!(clone.modes(), [ParamMode::SharedBorrow]);
+        let subst = Subst {
+            t: Ty::Bool,
+            ..Subst::default()
+        };
+        for id in [new, clone] {
+            assert_eq!(id.get().result.ty(&subst), Ty::Shared(Box::new(Ty::Bool)));
+            // `Shared` is std's `Arc`.
+            assert!(!id.get().uses_std() && !id.get().is_async);
+        }
+    }
+
+    #[test]
+    fn the_task_rows_of_milestone_5b1_spec_2_5() {
+        assert_eq!(names(Owner::Task, false), ["all", "all_settled"]);
+        assert_eq!(names(Owner::Task, true), ["detach"]);
+        for name in ["all", "all_settled"] {
+            let id = lookup(Owner::Task, name, false).expect("a Task row");
+            assert_eq!(id.path(), format!("Task::{name}"));
+            assert!(id.get().is_async && id.get().uses_std());
+            assert_eq!(id.modes(), [ParamMode::Owned]);
+            let subst = Subst {
+                t: Ty::Bool,
+                ..Subst::default()
+            };
+            assert_eq!(
+                id.get().params[0].ty(&subst),
+                Ty::Vec(Box::new(Ty::Task(Box::new(Ty::Bool))))
+            );
+        }
     }
 
     #[test]

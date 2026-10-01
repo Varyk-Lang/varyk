@@ -148,7 +148,8 @@ pub enum SelfMode {
     Mutable,
 }
 
-/// `fn name(params) -> ReturnType { body }`, optionally `pub`. Inside an
+/// `fn name(params) -> ReturnType { body }`, optionally `pub` and then
+/// `async` (milestone 5b1 spec 2.2). Inside an
 /// `impl` block the parameter list may start with a `self` receiver
 /// (`self_mode`), which is never a [`Param`] (spec 2.5).
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +157,8 @@ pub struct Function {
     pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub is_pub: bool,
+    /// `async fn` (milestone 5b1 spec 2.2).
+    pub is_async: bool,
     pub self_mode: SelfMode,
     /// The `self` keyword of the receiver, where a `mut ` fix-it inserts;
     /// `None` exactly when `self_mode` is [`SelfMode::None`].
@@ -498,6 +501,10 @@ pub enum ExprKind {
     Try {
         operand: Box<Expr>,
     },
+
+    /// `operand.await` (milestone 5b1 spec 2.3). Whether `operand` is
+    /// something that can be waited for is the type checker's job.
+    Await(Box<Expr>),
 
     /// `match scrutinee { arms... }` (spec 2.3), an expression like `if`.
     /// It may also stand as a statement without a trailing `;`, the same

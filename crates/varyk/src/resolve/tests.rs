@@ -921,10 +921,10 @@ fn unknown_type_matching_another_modules_type_is_v0101_with_a_did_you_mean_note(
     let (diagnostics, sources) = fixture("unknown_type_other_module");
     let d = only(&diagnostics);
     assert_eq!(d.code, codes::V0101);
-    let at = span_of(&sources, 0, "Task)");
+    let at = span_of(&sources, 0, "Item)");
     assert_eq!(d.span, Span::new(at.file, at.start, at.start + 4));
     assert!(
-        d.notes.iter().any(|n| n == "did you mean `m::Task`?"),
+        d.notes.iter().any(|n| n == "did you mean `m::Item`?"),
         "{d:#?}"
     );
 }
@@ -1186,7 +1186,7 @@ fn an_impl_for_a_type_not_in_the_file_is_v0001() {
     let (diagnostics, sources) = fixture("impl_other_module");
     let d = only(&diagnostics);
     assert_eq!(d.code, codes::V0001);
-    assert_eq!(d.span, span_of(&sources, 0, "Task"));
+    assert_eq!(d.span, span_of(&sources, 0, "Item"));
 }
 
 #[test]
@@ -1423,8 +1423,8 @@ fn a_module_type_in_a_signature_resolves_and_needs_pub() {
     let r = result.expect("module_types should resolve");
     let symbols = &r.symbols;
     let task = symbols
-        .lookup_type(r.entry, Some(&p("m")), "Task")
-        .expect("m::Task");
+        .lookup_type(r.entry, Some(&p("m")), "Item")
+        .expect("m::Item");
     let shape = symbols
         .lookup_type(r.entry, Some(&p("m")), "Shape")
         .expect("m::Shape");
@@ -1445,7 +1445,7 @@ fn a_module_type_in_a_signature_resolves_and_needs_pub() {
         Some(1)
     );
 
-    // `m::Task::new` is `pub`; `secret` is not.
+    // `m::Item::new` is `pub`; `secret` is not.
     let (_, new) = member(&r, task, "new");
     assert_eq!(new.name, "new");
     assert!(matches!(
@@ -2460,7 +2460,7 @@ fn a_test_with_parameters_or_a_return_type_is_v0114() {
 
 #[test]
 fn the_standard_module_names_are_v0113_for_a_module() {
-    for name in ["json", "env", "log"] {
+    for name in ["json", "env", "log", "time"] {
         let text = format!("mod {name};\nfn main() {{}}");
         assert_eq!(
             codes_and_messages(&text),
@@ -2473,7 +2473,7 @@ fn the_standard_module_names_are_v0113_for_a_module() {
     }
     // So may not a struct or an enum, whose associated functions would
     // otherwise be taken for the module's.
-    for name in ["json", "env", "log"] {
+    for name in ["json", "env", "log", "time"] {
         for text in [
             format!("struct {name} {{ x: i32 }}\nfn main() {{}}"),
             format!("enum {name} {{ A }}\nfn main() {{}}"),
@@ -2509,7 +2509,14 @@ fn assert_and_assert_eq_are_v0113_for_a_function() {
 
 #[test]
 fn a_use_of_a_standard_module_is_v0113() {
-    for path in ["json", "json::parse", "log::info", "env"] {
+    for path in [
+        "json",
+        "json::parse",
+        "log::info",
+        "env",
+        "time",
+        "time::sleep",
+    ] {
         let text = format!("use {path};\nfn main() {{}}");
         let first = path.split("::").next().unwrap_or(path);
         assert_eq!(

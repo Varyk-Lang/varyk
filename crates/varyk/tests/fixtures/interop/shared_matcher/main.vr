@@ -1,0 +1,17 @@
+mod matcher;
+
+fn count(m: Shared<matcher::Matcher>, words: Vec<string>) -> usize {
+    let mut n: usize = 0;
+    for word in words {
+        if m.is_match(word) {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+fn main() {
+    let m = Shared::new(matcher::Matcher::new("red|green"));
+    let other: Shared<matcher::Matcher> = m.clone();
+    println!("{} {}", count(other, vec!["red", "blue", "green"]), m.hits);
+}

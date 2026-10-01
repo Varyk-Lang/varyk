@@ -584,8 +584,33 @@ fn ignores_unsafe_fn() {
 }
 
 #[test]
-fn ignores_async_fn() {
-    none("pub async fn f() {}");
+fn imports_async_fn() {
+    let f = one("pub async fn f(id: i64, name: &str) -> String { String::new() }");
+    assert!(f.is_async);
+    assert_eq!(f.params, vec![RustTy::I64, RustTy::Str]);
+    assert_eq!(f.ret, RustTy::String);
+    assert!(!one("pub fn f() {}").is_async);
+}
+
+#[test]
+fn imports_async_method() {
+    let f = method_sig("async fn load(&mut self, n: i32) -> i32");
+    assert!(f.is_async);
+    assert_eq!(f.receiver, Some(SelfMode::Mutable));
+    assert_eq!(f.params, vec![RustTy::I32]);
+}
+
+/// An async function's future holds its parameters, so a reference it
+/// returns is never rooted, as a Varyk async function's never is
+/// (milestone 5b1 spec 2.8): opaque, so not callable (V0108).
+#[test]
+fn an_async_function_returning_a_reference_is_opaque() {
+    let f = one("pub async fn f(s: &str) -> &str { s }");
+    assert!(matches!(f.ret, RustTy::Opaque(_)));
+    assert_eq!(f.ret_root, None);
+    let f = method_sig("async fn name(&self) -> &str");
+    assert!(matches!(f.ret, RustTy::Opaque(_)));
+    assert_eq!(f.ret_root, None);
 }
 
 #[test]
@@ -622,7 +647,7 @@ fn skipped_free_functions_re_exports_and_cfg_types_are_recorded() {
     )
     .expect("should parse");
     let fns: Vec<&str> = module.fns.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(fns, ["kept"]);
+    assert_eq!(fns, ["e", "kept"]);
     assert_eq!(
         module.skipped_fns,
         [
@@ -630,7 +655,6 @@ fn skipped_free_functions_re_exports_and_cfg_types_are_recorded() {
             ("b".to_string(), "function", "a parameter behind `#[cfg]`"),
             ("c".to_string(), "function", "`const`"),
             ("d".to_string(), "function", "`unsafe`"),
-            ("e".to_string(), "function", "`async`"),
             (
                 "least".to_string(),
                 "item",
@@ -1023,13 +1047,12 @@ fn a_skipped_method_is_recorded_with_why() {
          }\n",
     );
     let names: Vec<&str> = s.methods.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(names, ["ok"]);
+    assert_eq!(names, ["ok", "a"]);
     assert_eq!(
         s.skipped_methods,
         [
             ("u".to_string(), "`unsafe`"),
             ("c".to_string(), "`const`"),
-            ("a".to_string(), "`async`"),
             ("t".to_string(), "behind `#[cfg]`"),
             ("gated".to_string(), "behind `#[cfg]`"),
             ("clone".to_string(), "a trait method"),

@@ -1,0 +1,23 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn double(n: i64) -> i64 {
+    n * 2i64
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    ::varyk_std::run(async {
+        ::std::println!("{}", double(2i64).await);
+    })
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[test]
+fn doubles() {
+    ::varyk_std::run(async {
+        match (&(double(5i64).await), &(10i64)) { (varyk_left, varyk_right) => ::std::assert!(*varyk_left == *varyk_right, "assertion failed at test.vr:11: left is {}, right is {}", varyk_left, varyk_right) };
+    })
+}

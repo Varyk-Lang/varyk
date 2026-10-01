@@ -39,6 +39,10 @@ pub enum TokenKind {
     /// `as`: a cast, `expr as T` (M4 spec 2.9), and the alias in
     /// `use path as name;` (spec 3.3).
     As,
+    /// `async`, before `fn` (milestone 5b1 spec 2.2).
+    Async,
+    /// `await`, only after a `.` (milestone 5b1 spec 2.3).
+    Await,
 
     /// Any other Rust keyword or reserved word, carrying its text.
     ReservedKeyword(String),

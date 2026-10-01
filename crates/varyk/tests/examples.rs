@@ -79,6 +79,16 @@ fn run_interop_imported_struct() {
     );
 }
 
+/// A `Shared` of an imported Rust struct (milestone 5b1 spec 2.6): its
+/// `&self` method and `pub` field read through the handle.
+#[test]
+fn run_shared_imported_struct() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/interop/shared_matcher/main.vr",
+        "2 0\n",
+    );
+}
+
 #[test]
 fn run_enums() {
     assert_runs("examples/enums.vr", "3.14\n6\n0\n");
@@ -295,6 +305,159 @@ fn log_arguments_run_whatever_the_level() {
             .map_or("", |(_, rest)| rest);
         assert_eq!(line, logged);
     }
+}
+
+/// Started calls overlapping, `Task::all` over ten, an async method
+/// (milestone 5b1 spec 6).
+#[test]
+fn run_tasks() {
+    assert_runs(
+        "examples/tasks.vr",
+        "fetched user 7\nsent receipt to ann\nfast then slow: 7 and 2\n\
+         total of ten squares: 385\ndoubled 21 is 42\nslow task done\n",
+    );
+}
+
+/// `varyk test` runs the `#[test] async fn`s of `examples/tasks.vr`.
+#[test]
+fn test_tasks() {
+    let output = varyk(&["test", "examples/tasks.vr"]);
+    let out = stdout_of(&output);
+    assert!(output.status.success(), "{out}\n{}", stderr_of(&output));
+    assert!(out.contains("test doubles ... ok"), "{out}");
+    assert!(out.contains("test counts ... ok"), "{out}");
+}
+
+/// `Task::all` with one failure and `?`, and `Task::all_settled` printing
+/// every outcome (milestone 5b1 spec 2.5).
+#[test]
+fn run_fanout() {
+    assert_runs(
+        "examples/fanout.vr",
+        "prices: 12 + 24 + 48\nfailed: no price for item 3\nitem 1: 12\nitem 2: 24\n\
+         item 3 failed: no price for item 3\nitem 4: 48\n",
+    );
+}
+
+/// One `Shared<Config>` handed to 10,000 started tasks.
+#[test]
+fn run_shared() {
+    assert_runs("examples/shared.vr", "10000 tasks, total 50025000\n");
+}
+
+/// A single file with an async `main` that sleeps and prints runs, and
+/// `varyk test` on it runs its `#[test] async fn` (milestone 5b1 spec
+/// 2.2, 2.7): each on `varyk-std`'s runtime, which its manifest depends on.
+#[test]
+fn run_and_test_an_async_single_file() {
+    let dir = empty_dir("async-file");
+    fs::write(
+        dir.join("main.vr"),
+        "async fn twice(n: i64) -> i64 {\n    time::sleep(5).await;\n    n * 2\n}\n\n\
+         async fn main() {\n    time::sleep(10).await;\n    println!(\"{}\", twice(21).await);\n}\n\n\
+         #[test]\nasync fn doubles() {\n    assert_eq(twice(2).await, 4);\n}\n",
+    )
+    .expect("write main.vr");
+    let output = varyk_run_with(&["run", "main.vr"], &dir, &[], &[]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "42\n");
+    let output = varyk_run_with(&["test", "main.vr"], &dir, &[], &[]);
+    let out = stdout_of(&output);
+    assert!(output.status.success(), "{out}\n{}", stderr_of(&output));
+    assert!(out.contains("test doubles ... ok"), "{out}");
+}
+
+/// A started task that panics, awaited (milestone 5b1 spec 2.4): the panic
+/// continues in `main`, so the program stops with a failure and the
+/// panic's message on stderr instead of hanging or printing on.
+#[test]
+fn a_panicking_task_that_is_awaited_fails_the_program() {
+    let dir = empty_dir("task-panic");
+    fs::write(
+        dir.join("main.vr"),
+        "async fn crash(n: usize) -> i64 {\n    time::sleep(5).await;\n    let v: Vec<i64> = vec![1, 2];\n    v[n]\n}\n\n\
+         async fn main() {\n    let t = crash(7);\n    println!(\"started\");\n    println!(\"{}\", t.await);\n    println!(\"not reached\");\n}\n",
+    )
+    .expect("write main.vr");
+    // On a thread, so that a hang fails the test rather than stalling it.
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(varyk_run_with(&["run", "main.vr"], &dir, &[], &[]));
+    });
+    let output = receive
+        .recv_timeout(std::time::Duration::from_secs(300))
+        .expect("the program finishes rather than hang");
+    assert!(!output.status.success(), "{}", stdout_of(&output));
+    assert_eq!(stdout_of(&output), "started\n");
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("index out of bounds: the len is 2 but the index is 7"),
+        "{stderr}"
+    );
+}
+
+/// Runs `main.vr` (`text`) in a fresh directory named `name`, on a thread
+/// so that a hang fails the test rather than stalling it.
+fn run_on_a_thread(name: &str, text: &str) -> std::process::Output {
+    let dir = empty_dir(name);
+    fs::write(dir.join("main.vr"), text).expect("write main.vr");
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(varyk_run_with(&["run", "main.vr"], &dir, &[], &[]));
+    });
+    receive
+        .recv_timeout(std::time::Duration::from_secs(300))
+        .expect("the program finishes rather than hang")
+}
+
+/// `Task::all` over 40 tasks giving a `Result`, the last of which fails
+/// first (milestone 5b1 spec 2.5): it returns that `Err` at once, without
+/// waiting for the tasks before it in the list, and cancels them, so none
+/// of them prints, though `main` waits past the time they would finish.
+#[test]
+fn task_all_returns_the_first_err_to_arrive_and_cancels_the_rest() {
+    let output = run_on_a_thread(
+        "task-all-first-err",
+        "async fn check(i: i32) -> Result<i32, string> {\n    if i == 39 {\n        \
+         return Err(format!(\"task {} failed\", i));\n    }\n    time::sleep(1000).await;\n    \
+         println!(\"task {} finished\", i);\n    Ok(i)\n}\n\n\
+         async fn main() {\n    let mut ids: Vec<i32> = Vec::new();\n    for i in 0..40 {\n        \
+         ids.push(i);\n    }\n    \
+         match Task::all(ids.iter().map(|i| check(i)).collect()).await {\n        \
+         Ok(values) => println!(\"all {}\", values.len()),\n        \
+         Err(e) => println!(\"failed: {}\", e),\n    }\n    time::sleep(1500).await;\n    \
+         println!(\"done\");\n}\n",
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "failed: task 39 failed\ndone\n");
+}
+
+/// `Task::all` and `Task::all_settled` give the results in the order of
+/// the list, whatever order the tasks finish in, and an empty list gives
+/// an empty `Vec` (milestone 5b1 spec 2.5). An empty `vec![]` of tasks
+/// has no type to take, so the empty list is a collected `map` over an
+/// empty `Vec`.
+#[test]
+fn task_all_keeps_the_order_of_the_list_and_an_empty_one_gives_nothing() {
+    let output = run_on_a_thread(
+        "task-all-order",
+        "async fn slow(n: i64) -> i64 {\n    time::sleep((50 - n * 10) as u64).await;\n    n\n}\n\n\
+         async fn check(n: i64) -> Result<i64, string> {\n    time::sleep((50 - n * 10) as u64).await;\n    \
+         if n == 2 {\n        return Err(\"two\");\n    }\n    Ok(n)\n}\n\n\
+         async fn main() {\n    let ns = Task::all(vec![slow(1), slow(2), slow(3)]).await;\n    \
+         println!(\"{} {} {}\", ns[0], ns[1], ns[2]);\n    \
+         let rs = Task::all_settled(vec![check(1), check(2), check(3)]).await;\n    \
+         for r in rs {\n        match r {\n            Ok(n) => println!(\"ok {}\", n),\n            \
+         Err(e) => println!(\"err {}\", e),\n        }\n    }\n    \
+         let none: Vec<i64> = vec![];\n    \
+         let a = Task::all(none.iter().map(|n| slow(n)).collect()).await;\n    \
+         let b = Task::all_settled(none.iter().map(|n| check(n)).collect()).await;\n    \
+         match Task::all(none.iter().map(|n| check(n)).collect()).await {\n        \
+         Ok(c) => println!(\"{} {} {}\", a.len(), b.len(), c.len()),\n        \
+         Err(e) => println!(\"{}\", e),\n    }\n}\n",
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "1 2 3\nok 1\nerr two\nok 3\n0 0 0\n");
 }
 
 /// `users` (M5a spec 6) run from a copy, as its current directory, so its

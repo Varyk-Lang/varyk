@@ -4,6 +4,7 @@
 
 use varyk_syntax::{Expr, ExprKind, Ident, Span};
 
+use super::asyncs::{TaskPlace, map_value_spans, started_ty};
 use super::{FnChecker, RANGE_USIZE_NOTE, closures, unsupported_rust_signature, usize_note};
 use crate::builtins::{self, BuiltinId, ClosureResult, Owner, ResultKind, Subst};
 use crate::diagnostics::{Diagnostic, codes};
@@ -30,17 +31,49 @@ impl FnChecker<'_> {
         expected: Option<Ty>,
         span: Span,
     ) -> Option<HirExpr> {
-        let receiver = self.expr(receiver, None)?;
+        // Where a task may be made (milestone 5b1 spec 2.3): the receiver
+        // of `.detach()`, and the value of the closure of the `map` that
+        // `collect` is called on.
+        let places = self.task_places.len();
+        if method.name == "detach" && args.is_empty() {
+            self.task_places.push((receiver.span, TaskPlace::Detach));
+        }
+        if let (
+            "collect",
+            [],
+            ExprKind::MethodCall {
+                method: map,
+                args: map_args,
+                ..
+            },
+        ) = (method.name.as_str(), args, &receiver.kind)
+        {
+            if let ("map", [closure]) = (map.name.as_str(), map_args.as_slice()) {
+                for at in map_value_spans(closure) {
+                    self.task_places.push((at, TaskPlace::MapValue));
+                }
+            }
+        }
+        let receiver = self.expr(receiver, None);
+        self.task_places.truncate(places);
+        let receiver = receiver?;
         if method.name == "clone" && self.derived_clone(&receiver.ty) {
             return self.clone_call(receiver, method, args, span);
         }
-        let type_name = self.ty_name(&receiver.ty);
+        // A `Shared`'s methods are its struct's, but for `clone`, which
+        // gives another handle (milestone 5b1 spec 2.6).
+        let reached = match &receiver.ty {
+            Ty::Shared(_) if method.name == "clone" => &receiver.ty,
+            ty => ty.reached(),
+        };
+        let type_name = self.ty_name(reached);
         let no_method = format!("type `{type_name}` has no method `{}`", method.name);
         // Arguments typed before the parameter types were known.
         let mut typed = None;
-        let (found, params, ret): (MethodRef, Vec<Ty>, Ty) = match &receiver.ty {
+        let mut started = false;
+        let (found, params, ret): (MethodRef, Vec<Ty>, Ty) = match reached {
             Ty::Struct(_) | Ty::Enum(_) => {
-                let owner = match receiver.ty {
+                let owner = match *reached {
                     Ty::Struct(id) => UserType::Struct(id),
                     Ty::Enum(id) => UserType::Enum(id),
                     _ => unreachable!("matched above"),
@@ -111,6 +144,15 @@ impl FnChecker<'_> {
                     self.diagnostics
                         .push(Diagnostic::new(codes::V0100, method.span, message));
                     return None;
+                }
+                match found {
+                    MethodRef::Varyk(id) if self.symbols.fns[id.0 as usize].is_async => {
+                        started = self.async_call(Some(id), &path, span)?;
+                    }
+                    MethodRef::Imported(id) if self.symbols.imported[id.0 as usize].is_async => {
+                        started = self.async_call(None, &path, span)?;
+                    }
+                    _ => {}
                 }
                 (found, params, ret)
             }
@@ -216,17 +258,20 @@ impl FnChecker<'_> {
             (MethodRef::Builtin(id), _) if id.get().result_kind == ResultKind::Borrowed => Some(0),
             _ => None,
         };
-        Some(HirExpr {
+        let call = HirExpr {
             kind: HirExprKind::MethodCall {
                 receiver: Box::new(receiver),
                 method: found,
                 args,
                 rooted,
                 looked_into: false,
+                started,
             },
-            ty: ret,
+            ty: started_ty(started, ret),
             span,
-        })
+        };
+        // A collected `map` of started calls is a `Vec` of tasks.
+        self.tasks_made(call)
     }
 
     /// Whether `.clone()` on a value of type `ty` is the derived copy of
@@ -295,6 +340,7 @@ impl FnChecker<'_> {
                 args,
                 rooted: None,
                 looked_into: false,
+                started: false,
             },
             ty,
             span,

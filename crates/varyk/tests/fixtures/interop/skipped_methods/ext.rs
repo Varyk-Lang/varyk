@@ -11,8 +11,6 @@ impl A {
         1
     }
 
-    pub async fn a(&self) {}
-
     #[cfg(test)]
     pub fn t(&self) {}
 

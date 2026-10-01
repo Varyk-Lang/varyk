@@ -123,8 +123,11 @@ pub fn place_info(locals: &[LocalInfo], expr: &HirExpr) -> Option<PlaceInfo> {
             } else {
                 place_info(locals, base).unwrap_or(TEMPORARY).mutable
             };
+            // Everything reached through a `Shared` is read-only
+            // (milestone 5b1 spec 2.6).
+            let mutable = mutable && !matches!(base.ty, Ty::Shared(_));
             let borrowed = !expr.ty.is_copy();
-            let origin = match (&expr.kind, &base.ty) {
+            let origin = match (&expr.kind, base.ty.reached()) {
                 (_, _) if !borrowed => None,
                 (HirExprKind::Field { .. }, Ty::Struct(id)) => Some(Origin::Struct(*id)),
                 (HirExprKind::Index { .. }, _) => match place_info(locals, base) {
@@ -196,6 +199,18 @@ struct Context<'a> {
     enums: &'a [HirEnum],
     /// The program's files, indexed by `FileId.0`.
     sources: &'a [SourceFile],
+}
+
+/// The modes a call passes its arguments by, with `keeps` as
+/// [`Context::callee`] gives it: for a started call (milestone 5b1 spec
+/// 3), every argument, a method's receiver included, is an owned slot the
+/// task keeps.
+fn started_modes(started: bool, modes: Vec<ParamMode>, keeps: bool) -> (Vec<ParamMode>, bool) {
+    if started {
+        (vec![ParamMode::Owned; modes.len()], true)
+    } else {
+        (modes, keeps)
+    }
 }
 
 impl Context<'_> {
@@ -684,6 +699,7 @@ fn places(
     let patterns = vec![None; locals.len()];
     let held = vec![false; locals.len()];
     let call_results = vec![false; locals.len()];
+    let through_shared = vec![false; locals.len()];
     let made_by = vec![None; locals.len()];
     let made_from = vec![None; locals.len()];
     let head_reads = vec![Vec::new(); locals.len()];
@@ -723,6 +739,7 @@ fn places(
         patterns,
         held,
         call_results,
+        through_shared,
         made_by,
         made_from,
         head_reads,
@@ -810,6 +827,9 @@ struct FnAnalyzer<'a> {
     /// Per `let`: bound to the result of a call returning part of a value
     /// (M4 spec 3.1), which no `mut` can make changeable.
     call_results: Vec<bool>,
+    /// Per `let`: another name for something reached through a `Shared`
+    /// (milestone 5b1 spec 2.6), which no `mut` can make changeable.
+    through_shared: Vec<bool>,
     /// Per `let`: what made its value when it is a `match`, `if`, or
     /// block, as V0304's note names it: an article and a noun.
     made_by: Vec<Option<(&'static str, &'static str)>>,
@@ -1054,12 +1074,20 @@ impl FnAnalyzer<'_> {
             | HirExprKind::Bool(_)
             | HirExprKind::String(_)
             | HirExprKind::Local(_) => {}
-            HirExprKind::Call { callee, args, .. } => {
+            HirExprKind::Call {
+                callee,
+                args,
+                started,
+                ..
+            } => {
                 for arg in args {
                     self.expr(arg);
                 }
                 let (name, modes, keeps) = self.cx.callee(*callee);
                 let args: Vec<&HirExpr> = args.iter().collect();
+                if *started {
+                    return self.started_call(&name, &modes, &args);
+                }
                 self.call(&name, &modes, keeps, &args, None);
                 self.rooted_argument_stored(expr);
             }
@@ -1088,9 +1116,11 @@ impl FnAnalyzer<'_> {
                     );
                 }
             }
+            // The awaited call's arguments are passed as any call's are.
             HirExprKind::Unary { operand, .. }
             | HirExprKind::Cast { expr: operand, .. }
-            | HirExprKind::Assert { cond: operand, .. } => {
+            | HirExprKind::Assert { cond: operand, .. }
+            | HirExprKind::Await(operand) => {
                 self.expr(operand);
             }
             HirExprKind::Binary { lhs, rhs, .. } => {
@@ -1225,6 +1255,17 @@ impl FnAnalyzer<'_> {
             }
         }
         let values: Vec<&HirExpr> = std::iter::once(&**receiver).chain(args).collect();
+        // A `mut self` method of the struct a `Shared` holds would change
+        // it (milestone 5b1 spec 2.6).
+        if matches!(receiver.ty, Ty::Shared(_)) && modes.first() == Some(&ParamMode::MutableBorrow)
+        {
+            let diagnostic = self.shared_unchangeable(receiver, &name);
+            self.diagnostics.push(diagnostic);
+            return;
+        }
+        if let HirExprKind::MethodCall { started: true, .. } = call.kind {
+            return self.started_call(&name, &modes, &values);
+        }
         self.call(&name, &modes, keeps, &values, Some(*method));
         if let Some(entry) = chain {
             self.chain_call(call, receiver, entry, incoming, mapped);
@@ -1478,6 +1519,10 @@ impl FnAnalyzer<'_> {
         };
         self.locals[local.0 as usize].place = place;
         self.blame[local.0 as usize] = blame;
+        self.through_shared[local.0 as usize] = place.borrowed
+            && leaves(value)
+                .into_iter()
+                .any(|leaf| self.reaches_shared(leaf));
         if place.borrowed && declared_mut && !place.mutable && value.ty == Ty::String {
             self.alias_notes[local.0 as usize] = alias_note(self.locals, local, value);
         }
@@ -1562,7 +1607,10 @@ impl FnAnalyzer<'_> {
             return;
         }
         let info = self.info(target);
-        if !info.mutable {
+        if !info.mutable && self.reaches_shared(target) {
+            let diagnostic = self.shared_unchangeable(target, "");
+            self.diagnostics.push(diagnostic);
+        } else if !info.mutable {
             let root = place_root(target).expect("an assignment target is a place");
             let blamed = self.blame(target).unwrap_or(root);
             let diagnostic = self.cannot_change(target.span, root, blamed);
@@ -1661,6 +1709,34 @@ impl FnAnalyzer<'_> {
                 .collect();
             let receiver = method.map(|_| name);
             self.used_while_lent(args, &lent, false, receiver);
+        }
+    }
+
+    /// A started call of `name`, whose parameters take `args` by `modes`
+    /// (milestone 5b1 spec 3): the task keeps every argument, a method's
+    /// receiver first, so each is an owned slot (V0304), and none may go
+    /// to a `mut` parameter, since the task would change only its own
+    /// copy (V0309).
+    fn started_call(&mut self, name: &str, modes: &[ParamMode], args: &[&HirExpr]) {
+        for (arg, mode) in args.iter().zip(modes) {
+            if *mode != ParamMode::MutableBorrow {
+                self.owned_slot(arg, &Slot::Started(name.to_string()));
+                continue;
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    codes::V0309,
+                    arg.span,
+                    format!(
+                        "`{name}` changes what it is given here, but a started task changes \
+                         only its own copy, which nobody would ever see"
+                    ),
+                )
+                .with_note(format!(
+                    "wait for the call with `.await` so that `{name}` changes this value, or \
+                     have it return what it makes"
+                )),
+            );
         }
     }
 
@@ -1779,8 +1855,14 @@ impl FnAnalyzer<'_> {
                     _ => self.uses_on_the_way(base, at_leaf, exclusive, out),
                 }
             }
-            HirExprKind::Call { callee, args, .. } => {
+            HirExprKind::Call {
+                callee,
+                args,
+                started,
+                ..
+            } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
+                let (modes, keeps) = started_modes(*started, modes, keeps);
                 self.call_uses(args.iter(), &modes, keeps, out);
             }
             // The receiver of a changing method is changed (spec 2.5).
@@ -1788,9 +1870,11 @@ impl FnAnalyzer<'_> {
                 receiver,
                 method,
                 args,
+                started,
                 ..
             } => {
                 let (_, modes, keeps) = self.cx.method(*method);
+                let (modes, keeps) = started_modes(*started, modes, keeps);
                 self.call_uses(std::iter::once(&**receiver).chain(args), &modes, keeps, out);
             }
             HirExprKind::StructLit { fields, .. } => {
@@ -1815,6 +1899,7 @@ impl FnAnalyzer<'_> {
                 }
             }
             HirExprKind::Try { operand, .. } => self.uses_on_the_way(operand, false, true, out),
+            HirExprKind::Await(operand) => self.uses_on_the_way(operand, at_leaf, exclusive, out),
             HirExprKind::EnumLit { args, .. } | HirExprKind::VecLit(args) => {
                 for arg in args {
                     self.uses_on_the_way(arg, false, !arg.ty.is_copy(), out);
@@ -2207,6 +2292,12 @@ impl FnAnalyzer<'_> {
             if self.info(leaf).mutable {
                 continue;
             }
+            if self.reaches_shared(leaf) {
+                let callee = if changed { "" } else { callee };
+                let diagnostic = self.shared_unchangeable(leaf, callee);
+                self.diagnostics.push(diagnostic);
+                continue;
+            }
             let base = field_root(leaf);
             if is_block_like(base) {
                 self.mut_argument(base, callee, changed);
@@ -2417,6 +2508,68 @@ impl FnAnalyzer<'_> {
             ))
     }
 
+    /// Whether `place` is reached through a `Shared` (milestone 5b1 spec
+    /// 2.6): a field or element of one, or a `let` that is another name
+    /// for such a place.
+    fn reaches_shared(&self, place: &HirExpr) -> bool {
+        match &place.kind {
+            HirExprKind::Local(id) => self.through_shared[id.0 as usize],
+            HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } => {
+                matches!(base.ty, Ty::Shared(_)) || self.reaches_shared(base)
+            }
+            _ => rooted_argument(place).is_some_and(|argument| self.reaches_shared(argument)),
+        }
+    }
+
+    /// V0310 at `place`, something reached through a `Shared` that an
+    /// assignment or a changing method (`callee` empty) or a `mut`
+    /// parameter or `mut self` of `callee` would change.
+    fn shared_unchangeable(&self, place: &HirExpr, callee: &str) -> Diagnostic {
+        // The handle itself, as the receiver of a `mut self` method of
+        // the struct it holds.
+        let whole = matches!(place.ty, Ty::Shared(_));
+        let message = if whole {
+            format!("`{callee}` may change the struct this `Shared` holds, which can only be read")
+        } else if callee.is_empty() {
+            "this is reached through a `Shared`, so it can only be read".to_string()
+        } else {
+            format!(
+                "`{callee}` may change this, but it is reached through a `Shared`, so it can \
+                 only be read"
+            )
+        };
+        let mut diagnostic = Diagnostic::new(codes::V0310, place.span, message);
+        if let Some(root) = place_root(place) {
+            let info = self.local(root);
+            let label = if matches!(info.ty, Ty::Shared(_)) {
+                Some(format!("`{}` is a `Shared`", info.name))
+            } else if self.through_shared[root.0 as usize] {
+                Some(format!(
+                    "`{}` is another name for part of a `Shared`",
+                    info.name
+                ))
+            } else {
+                None
+            };
+            if let Some(label) = label {
+                diagnostic = diagnostic.with_label(info.span, label);
+            }
+        }
+        let copy = if whole {
+            ""
+        } else if place.ty.is_copy() {
+            "; to change a copy, put it in a `let mut` and change that"
+        } else {
+            "; to change a copy, write `.clone()` after this and change that"
+        };
+        diagnostic
+            .with_note(format!(
+                "a `Shared` lets many tasks read one value at once, so nothing reached through \
+                 it may change{copy}"
+            ))
+            .with_note("in Rust terms, an `Arc<T>` gives only shared references to its `T`")
+    }
+
     /// V0301 (an assignment, `callee` empty) or V0302 (an argument to a
     /// `mut` parameter of `callee`) at `span`, changing `blamed`, a `let`
     /// that is read-only whatever its `mut`: it holds the result of a call
@@ -2498,7 +2651,7 @@ mod aliases;
 mod chains;
 mod moves;
 mod patterns;
-mod returns;
+pub(crate) mod returns;
 mod slots;
 mod strings;
 #[cfg(test)]
