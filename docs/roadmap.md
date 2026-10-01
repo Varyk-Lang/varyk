@@ -126,14 +126,17 @@ Design: [specs/2026-09-30-milestone-5a-design.md](specs/2026-09-30-milestone-5a-
 
 ### Milestone 5b1: async
 
-Gated on two open questions: the async runtime shape and ownership-transfer
-syntax.
+Design: [specs/2026-10-01-milestone-5b1-design.md](specs/2026-10-01-milestone-5b1-design.md).
 
-- [ ] `async`/`await` on a built-in tokio runtime, `spawn` as a built-in, `Send`/`Sync`/`Pin` kept out of the surface syntax and their failures mapped to Varyk diagnostics
+- [x] `async fn`, `.await`, and started calls on a built-in multi-threaded tokio runtime, with `Send`, `Sync`, and `Pin` kept out of the surface
+- [x] `Task<T>`: cancelled when dropped, `detach`, `Task::all`, and `Task::all_settled`
+- [x] `Shared<T>` for a read-only struct held by many tasks
+- [x] `time::sleep`, and `pub async fn` imported from `.rs` modules
+- [x] Examples `tasks`, `fanout`, and `shared`; `docs/language.md`, `docs/design.md`, `docs/open-questions.md`, and `docs/roadmap.md` updated
 
 ### Milestone 5b2: HTTP and the database
 
-- [ ] HTTP server on a proven Rust crate, chosen at that time
+- [ ] HTTP server on a proven Rust crate, chosen at that time; application state shared by every handler is a `Shared<T>`
 - [ ] HTTP client on the same stack
 - [ ] Databases through one API; sqlx is the candidate crate
 - [ ] `.rs` signatures naming Varyk-declared types and `varyk_std::Error`, so the `varyk-std` facades can take and return Varyk structs (moved from milestone 4)
@@ -154,7 +157,7 @@ syntax.
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
 
-TOML, beside the rest of the cuts listed under "Not in milestone 5a" in
+TOML, beside the rest of the cuts listed under "Not in milestone 5b1" in
 [language.md](language.md): nothing on the golden path needs it, and the
 same machinery adds it later.
 

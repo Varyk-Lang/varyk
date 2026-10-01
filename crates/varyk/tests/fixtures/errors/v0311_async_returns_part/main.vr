@@ -1,0 +1,12 @@
+struct User {
+    name: string,
+}
+
+async fn name_of(user: User) -> string {
+    user.name
+}
+
+async fn main() {
+    let user = User { name: "ann" };
+    println!("{}", name_of(user).await);
+}

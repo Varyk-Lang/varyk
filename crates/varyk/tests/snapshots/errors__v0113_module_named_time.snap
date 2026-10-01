@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `time` is already taken by the standard `time` module
+ --> crates/varyk/tests/fixtures/errors/v0113_module_named_time/main.vr:1:5
+  |
+1 | mod time;
+  |     ^^^^ the name `time` is already taken by the standard `time` module
+  |
+  = note: the standard `time` module is reached by its path wherever it is used, as in `time::..`, so a module, struct, or enum of your own needs another name

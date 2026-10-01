@@ -64,6 +64,33 @@ macro_rules! error_case {
     };
 }
 
+/// One test per case that only rustc can find (milestone 5b1 spec 5):
+/// `varyk build` runs, against the workspace's `varyk-std`, and its
+/// stderr must hold exactly one diagnostic, headed `error[<code>]`.
+macro_rules! build_error_case {
+    ($name:ident, $code:literal) => {
+        #[test]
+        fn $name() {
+            let case = stringify!($name);
+            let path = format!("crates/varyk/tests/fixtures/errors/{case}/main.vr");
+            let output = varyk(&["build", &path]);
+            assert_eq!(output.status.code(), Some(1), "{case}: {:?}", output.status);
+            let stderr = String::from_utf8(output.stderr).expect("stderr should be valid utf-8");
+            assert!(
+                stderr.starts_with(&format!("error[{}]: ", $code)),
+                "{case}: expected an `error[{}]` header, got:\n{stderr}",
+                $code
+            );
+            assert_eq!(
+                stderr.matches("error[").count(),
+                1,
+                "{case}: expected exactly one diagnostic, got:\n{stderr}"
+            );
+            insta::assert_snapshot!(stderr);
+        }
+    };
+}
+
 /// `text` with the compiler's version (and its `MAJOR.MINOR`) masked.
 fn without_version(text: &str) -> String {
     let version = env!("CARGO_PKG_VERSION");
@@ -165,6 +192,7 @@ package_error_case!(v0104_rust_crate_not_a_dependency, "V0104", "src/main.vr");
 package_error_case!(v0104_rust_crate_dev_dependency, "V0104", "src/main.vr");
 package_error_case!(v0106_main_in_library, "V0106", "src/lib.vr");
 error_case!(v0106_missing_main, "V0106", fix_it: false);
+error_case!(v0106_async_main_called, "V0106", fix_it: false);
 error_case!(v0107_rust_string_type, "V0107", fix_it: true);
 error_case!(v0108_unsupported_rust_signature, "V0108", fix_it: false);
 error_case!(v0108_two_reference_parameters, "V0108", fix_it: false);
@@ -206,10 +234,14 @@ error_case!(v0113_fn_named_assert_eq, "V0113", fix_it: false);
 error_case!(v0113_module_named_env, "V0113", fix_it: false);
 error_case!(v0113_module_named_json, "V0113", fix_it: false);
 error_case!(v0113_module_named_log, "V0113", fix_it: false);
+error_case!(v0113_module_named_time, "V0113", fix_it: false);
 error_case!(v0113_struct_named_json, "V0113", fix_it: false);
 error_case!(v0113_enum_named_env, "V0113", fix_it: false);
 error_case!(v0113_use_json, "V0113", fix_it: false);
 error_case!(v0113_use_json_parse, "V0113", fix_it: false);
+error_case!(v0113_use_time_sleep, "V0113", fix_it: false);
+error_case!(v0113_struct_named_task, "V0113", fix_it: false);
+error_case!(v0113_rs_struct_named_shared, "V0113", fix_it: false);
 error_case!(v0113_varyk_prefix_fn, "V0113", fix_it: false);
 error_case!(v0113_varyk_prefix_method, "V0113", fix_it: false);
 error_case!(v0113_varyk_prefix_module, "V0113", fix_it: false);
@@ -225,11 +257,14 @@ error_case!(v0103_duplicate_variant_field, "V0103", fix_it: false);
 error_case!(v0200_type_mismatch, "V0200", fix_it: false);
 error_case!(v0200_as_on_bool, "V0200", fix_it: false);
 error_case!(v0200_sort_floats, "V0200", fix_it: false);
+error_case!(v0200_all_settled_on_plain_tasks, "V0200", fix_it: false);
+error_case!(v0200_shared_for_struct, "V0200", fix_it: false);
 error_case!(v0201_wrong_argument_count, "V0201", fix_it: false);
 error_case!(v0201_missing_variant_field, "V0201", fix_it: false);
 error_case!(v0201_closure_with_two_parameters, "V0201", fix_it: false);
 error_case!(v0202_placeholder_count, "V0202", fix_it: false);
 error_case!(v0203_print_struct, "V0203", fix_it: false);
+error_case!(v0203_print_shared, "V0203", fix_it: false);
 error_case!(v0203_clone_rust_field, "V0203", fix_it: false);
 error_case!(v0203_compare_blocked, "V0203", fix_it: false);
 error_case!(v0203_assert_eq_blocked, "V0203", fix_it: false);
@@ -280,6 +315,26 @@ error_case!(v0210_env_nested_struct, "V0210", fix_it: false);
 error_case!(v0210_env_vec, "V0210", fix_it: false);
 error_case!(v0210_env_map, "V0210", fix_it: false);
 error_case!(v0210_rust_type, "V0210", fix_it: false);
+error_case!(v0210_shared_in_json, "V0210", fix_it: false);
+error_case!(v0210_shared_in_env, "V0210", fix_it: false);
+error_case!(v0211_async_call_in_plain_fn, "V0211", fix_it: true);
+error_case!(v0211_await_in_closure, "V0211", fix_it: false);
+error_case!(v0212_await_on_plain_call, "V0212", fix_it: true);
+error_case!(v0212_task_all_without_await, "V0212", fix_it: true);
+error_case!(v0213_async_call_statement, "V0213", fix_it: true);
+error_case!(v0213_let_underscore, "V0213", fix_it: true);
+error_case!(v0213_started_in_if_branch, "V0213", fix_it: true);
+error_case!(v0213_started_as_argument, "V0213", fix_it: true);
+error_case!(v0213_map_without_collect, "V0213", fix_it: true);
+error_case!(v0213_task_never_awaited, "V0213", fix_it: false);
+error_case!(v0213_tasks_never_awaited, "V0213", fix_it: false);
+error_case!(v0214_async_cycle, "V0214", fix_it: false);
+error_case!(v0215_task_passed, "V0215", fix_it: false);
+error_case!(v0215_task_written_as_type, "V0215", fix_it: false);
+error_case!(v0215_await_on_tasks, "V0215", fix_it: false);
+error_case!(v0215_tasks_indexed, "V0215", fix_it: false);
+error_case!(v0216_shared_of_number, "V0216", fix_it: false);
+error_case!(v0216_shared_in_field, "V0216", fix_it: false);
 error_case!(v0209_rename_not_a_string, "V0209", fix_it: false);
 error_case!(v0300_change_through_param, "V0300", fix_it: true);
 error_case!(v0300_push_on_borrowed, "V0300", fix_it: true);
@@ -302,7 +357,9 @@ error_case!(v0304_option_map_returns_capture, "V0304", fix_it: true);
 error_case!(v0304_collect_borrowed_items, "V0304", fix_it: true);
 error_case!(v0304_payload_of_stored_match_result, "V0304", fix_it: true);
 error_case!(v0304_assign_to_element_alias, "V0304", fix_it: false);
+error_case!(v0304_param_given_to_task, "V0304", fix_it: false);
 error_case!(v0305_use_after_move, "V0305", fix_it: false);
+error_case!(v0305_used_after_given_to_task, "V0305", fix_it: false);
 error_case!(v0306_same_value_twice, "V0306", fix_it: false);
 error_case!(v0306_used_while_lent, "V0306", fix_it: false);
 error_case!(v0307_alias_changed, "V0307", fix_it: false);
@@ -311,6 +368,10 @@ error_case!(v0307_argument_changed_while_result_used, "V0307", fix_it: false);
 error_case!(v0307_for_head_capture_changed, "V0307", fix_it: false);
 error_case!(v0308_two_roots, "V0308", fix_it: false);
 error_case!(v0308_map_two_roots, "V0308", fix_it: false);
+error_case!(v0309_started_mut_param, "V0309", fix_it: false);
+error_case!(v0310_assign_through_shared, "V0310", fix_it: false);
+error_case!(v0310_mut_self_through_shared, "V0310", fix_it: false);
+error_case!(v0311_async_returns_part, "V0311", fix_it: true);
 package_error_case!(v0400_edition_2021, "V0400", "src/main.vr");
 package_error_case!(v0401_workspace_true, "V0401", "src/main.vr");
 package_error_case!(v0401_target_dependencies, "V0401", "src/main.vr");
@@ -324,3 +385,6 @@ package_error_case!(v0403_program_name, "V0403", "src/main.vr");
 package_error_case!(v0404_std_missing, "V0404", "src/main.vr");
 package_error_case!(v0404_std_wrong_minor, "V0404", "src/main.vr");
 package_error_case!(v0404_std_stale_lock, "V0404", "src/main.vr");
+package_error_case!(v0404_std_missing_async_main, "V0404", "src/main.vr");
+build_error_case!(v0901_rc_given_to_a_task, "V0901");
+build_error_case!(v0901_cell_shared_with_a_task, "V0901");

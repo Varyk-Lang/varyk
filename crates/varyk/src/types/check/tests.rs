@@ -134,9 +134,13 @@ fn every_builtin_type_name_resolves_as_a_type() {
         let written = match *name {
             "Option" | "Vec" => format!("{name}<i32>"),
             "Result" | "HashMap" => format!("{name}<i32, i32>"),
+            // `Shared` holds a struct.
+            "Shared" => format!("{name}<S>"),
             _ => name.to_string(),
         };
-        ok(&format!("fn f(x: {written}) {{}}\n\nfn main() {{}}\n"));
+        ok(&format!(
+            "struct S {{\n    n: i32,\n}}\n\nfn f(x: {written}) {{}}\n\nfn main() {{}}\n"
+        ));
     }
 }
 
@@ -544,9 +548,9 @@ fn unknown_associated_call_matching_another_modules_type_is_v0100_with_a_did_you
     let diagnostics = result.expect_err("should fail");
     let d = only(&diagnostics);
     assert_eq!(d.code, codes::V0100);
-    assert_eq!(d.message, "cannot find function `Task::new`");
+    assert_eq!(d.message, "cannot find function `Item::new`");
     assert!(
-        d.notes.iter().any(|n| n == "did you mean `m::Task`?"),
+        d.notes.iter().any(|n| n == "did you mean `m::Item`?"),
         "{d:#?}"
     );
 }
@@ -985,6 +989,46 @@ fn calling_a_callable_import_checks_against_the_mapped_types() {
     assert_eq!(local_ty(main, "r"), Ty::Int(IntKind::U8));
 }
 
+/// An imported async function or method is called as a Varyk one is
+/// (milestone 5b1 spec 2.8): awaited, or started into a `Task`.
+#[test]
+fn an_imported_async_function_or_method_is_awaited_or_started() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/async_calls/main.vr");
+    let program = result.expect("should type-check");
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "a"), Ty::String);
+    assert_eq!(local_ty(main, "t"), Ty::Task(Box::new(Ty::String)));
+    assert_eq!(local_ty(main, "b"), Ty::String);
+    assert_eq!(local_ty(main, "n"), I64);
+    assert_eq!(local_ty(main, "u"), Ty::Task(Box::new(I64)));
+    assert_eq!(local_ty(main, "m"), I64);
+    assert!(program.uses_std);
+}
+
+#[test]
+fn an_imported_async_function_follows_the_async_call_rules() {
+    let (result, sources) = check_path("crates/varyk/tests/fixtures/interop/async_misuse/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let found: Vec<(&str, Span)> = diagnostics.iter().map(|d| (d.code, d.span)).collect();
+    assert_eq!(
+        found,
+        vec![
+            (codes::V0211, span_of(&sources, "ext::fetch(1)")),
+            (codes::V0213, span_of(&sources, "ext::fetch(2)")),
+            (codes::V0108, span_of(&sources, "ext::first(\"x\")")),
+        ],
+        "{diagnostics:#?}"
+    );
+    assert!(
+        diagnostics[2]
+            .notes
+            .iter()
+            .any(|n| n.contains("an async Rust function that returns a reference")),
+        "{:#?}",
+        diagnostics[2]
+    );
+}
+
 #[test]
 fn imported_argument_and_return_mismatches_are_v0200() {
     let (result, sources) =
@@ -1106,8 +1150,8 @@ fn a_module_struct_literal_resolves_its_struct() {
     let task = program
         .structs
         .iter()
-        .position(|s| s.name == "Task")
-        .expect("Task");
+        .position(|s| s.name == "Item")
+        .expect("Item");
     let make = function(&program, "make");
     let tail = make.body.tail.as_deref().expect("a tail");
     let HirExprKind::StructLit { id, .. } = &tail.kind else {
@@ -1793,7 +1837,7 @@ fn a_plain_local_compared_to_a_len_still_says_let_mut() {
 
 // --- `match` and patterns (spec 2.3) ------------------------------------------
 
-const MATCH_ITEMS: &str = "enum Shape {\n    Circle(f64),\n    Rect(f64, f64),\n    Point,\n}\nenum Color {\n    Red,\n    Blue,\n}\nstruct Task {\n    status: Color,\n}\nfn mk() -> Task {\n    Task { status: Color::Red }\n}\n";
+const MATCH_ITEMS: &str = "enum Shape {\n    Circle(f64),\n    Rect(f64, f64),\n    Point,\n}\nenum Color {\n    Red,\n    Blue,\n}\nstruct Item {\n    status: Color,\n}\nfn mk() -> Item {\n    Item { status: Color::Red }\n}\n";
 
 /// A program with [`MATCH_ITEMS`] and `body` as the body of `f`, whose
 /// parameters are a `Shape`, an `Option<i32>`, and a `bool`.
@@ -1840,7 +1884,7 @@ fn matching_a_struct_is_v0205() {
     assert_eq!(d.code, codes::V0205, "{d:#?}");
     let head = part_of(&sources, "match t {", "t {");
     assert_eq!(d.span, Span::new(head.file, head.start, head.start + 1));
-    assert!(d.message.contains("`Task`"), "{d:#?}");
+    assert!(d.message.contains("`Item`"), "{d:#?}");
     assert!(d.notes.iter().any(|note| note.contains("`if`")), "{d:#?}");
 }
 
@@ -2065,13 +2109,13 @@ fn a_pattern_binding_is_scoped_to_its_arm_like_a_let() {
 
 // --- `for` and ranges (spec 2.4) ----------------------------------------------
 
-const LOOP_ITEMS: &str = "struct Task {\n    title: string,\n}\nfn mk() -> Task {\n    Task { title: \"t\" }\n}\nfn all() -> Vec<Task> {\n    vec![mk()]\n}\n";
+const LOOP_ITEMS: &str = "struct Item {\n    title: string,\n}\nfn mk() -> Item {\n    Item { title: \"t\" }\n}\nfn all() -> Vec<Item> {\n    vec![mk()]\n}\n";
 
-/// A program with `LOOP_ITEMS` and `fn f(values: Vec<i32>, tasks: Vec<Task>,
+/// A program with `LOOP_ITEMS` and `fn f(values: Vec<i32>, tasks: Vec<Item>,
 /// n: i64, s: string, o: Option<i32>, c: bool) { body }`.
 fn with_loop(body: &str) -> String {
     format!(
-        "{LOOP_ITEMS}fn f(values: Vec<i32>, tasks: Vec<Task>, n: i64, s: string, o: Option<i32>, c: bool) {{\n{body}\n}}\nfn main() {{}}\n"
+        "{LOOP_ITEMS}fn f(values: Vec<i32>, tasks: Vec<Item>, n: i64, s: string, o: Option<i32>, c: bool) {{\n{body}\n}}\nfn main() {{}}\n"
     )
 }
 
@@ -2367,11 +2411,6 @@ fn calling_a_rust_method_varyk_skipped_says_why_in_a_note() {
             ),
             (
                 codes::V0100,
-                "`a` exists in the Rust file but is `async`; Varyk does not import such \
-                 methods; call it from a plain `pub fn` of another name in an `impl A` block"
-            ),
-            (
-                codes::V0100,
                 "`t` exists in the Rust file but is behind `#[cfg]`; Varyk does not import such \
                  methods; such a method may not exist in the build"
             ),
@@ -2500,13 +2539,13 @@ fn calling_a_rust_function_skipped_for_a_cfg_parameter_or_test_says_which() {
 
 // --- Milestone 4: patterns, exhaustiveness, `if let`, `while let` -----------
 
-const PATTERN_ITEMS: &str = "enum Shape {\n    Circle(f64),\n    Rect(f64, f64),\n    Point,\n}\nenum Event {\n    Click { x: i32, y: i32 },\n    Key(string),\n    Quit,\n}\nenum Pair {\n    Two(i32, Option<i32>),\n}\nstruct Task {\n    done: bool,\n}\n";
+const PATTERN_ITEMS: &str = "enum Shape {\n    Circle(f64),\n    Rect(f64, f64),\n    Point,\n}\nenum Event {\n    Click { x: i32, y: i32 },\n    Key(string),\n    Quit,\n}\nenum Pair {\n    Two(i32, Option<i32>),\n}\nstruct Item {\n    done: bool,\n}\n";
 
 /// A program with [`PATTERN_ITEMS`] and `body` as the body of `f`, whose
 /// parameters cover every kind of value a pattern looks at.
 fn with_patterns(body: &str) -> String {
     format!(
-        "{PATTERN_ITEMS}fn f(o: Option<Shape>, n: i32, b: bool, s: string, u: u8, e: Event, r: Result<Option<i32>, string>, t: Option<Task>, p: Pair, fl: f64, so: Option<string>) {{\n{body}\n}}\nfn main() {{}}\n"
+        "{PATTERN_ITEMS}fn f(o: Option<Shape>, n: i32, b: bool, s: string, u: u8, e: Event, r: Result<Option<i32>, string>, t: Option<Item>, p: Pair, fl: f64, so: Option<string>) {{\n{body}\n}}\nfn main() {{}}\n"
     )
 }
 
@@ -2631,10 +2670,10 @@ fn a_named_field_variant_pattern_names_every_field() {
 #[test]
 fn a_struct_pattern_on_a_plain_struct_is_v0001() {
     let (d, sources) = one_error(&with_patterns(
-        "    match t {\n        Some(Task { done }) => {}\n        _ => {}\n    }",
+        "    match t {\n        Some(Item { done }) => {}\n        _ => {}\n    }",
     ));
     assert_eq!(d.code, codes::V0001, "{d:#?}");
-    assert_eq!(d.span, span_of(&sources, "Task { done }"));
+    assert_eq!(d.span, span_of(&sources, "Item { done }"));
     assert!(d.message.contains("`if`"), "{d:#?}");
 }
 
@@ -4262,4 +4301,712 @@ fn assert_takes_a_bool_and_counts_its_arguments() {
     assert_eq!(d.code, codes::V0200, "{d:#?}");
     let (d, _) = one_error("fn main() {}\n#[test]\nfn checks() {\n    assert_eq(1);\n}\n");
     assert_eq!(d.code, codes::V0201, "{d:#?}");
+}
+
+// --- Async functions (milestone 5b1 spec 2.2, 2.3, 2.7) ---------------------
+
+#[test]
+fn an_awaited_call_types_as_what_the_function_returns() {
+    let program = ok(
+        "struct S {\n    n: i64,\n}\nimpl S {\n    async fn get(self) -> i64 {\n        self.n\n    }\n}\n\
+         async fn load(n: i64) -> i64 {\n    n\n}\n\
+         async fn main() {\n    let x = load(1).await;\n    let s = S { n: 2 };\n    let y = s.get().await;\n    time::sleep(10).await;\n}\n",
+    );
+    let main = function(&program, "main");
+    assert!(main.is_async);
+    assert!(function(&program, "load").is_async && function(&program, "get").is_async);
+    assert_eq!(local_ty(main, "x"), I64);
+    assert_eq!(local_ty(main, "y"), I64);
+    let HirExprKind::Await(operand) = &stmt_expr(main, 0).kind else {
+        panic!("an await: {:?}", stmt_expr(main, 0));
+    };
+    assert!(
+        matches!(operand.kind, HirExprKind::Call { .. }),
+        "{operand:?}"
+    );
+    let sleep = stmt_expr(main, 3);
+    assert_eq!(sleep.ty, Ty::Unit);
+    assert!(matches!(sleep.kind, HirExprKind::Await(_)), "{sleep:?}");
+    assert!(program.uses_std);
+}
+
+#[test]
+fn an_async_main_or_test_alone_uses_std() {
+    assert!(ok("async fn main() {}\n").uses_std);
+    assert!(ok("fn main() {}\n#[test]\nasync fn t() {}\n").uses_std);
+    assert!(!ok("async fn f() {}\nfn main() {}\n").uses_std);
+    let program = ok("async fn main() {}\n#[test]\nasync fn t() {\n    assert(true);\n}\n");
+    assert!(function(&program, "t").is_test && function(&program, "t").is_async);
+}
+
+#[test]
+fn an_async_call_in_an_ordinary_function_is_v0211_adding_async() {
+    for (text, header) in [
+        (
+            "async fn load() {}\nfn main() {\n    load().await;\n}\n",
+            "fn main",
+        ),
+        (
+            "async fn load() {}\npub fn run() {\n    load().await;\n}\nfn main() {}\n",
+            "pub fn run",
+        ),
+        (
+            "async fn load() {}\nfn main() {\n    load();\n}\n",
+            "fn main",
+        ),
+    ] {
+        let (d, sources) = one_error(text);
+        assert_eq!(d.code, codes::V0211, "{d:#?}");
+        assert_eq!(
+            d.message,
+            "`load` waits for something, so only an `async fn` can call it"
+        );
+        assert_eq!(d.span, part_of(&sources, "    load()", "load()"));
+        let fix = d.fix_it.as_ref().expect("a fix-it");
+        assert_eq!(fix.replacement, "async ");
+        let at = part_of(&sources, header, "fn").start;
+        assert_eq!((fix.span.start, fix.span.end), (at, at), "{text}");
+    }
+}
+
+#[test]
+fn await_inside_a_closure_is_v0211() {
+    let (d, sources) = one_error(
+        "async fn get(n: i64) -> i64 {\n    n\n}\nasync fn main() {\n    let v: Vec<i64> = vec![1];\n    \
+         let w: Vec<i64> = v.iter().map(|x| get(x).await).collect();\n}\n",
+    );
+    assert_eq!(d.code, codes::V0211, "{d:#?}");
+    assert_eq!(d.message, "`.await` cannot be used inside a closure");
+    assert_eq!(d.span, part_of(&sources, "get(x).await", ".await"));
+}
+
+#[test]
+fn await_on_anything_but_an_async_call_is_v0212() {
+    for (text, needle, message) in [
+        (
+            "async fn main() {\n    let x = 5.await;\n}\n",
+            "5.await",
+            "only a call to an async function can be waited for with `.await`",
+        ),
+        (
+            "fn g() -> i32 {\n    1\n}\nasync fn main() {\n    let x = g().await;\n}\n",
+            "g().await",
+            "`g` is not an async function, so there is nothing to wait for",
+        ),
+    ] {
+        let (d, sources) = one_error(text);
+        assert_eq!(d.code, codes::V0212, "{d:#?}");
+        assert_eq!(d.message, message);
+        assert_eq!(d.span, part_of(&sources, needle, ".await"));
+        let fix = d.fix_it.as_ref().expect("a fix-it");
+        assert_eq!((fix.span, fix.replacement.as_str()), (d.span, ""));
+    }
+}
+
+#[test]
+fn an_async_call_not_awaited_is_v0213() {
+    let (d, sources) = one_error("async fn work() {}\nasync fn main() {\n    work();\n}\n");
+    assert_eq!(d.code, codes::V0213, "{d:#?}");
+    assert_eq!(
+        d.message,
+        "this starts `work` and then throws its task away, which stops it"
+    );
+    assert_eq!(d.span, part_of(&sources, "    work()", "work()"));
+    let fix = d.fix_it.as_ref().expect("a fix-it");
+    assert_eq!(fix.replacement, ".await");
+    let end = d.span.end;
+    assert_eq!((fix.span.start, fix.span.end), (end, end));
+    let (d, _) = one_error("async fn main() {\n    time::sleep(1);\n}\n");
+    assert_eq!(d.code, codes::V0213, "{d:#?}");
+}
+
+#[test]
+fn async_functions_calling_each_other_are_v0214_naming_the_cycle() {
+    let (d, sources) = one_error(
+        "async fn a() {\n    b().await;\n}\nasync fn b() {\n    a().await;\n}\nasync fn main() {\n    a().await;\n}\n",
+    );
+    assert_eq!(d.code, codes::V0214, "{d:#?}");
+    assert_eq!(
+        d.message,
+        "async functions cannot call each other in a cycle: `a` calls `b`, which calls `a`"
+    );
+    assert_eq!(d.span, span_of(&sources, "b()"));
+    let (d, sources) = one_error(
+        "struct S {\n    n: i64,\n}\nimpl S {\n    async fn count(self) -> i64 {\n        self.count().await\n    }\n}\n\
+         async fn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0214, "{d:#?}");
+    assert_eq!(
+        d.message,
+        "async functions cannot call each other in a cycle: `S::count` calls itself"
+    );
+    assert_eq!(d.span, span_of(&sources, "self.count()"));
+}
+
+#[test]
+fn a_call_to_an_async_main_is_v0106() {
+    let (d, sources) = one_error("async fn helper() {\n    main().await;\n}\nasync fn main() {}\n");
+    assert_eq!(d.code, codes::V0106, "{d:#?}");
+    assert_eq!(
+        d.message,
+        "`main` is where the program starts and cannot be called"
+    );
+    assert_eq!(d.span, part_of(&sources, "main().await", "main"));
+}
+
+#[test]
+fn a_call_to_an_async_test_is_v0114() {
+    let (d, _) = one_error("#[test]\nasync fn t() {}\nasync fn main() {\n    t();\n}\n");
+    assert_eq!(d.code, codes::V0114, "{d:#?}");
+}
+
+// --- Started calls and tasks (milestone 5b1 spec 2.3, 2.4) -----------------
+
+/// Whether `expr` is a started call (or started method call).
+fn started(expr: &HirExpr) -> bool {
+    match &expr.kind {
+        HirExprKind::Call { started, .. } | HirExprKind::MethodCall { started, .. } => *started,
+        _ => false,
+    }
+}
+
+fn task(ty: Ty) -> Ty {
+    Ty::Task(Box::new(ty))
+}
+
+#[test]
+fn a_call_without_await_starts_a_task_that_await_waits_for() {
+    let program = ok(
+        "struct S {\n    n: i64,\n}\nimpl S {\n    async fn get(self) -> i64 {\n        self.n\n    }\n}\n\
+         async fn load(n: i64) -> i64 {\n    n\n}\n\
+         async fn main() {\n    let t = load(1);\n    let s = S { n: 2 };\n    let u = s.get();\n    \
+         let w = time::sleep(10);\n    let x = t.await;\n    let y = u.await;\n    w.await;\n}\n",
+    );
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "t"), task(I64));
+    assert_eq!(local_ty(main, "u"), task(I64));
+    assert_eq!(local_ty(main, "w"), task(Ty::Unit));
+    assert_eq!(local_ty(main, "x"), I64);
+    assert_eq!(local_ty(main, "y"), I64);
+    for index in [0, 2, 3] {
+        assert!(
+            started(stmt_expr(main, index)),
+            "{:?}",
+            stmt_expr(main, index)
+        );
+    }
+    let sleep = stmt_expr(main, 3);
+    assert!(
+        matches!(
+            sleep.kind,
+            HirExprKind::Call {
+                callee: Callee::Builtin(_),
+                ..
+            }
+        ),
+        "{sleep:?}"
+    );
+    let HirExprKind::Await(operand) = &stmt_expr(main, 4).kind else {
+        panic!("an await: {:?}", stmt_expr(main, 4));
+    };
+    assert!(matches!(operand.kind, HirExprKind::Local(_)), "{operand:?}");
+    // An awaited call is not started.
+    let program = ok("async fn load() {}\nasync fn main() {\n    load().await;\n}\n");
+    let HirExprKind::Await(operand) = &stmt_expr(function(&program, "main"), 0).kind else {
+        panic!("an await");
+    };
+    assert!(!started(operand));
+}
+
+#[test]
+fn a_started_call_uses_std() {
+    let program = ok(
+        "async fn work() {}\nasync fn run() {\n    let t = work();\n    t.await;\n}\nfn main() {}\n",
+    );
+    assert!(program.uses_std);
+    assert!(
+        !ok("async fn work() {}\nasync fn run() {\n    work().await;\n}\nfn main() {}\n").uses_std
+    );
+}
+
+#[test]
+fn detach_takes_a_started_call_or_a_task_local() {
+    let program = ok(
+        "async fn work(n: i64) {}\nasync fn main() {\n    work(1).detach();\n    let t = work(2);\n    \
+         t.detach();\n}\n",
+    );
+    let main = function(&program, "main");
+    let detach = stmt_expr(main, 0);
+    assert_eq!(detach.ty, Ty::Unit);
+    let HirExprKind::MethodCall { receiver, .. } = &detach.kind else {
+        panic!("a method call: {detach:?}");
+    };
+    assert!(started(receiver), "{receiver:?}");
+    assert_eq!(stmt_expr(main, 2).ty, Ty::Unit);
+}
+
+#[test]
+fn a_list_of_tasks_given_nowhere_is_v0213() {
+    for (text, needle) in [
+        (
+            "async fn f(n: i64) -> i64 {\n    n\n}\nasync fn main() {\n    let ts = vec![f(1), f(2)];\n}\n",
+            "ts",
+        ),
+        (
+            "async fn f(n: i64) -> i64 {\n    n\n}\nasync fn main() {\n    let ids: Vec<i64> = vec![1];\n    \
+             let ts = ids.iter().map(|id| f(id)).collect();\n}\n",
+            "ts",
+        ),
+        (
+            "async fn f(n: i64) -> i64 {\n    n\n}\nasync fn main() {\n    vec![f(1)];\n}\n",
+            "vec![f(1)]",
+        ),
+    ] {
+        let (d, sources) = one_error(text);
+        assert_eq!(d.code, codes::V0213, "{d:#?}");
+        assert_eq!(d.span, span_of(&sources, needle), "{text}");
+    }
+}
+
+#[test]
+fn a_cycle_through_a_started_call_is_v0214() {
+    let (d, _) = one_error(
+        "async fn a() {\n    let t = b();\n    t.await;\n}\nasync fn b() {\n    a().detach();\n}\n\
+         async fn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0214, "{d:#?}");
+}
+
+#[test]
+fn a_started_call_anywhere_but_its_four_places_is_v0213() {
+    let head = "async fn f(n: i64) -> i64 {\n    n\n}\nfn g(n: i64) -> i64 {\n    n\n}\n";
+    for (body, needle) in [
+        ("    f(1);\n", "f(1)"),
+        ("    let _ = f(1);\n", "f(1)"),
+        (
+            "    let c = true;\n    let t = if c { f(1) } else { f(2) };\n    t.await;\n",
+            "f(1)",
+        ),
+        ("    let x = g(f(1));\n", "f(1)"),
+        ("    let x = f(f(1)).await;\n", "f(1)"),
+        (
+            "    let ids: Vec<i64> = vec![1];\n    let n = ids.iter().map(|id| f(id)).count();\n",
+            "f(id)",
+        ),
+        (
+            "    let ids: Vec<i64> = vec![1];\n    let n: Vec<i64> = ids.iter().map(|id| f(id)).map(|t| 1).collect();\n",
+            "f(id)",
+        ),
+    ] {
+        let text = format!("{head}async fn main() {{\n{body}}}\n");
+        let (diagnostics, sources) = errors(&text);
+        let d = &diagnostics[0];
+        assert_eq!(d.code, codes::V0213, "{text}\n{diagnostics:#?}");
+        assert_eq!(d.span, span_of(&sources, needle), "{text}");
+        assert_eq!(
+            d.notes,
+            ["wait for it with `.await`, or let it run on its own with `.detach()`"]
+        );
+    }
+}
+
+#[test]
+fn a_task_never_awaited_or_detached_is_v0213() {
+    let (d, sources) =
+        one_error("async fn f() -> i64 {\n    1\n}\nasync fn main() {\n    let t = f();\n}\n");
+    assert_eq!(d.code, codes::V0213, "{d:#?}");
+    let at = span_of(&sources, "t = f()").start;
+    assert_eq!((d.span.start, d.span.end), (at, at + 1));
+    assert_eq!(
+        d.notes,
+        ["wait for it with `t.await`, or let it run on its own with `t.detach()`"]
+    );
+}
+
+#[test]
+fn a_task_or_a_list_of_them_used_anywhere_else_is_v0215() {
+    let head = "async fn f(n: i64) -> i64 {\n    n\n}\nfn g(n: i64) -> i64 {\n    n\n}\n";
+    let tasks = "    let ts = vec![f(1), f(2)];\n";
+    for (body, needle) in [
+        (format!("{tasks}    let t = ts[0];\n"), "ts[0]"),
+        (format!("{tasks}    ts.push(f(3));\n"), "ts.push"),
+        (format!("{tasks}    for t in ts {{\n    }}\n"), "ts {"),
+        (format!("{tasks}    let n = ts.len();\n"), "ts.len"),
+        (format!("{tasks}    let us = ts;\n"), "ts;"),
+        ("    let t = f(1);\n    let x = g(t);\n".to_string(), "t)"),
+        ("    let t = f(1);\n    let u = t;\n".to_string(), "t;\n}"),
+        (
+            "    let t = f(1);\n    println!(\"{}\", t);\n".to_string(),
+            "t)",
+        ),
+    ] {
+        let text = format!("{head}async fn main() {{\n{body}}}\n");
+        let (diagnostics, sources) = errors(&text);
+        let d = &diagnostics[0];
+        assert_eq!(d.code, codes::V0215, "{text}\n{diagnostics:#?}");
+        let at = span_of(&sources, needle);
+        assert_eq!(d.span.start, at.start, "{text}");
+    }
+    // Returning one.
+    let (d, _) = one_error(
+        "async fn f() -> i64 {\n    1\n}\nasync fn h() -> i64 {\n    let t = f();\n    return t;\n}\n\
+         async fn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0215, "{d:#?}");
+}
+
+#[test]
+fn writing_task_as_a_type_is_v0215() {
+    for text in [
+        "async fn f() -> i64 {\n    1\n}\nasync fn main() {\n    let t: Task<i64> = f();\n    t.await;\n}\n",
+        "async fn f(t: Task) {}\nasync fn main() {}\n",
+        "struct S {\n    t: Vec<Task<i64>>,\n}\nfn main() {}\n",
+    ] {
+        let (diagnostics, _) = errors(text);
+        assert_eq!(
+            diagnostics[0].code,
+            codes::V0215,
+            "{text}\n{diagnostics:#?}"
+        );
+        assert_eq!(
+            diagnostics[0].message, "`Task` cannot be written as a type",
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn await_on_a_list_of_tasks_is_v0215_naming_task_all() {
+    for text in [
+        "async fn f() -> i64 {\n    1\n}\nasync fn main() {\n    let ts = vec![f(), f()];\n    let x = ts.await;\n}\n",
+        "async fn f() -> i64 {\n    1\n}\nasync fn main() {\n    let x = vec![f(), f()].await;\n}\n",
+    ] {
+        let (d, _) = one_error(text);
+        assert_eq!(d.code, codes::V0215, "{d:#?}");
+        assert!(
+            d.notes.iter().any(|note| note.contains("Task::all")),
+            "{d:#?}"
+        );
+    }
+}
+
+#[test]
+fn await_in_an_ordinary_function_is_v0211_whatever_it_follows() {
+    let (d, sources) = one_error("fn main() {\n    let x = 5.await;\n}\n");
+    assert_eq!(d.code, codes::V0211, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "5.await", ".await"));
+    let fix = d.fix_it.as_ref().expect("a fix-it");
+    assert_eq!(fix.replacement, "async ");
+}
+
+#[test]
+fn task_and_shared_are_reserved_type_names() {
+    for name in ["Task", "Shared"] {
+        for text in [
+            format!("struct {name} {{\n    n: i64,\n}}\nfn main() {{}}\n"),
+            format!("enum {name} {{\n    A,\n}}\nfn main() {{}}\n"),
+        ] {
+            let (diagnostics, _) = errors(&text);
+            assert!(
+                diagnostics.iter().any(|d| d.code == codes::V0113),
+                "{text}\n{diagnostics:#?}"
+            );
+        }
+    }
+}
+
+// --- `Task::all` and `Task::all_settled` (milestone 5b1 spec 2.5) ----------
+
+const ALL_HEAD: &str = "async fn f(n: i64) -> i64 {\n    n\n}\n\
+    async fn g(n: i64) -> Result<i64, string> {\n    Ok(n)\n}\n\
+    async fn h(s: string) -> usize {\n    s.len()\n}\n";
+
+fn all_program(body: &str) -> String {
+    format!(
+        "{ALL_HEAD}async fn run() -> Result<i64, string> {{\n{body}    Ok(0)\n}}\nasync fn main() {{}}\n"
+    )
+}
+
+#[test]
+fn task_all_gives_the_values_or_a_result_of_them_and_all_settled_every_result() {
+    let program = ok(&all_program(
+        "    let ts = vec![f(1), f(2)];\n    let a = Task::all(ts).await;\n    \
+         let b = Task::all(vec![g(1), g(2)]).await;\n    let c = Task::all(vec![g(3)]).await?;\n    \
+         let ids: Vec<i64> = vec![1, 2];\n    \
+         let d = Task::all_settled(ids.iter().map(|id| g(id)).collect()).await;\n    \
+         let e = Task::all(ids.iter().map(|id| f(id)).collect()).await;\n    \
+         let names: Vec<string> = vec![\"a\"];\n    \
+         let k = Task::all(names.iter().map(|n| h(n.clone())).collect()).await;\n",
+    ));
+    assert!(program.uses_std);
+    let run = function(&program, "run");
+    let string = || Ty::String;
+    assert_eq!(local_ty(run, "a"), vec_of(I64));
+    assert_eq!(local_ty(run, "b"), result(vec_of(I64), string()));
+    assert_eq!(local_ty(run, "c"), vec_of(I64));
+    assert_eq!(local_ty(run, "d"), vec_of(result(I64, string())));
+    assert_eq!(local_ty(run, "e"), vec_of(I64));
+    assert_eq!(local_ty(run, "k"), vec_of(Ty::Int(IntKind::Usize)));
+    // The call is awaited, not started.
+    let HirExprKind::Await(operand) = &stmt_expr(run, 1).kind else {
+        panic!("an await: {:?}", stmt_expr(run, 1));
+    };
+    assert!(
+        matches!(
+            operand.kind,
+            HirExprKind::Call {
+                callee: Callee::Builtin(_),
+                started: false,
+                ..
+            }
+        ),
+        "{operand:?}"
+    );
+}
+
+#[test]
+fn task_all_settled_on_tasks_that_give_no_result_is_v0200_naming_task_all() {
+    let (d, sources) = one_error(&all_program(
+        "    let x = Task::all_settled(vec![f(1)]).await;\n",
+    ));
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "Task::all_settled(vec![f(1)])"));
+    assert!(
+        d.notes.iter().any(|note| note.contains("`Task::all(")),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn task_all_without_await_is_v0212() {
+    for (body, needle) in [
+        (
+            "    let ts = vec![f(1)];\n    let x = Task::all(ts);\n",
+            "Task::all(ts)",
+        ),
+        (
+            "    let x = Task::all_settled(vec![g(1)]);\n",
+            "Task::all_settled(vec![g(1)])",
+        ),
+    ] {
+        let text = all_program(body);
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0212, "{text}\n{d:#?}");
+        let at = span_of(&sources, needle);
+        assert_eq!(d.span, at, "{text}");
+        let fix = d.fix_it.as_ref().expect("a fix-it");
+        assert_eq!(fix.replacement, ".await");
+        assert_eq!(fix.span, Span::new(at.file, at.end, at.end));
+    }
+}
+
+#[test]
+fn task_all_takes_only_a_list_of_tasks() {
+    for (body, code) in [
+        ("    let x = Task::all(vec![1, 2]).await;\n", codes::V0200),
+        ("    let x = Task::all(f(1)).await;\n", codes::V0200),
+        (
+            "    let t = f(1);\n    let x = Task::all(t).await;\n",
+            codes::V0215,
+        ),
+        (
+            "    let ts = vec![f(1)];\n    let x = Task::all(ts, ts).await;\n",
+            codes::V0201,
+        ),
+        // An empty `vec![]` has no type to take, and `Task` cannot be
+        // written.
+        ("    let x = Task::all(vec![]).await;\n", codes::V0207),
+        ("    let x = Task::any(vec![f(1)]).await;\n", codes::V0100),
+    ] {
+        let text = all_program(body);
+        let (diagnostics, _) = errors(&text);
+        assert_eq!(diagnostics[0].code, code, "{text}\n{diagnostics:#?}");
+    }
+}
+
+#[test]
+fn a_list_of_tasks_given_to_task_all_is_used() {
+    // From a local, so nothing is reported unused; and a collected `map`
+    // in place.
+    ok(&all_program(
+        "    let ts = vec![f(1)];\n    let us = vec![g(1)];\n    let a = Task::all(ts).await;\n    \
+         let b = Task::all_settled(us).await;\n",
+    ));
+}
+
+#[test]
+fn a_started_method_call_stands_in_every_place_a_started_call_does() {
+    ok(
+        "struct S {\n    n: i64,\n}\nimpl S {\n    async fn get(self) -> i64 {\n        self.n\n    }\n}\n\
+         async fn main() {\n    let s = S { n: 1 };\n    s.clone().get().detach();\n    \
+         let a = Task::all(vec![s.clone().get(), S { n: 2 }.get()]).await;\n    \
+         let v: Vec<S> = vec![S { n: 3 }];\n    \
+         let b = Task::all(v.iter().map(|x| x.clone().get()).collect()).await;\n}\n",
+    );
+}
+
+// --- `Shared<T>` (milestone 5b1 spec 2.6) -----------------------------------
+
+/// A struct to share, with a read method and a `mut self` one, before
+/// `body`, the body of `fn main()`.
+fn shared_program(body: &str) -> String {
+    format!(
+        "struct Config {{\n    factor: i64,\n    name: string,\n    items: Vec<i64>,\n}}\n\
+         impl Config {{\n    fn describe(self) -> string {{\n        self.name.clone()\n    }}\n    \
+         fn bump(mut self) {{\n        self.factor = self.factor + 1;\n    }}\n}}\n\
+         enum Kind {{\n    A,\n}}\n\
+         fn takes(c: Config) -> i64 {{\n    c.factor\n}}\n\
+         fn main() {{\n    let cfg = Config {{ factor: 2, name: \"a\", items: vec![1] }};\n{body}}}\n"
+    )
+}
+
+fn is_shared_struct(ty: &Ty) -> bool {
+    matches!(ty, Ty::Shared(inner) if matches!(**inner, Ty::Struct(_)))
+}
+
+#[test]
+fn shared_new_of_a_struct_gives_a_shared_and_clone_another() {
+    let program = ok(&shared_program(
+        "    let s = Shared::new(cfg);\n    let t: Shared<Config> = Shared::new(Config { factor: 1, name: \"b\", items: vec![] });\n    \
+         let c = s.clone();\n",
+    ));
+    let main = function(&program, "main");
+    for name in ["s", "t", "c"] {
+        assert!(is_shared_struct(&local_ty(main, name)), "{name}");
+    }
+    // `Shared` alone is std's `Arc`, not a `varyk-std` call.
+    assert!(!program.uses_std);
+}
+
+#[test]
+fn shared_of_a_rust_struct_is_accepted() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/shared_matcher/main.vr");
+    let program = result.unwrap_or_else(|d| panic!("should check: {d:#?}"));
+    assert!(is_shared_struct(&local_ty(function(&program, "main"), "m")));
+}
+
+#[test]
+fn shared_of_anything_but_a_struct_is_v0216() {
+    for (body, needle) in [
+        ("    let s = Shared::new(5);\n", "Shared::new(5)"),
+        (
+            "    let s = Shared::new(vec![1]);\n",
+            "Shared::new(vec![1])",
+        ),
+        (
+            "    let s = Shared::new(Some(1));\n",
+            "Shared::new(Some(1))",
+        ),
+        (
+            "    let s = Shared::new(Kind::A);\n",
+            "Shared::new(Kind::A)",
+        ),
+        ("    let s: Shared<i64> = Shared::new(5);\n", "Shared<i64>"),
+        (
+            "    let s: Shared<Vec<i64>> = Shared::new(vec![1]);\n",
+            "Shared<Vec<i64>>",
+        ),
+    ] {
+        let text = shared_program(body);
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0216, "{text}\n{d:#?}");
+        assert_eq!(d.span, span_of(&sources, needle), "{text}\n{d:#?}");
+    }
+}
+
+#[test]
+fn shared_written_anywhere_but_a_parameter_or_let_is_v0216() {
+    for (text, needle) in [
+        (
+            "struct C {\n    n: i64,\n}\nstruct Holder {\n    c: Shared<C>,\n}\nfn main() {}\n",
+            "Shared<C>",
+        ),
+        (
+            "struct C {\n    n: i64,\n}\nfn make(c: C) -> Shared<C> {\n    Shared::new(c)\n}\nfn main() {}\n",
+            "Shared<C>",
+        ),
+        (
+            "struct C {\n    n: i64,\n}\nfn f(v: Vec<Shared<C>>) {}\nfn main() {}\n",
+            "Shared<C>",
+        ),
+        (
+            "struct C {\n    n: i64,\n}\nfn main() {\n    let o: Option<Shared<C>> = None;\n}\n",
+            "Shared<C>",
+        ),
+        (
+            "enum E {\n    A(Shared<i64>),\n}\nfn main() {}\n",
+            "Shared<i64>",
+        ),
+    ] {
+        let (diagnostics, sources) = errors(text);
+        let d = &diagnostics[0];
+        assert_eq!(d.code, codes::V0216, "{text}\n{diagnostics:#?}");
+        assert_eq!(d.span, span_of(&sources, needle), "{text}\n{d:#?}");
+    }
+    // As a parameter's or a `let`'s type, and inferred inside a `Vec` or
+    // an `Option`.
+    ok(
+        "struct C {\n    n: i64,\n}\nfn f(s: Shared<C>) -> i64 {\n    s.n\n}\nfn main() {\n    \
+         let s: Shared<C> = Shared::new(C { n: 1 });\n    let v = vec![s.clone(), s.clone()];\n    \
+         let o = Some(s.clone());\n    let n = f(s);\n}\n",
+    );
+}
+
+#[test]
+fn shared_with_the_wrong_arguments_is_reported() {
+    let (d, _) = one_error(&shared_program("    let s = Shared::new(cfg, cfg);\n"));
+    assert_eq!(d.code, codes::V0201, "{d:#?}");
+    let (d, _) = one_error(&shared_program("    let s = Shared::make(cfg);\n"));
+    assert_eq!(d.code, codes::V0100, "{d:#?}");
+    assert!(d.message.contains("`Shared::new(..)`"), "{d:#?}");
+    let (d, _) = one_error("struct C {\n    n: i64,\n}\nfn f(s: Shared<C, C>) {}\nfn main() {}\n");
+    assert_eq!(d.code, codes::V0101, "{d:#?}");
+}
+
+#[test]
+fn fields_and_methods_through_a_shared_type_as_on_the_struct() {
+    let program = ok(&shared_program(
+        "    let s = Shared::new(cfg);\n    let a = s.factor;\n    let b = s.items.len();\n    \
+         let c = s.describe();\n    let d = s.name.len();\n    let e = s.items[0];\n",
+    ));
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "a"), I64);
+    assert_eq!(local_ty(main, "b"), Ty::Int(IntKind::Usize));
+    assert_eq!(local_ty(main, "c"), Ty::String);
+    assert_eq!(local_ty(main, "d"), Ty::Int(IntKind::Usize));
+    assert_eq!(local_ty(main, "e"), I64);
+}
+
+#[test]
+fn printing_or_comparing_a_shared_is_v0203() {
+    for body in [
+        "    let s = Shared::new(cfg);\n    println!(\"{}\", s);\n",
+        "    let s = Shared::new(cfg);\n    let same = s == s.clone();\n",
+        "    let s = Shared::new(cfg);\n    let same = Some(s.clone()) == Some(s.clone());\n",
+    ] {
+        let text = shared_program(body);
+        let (d, _) = one_error(&text);
+        assert_eq!(d.code, codes::V0203, "{text}\n{d:#?}");
+        assert!(d.message.contains("Shared<Config>"), "{d:#?}");
+    }
+}
+
+#[test]
+fn a_shared_where_its_struct_is_expected_is_v0200() {
+    let text = shared_program("    let s = Shared::new(cfg);\n    let n = takes(s);\n");
+    let (d, sources) = one_error(&text);
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    assert_eq!(d.span.start, part_of(&sources, "takes(s)", "s)").start);
+}
+
+#[test]
+fn a_shared_through_json_or_env_is_v0210() {
+    let text = shared_program("    let s = Shared::new(cfg);\n    let t = json::stringify(s);\n");
+    let (d, _) = one_error(&text);
+    assert_eq!(d.code, codes::V0210, "{d:#?}");
+    let (d, _) = one_error(
+        "struct Config {\n    port: i64,\n}\nfn load() -> Result<i64, Error> {\n    \
+         let c: Shared<Config> = env::parse()?;\n    Ok(c.port)\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0210, "{d:#?}");
 }

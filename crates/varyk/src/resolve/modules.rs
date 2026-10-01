@@ -12,8 +12,8 @@ use crate::diagnostics::{Diagnostic, codes};
 use crate::interop::{ImportError, ImportedModule, import_rust_module_in};
 
 use super::{
-    Dependencies, Module, ModuleId, ModuleKind, duplicate, error_name_taken, parse,
-    reserved_type_name, std_module_taken, varyk_prefix_taken,
+    Dependencies, Module, ModuleId, ModuleKind, duplicate, parse, reserved_type_name,
+    std_module_taken, std_type_taken, varyk_prefix_taken,
 };
 
 /// Loads the file behind every `mod` declared in every `.vr` module of
@@ -267,17 +267,16 @@ fn load_one(
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            // `Error` is the standard error type's name (M5a spec 2.10).
+            // `Error`, `Task`, and `Shared` are the standard types' names
+            // (M5a spec 2.10, milestone 5b1 spec 2.8).
             let types = imported
                 .structs
                 .iter()
                 .map(|s| (&s.name, &s.span))
                 .chain(imported.enums.iter().map(|e| (&e.name, &e.span)));
             for (name, span) in types {
-                if name == "Error" {
-                    let span = Span::new(file, span.start as u32, span.end as u32);
-                    diagnostics.push(error_name_taken(span));
-                }
+                let span = Span::new(file, span.start as u32, span.end as u32);
+                diagnostics.extend(std_type_taken(name, span));
             }
             imports.push((ModuleId(id as u32), imported));
             Loaded::Module(ModuleKind::Rust(source.text.clone()), file)

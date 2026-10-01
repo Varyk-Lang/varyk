@@ -5,7 +5,9 @@
 //!
 //! - a file this crate generated: reported as a Varyk diagnostic, V0900,
 //!   at the mapped Varyk span (warnings are dropped — section 2.3's
-//!   item-level lint allows should already have silenced them);
+//!   item-level lint allows should already have silenced them), or V0901
+//!   when rustc says a value cannot go to another thread, which only a
+//!   started call's task asks of it (milestone 5b1 spec 5);
 //! - a copied `.rs` module: the user's own Rust, shown as rustc rendered
 //!   it but with every copied file's internal path rewritten to its
 //!   user file, errors and warnings alike. rustc's `rendered` text can
@@ -30,9 +32,11 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
+use varyk_syntax::Span;
+
 use crate::backend::SourceMap;
 use crate::diagnostics::Diagnostic;
-use crate::diagnostics::codes::V0900;
+use crate::diagnostics::codes::{V0900, V0901};
 
 /// Where a V0900 diagnostic asks the reader to file a bug: generated code
 /// rejected by rustc means one of Varyk's own passes should have caught
@@ -149,6 +153,9 @@ pub fn classify(
 
     match map.lookup(tree_path.as_ref(), line_start) {
         Some(span) if level == "error" => {
+            if let Some(diagnostic) = thread_safety(msg, &text, span) {
+                return Some(Message::Generated(diagnostic));
+            }
             let message = match code {
                 Some(code) => format!("{text} ({code})"),
                 None => text,
@@ -165,6 +172,58 @@ pub fn classify(
         Some(_) => None,
         None => Some(other(&raw_rendered, level, text, copied, crate_src)),
     }
+}
+
+/// V0901 at `span` when rustc's error `text` (`msg`'s headline) says a
+/// value cannot be sent or shared between threads: `Task::start` is the
+/// only `Send` bound generated code has, so the task of a started call
+/// holds a value from Rust code that cannot go to another thread
+/// (milestone 5b1 spec 5). The type is the one rustc's `help` says lacks
+/// `Send` or `Sync`, or the headline's own; `None` for any other error.
+fn thread_safety(msg: &serde_json::Value, text: &str, span: Span) -> Option<Diagnostic> {
+    let sent = text.contains("cannot be sent between threads safely");
+    if !sent && !text.contains("cannot be shared between threads safely") {
+        return None;
+    }
+    let lacking = |child: &str| {
+        ["Send", "Sync"].into_iter().find_map(|name| {
+            let (_, rest) =
+                child.split_once(&format!("the trait `{name}` is not implemented for `"))?;
+            let ty = rest.strip_suffix('`').unwrap_or(rest);
+            Some((ty.to_string(), name == "Send"))
+        })
+    };
+    let from_help = child_notes(msg).iter().find_map(|child| lacking(child));
+    let from_headline = || {
+        let ty = text.strip_prefix('`')?.split_once("` cannot be ")?.0;
+        Some((ty.to_string(), sent))
+    };
+    let (what, sent) = match from_help.or_else(from_headline) {
+        Some((ty, sent)) => (format!("`{ty}`"), sent),
+        None => ("a value from Rust code".to_string(), sent),
+    };
+    let (cannot, missing) = if sent {
+        ("cannot be sent to another thread", "Send")
+    } else {
+        ("cannot be shared between threads", "Sync")
+    };
+    Some(
+        Diagnostic::new(
+            V0901,
+            span,
+            format!("the task started here holds {what}, which {cannot}"),
+        )
+        .with_note(
+            "a started task may run on another thread, so what it is given, and what it \
+             holds while it waits, must be able to go there; this value comes from Rust code, \
+             a `.rs` module or a crate it uses",
+        )
+        .with_note(format!(
+            "in Rust terms, {what} is not `{missing}`; in the Rust code, use `Arc` in place of \
+             `Rc`, and `Mutex` or an atomic in place of `Cell` or `RefCell`, or wait for the \
+             call with `.await` instead of starting it"
+        )),
+    )
 }
 
 /// The first note of every V0900: rustc rejected generated code, so one of
@@ -188,7 +247,7 @@ pub fn after_user_errors(messages: Vec<Message>) -> Vec<Message> {
         .into_iter()
         .partition(|message| matches!(message, Message::User { .. }));
     user.extend(rest.into_iter().map(|message| match message {
-        Message::Generated(mut diagnostic) => {
+        Message::Generated(mut diagnostic) if diagnostic.code == V0900 => {
             diagnostic.notes.retain(|note| !note.starts_with(BUG_NOTE));
             diagnostic.notes.insert(
                 0,
@@ -345,6 +404,112 @@ mod tests {
             }
             other => panic!("expected Generated, got {other:?}"),
         }
+    }
+
+    /// A generated line with `span(10, 20)`, and rustc's error there:
+    /// `message` and its `children`, with no code, as rustc gives a
+    /// future's thread-safety errors.
+    fn thread_error(message: &str, children: serde_json::Value) -> Option<Message> {
+        let mut writer = Writer::new("src/main.rs");
+        writer.line(0, "let t = match (s,) { .. };", Some(span(10, 20)));
+        let generated = crate_with(vec![writer.finish()], Vec::new());
+        let map = generated.source_map();
+        let msg = json!({
+            "message": message,
+            "level": "error",
+            "code": serde_json::Value::Null,
+            "spans": [{"file_name": "src/main.rs", "line_start": 1, "is_primary": true}],
+            "children": children,
+            "rendered": format!("error: {message}\n --> src/main.rs:1:9\n"),
+        });
+        classify(&msg, &map, &generated.copied, Path::new("/build"))
+    }
+
+    /// rustc's "cannot be sent between threads safely" and "cannot be
+    /// shared between threads safely" at a started call (milestone 5b1
+    /// spec 5) are V0901 at the Varyk line, naming the Rust type, from
+    /// the headline or from the `help` saying which trait it lacks, with
+    /// no request for a bug report.
+    #[test]
+    fn a_thread_safety_error_in_a_generated_file_is_v0901_naming_the_type() {
+        let cases = [
+            (
+                "future cannot be sent between threads safely",
+                json!([
+                    {"level": "help", "message": "within `{async block@src/main.rs:1:75: 1:85}`, \
+                        the trait `Send` is not implemented for `Rc<String>`", "spans": []},
+                    {"level": "note", "message": "required by a bound in `Task::<T>::start`", "spans": []},
+                ]),
+                "`Rc<String>`, which cannot be sent to another thread",
+            ),
+            (
+                "future cannot be sent between threads safely",
+                json!([{"level": "help", "message": "within `Counter`, the trait `Sync` is not \
+                    implemented for `Cell<i64>`", "spans": []}]),
+                "`Cell<i64>`, which cannot be shared between threads",
+            ),
+            (
+                "`Rc<i64>` cannot be sent between threads safely",
+                json!([]),
+                "`Rc<i64>`, which cannot be sent to another thread",
+            ),
+            (
+                "`RefCell<i64>` cannot be shared between threads safely",
+                json!([]),
+                "`RefCell<i64>`, which cannot be shared between threads",
+            ),
+            (
+                "future cannot be sent between threads safely",
+                json!([]),
+                "a value from Rust code, which cannot be sent to another thread",
+            ),
+        ];
+        for (message, children, headline) in cases {
+            match thread_error(message, children) {
+                Some(Message::Generated(diagnostic)) => {
+                    assert_eq!(diagnostic.code, V0901, "{message}");
+                    assert_eq!(diagnostic.span, span(10, 20));
+                    assert!(
+                        diagnostic.message.contains(headline),
+                        "{message}: {}",
+                        diagnostic.message
+                    );
+                    assert!(
+                        !diagnostic.notes.iter().any(|note| note.contains("report")),
+                        "{:?}",
+                        diagnostic.notes
+                    );
+                }
+                other => panic!("expected Generated, got {other:?}"),
+            }
+        }
+    }
+
+    /// Any other rustc error in a generated file stays V0900, and a V0901
+    /// does not take the note that it may follow from a user's error.
+    #[test]
+    fn only_thread_safety_errors_are_v0901() {
+        match thread_error("mismatched types", json!([])) {
+            Some(Message::Generated(diagnostic)) => assert_eq!(diagnostic.code, V0900),
+            other => panic!("expected Generated, got {other:?}"),
+        }
+        let Some(v0901) =
+            thread_error("`Rc<i64>` cannot be sent between threads safely", json!([]))
+        else {
+            panic!("expected a message");
+        };
+        let user = Message::User {
+            rendered: String::new(),
+            level: "error".to_string(),
+            file: PathBuf::from("util.rs"),
+            line: 1,
+            column: 1,
+            message: String::new(),
+            code: None,
+            notes: Vec::new(),
+        };
+        let both = after_user_errors(vec![v0901.clone(), user]);
+        assert_eq!(both[1], v0901);
     }
 
     /// An error in a user's `.rs` file can make generated code fail too:

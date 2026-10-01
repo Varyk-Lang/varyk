@@ -1,0 +1,35 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct Config {
+    factor: i64,
+    name: String,
+    items: Vec<i64>,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+impl Config {
+    fn describe(&self) -> String {
+        self.name.clone()
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn scale(c: &::std::sync::Arc<Config>, n: i64) -> i64 {
+    c.factor * n + (c.items.len() as i64)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let s = ::std::sync::Arc::new(Config { factor: 3i64, name: "ten".to_string(), items: ::std::vec![1i64, 2i64] });
+    let t = s.clone();
+    ::std::println!("{} {} {}", scale(&t, 2i64), Config::describe(&s), s.name);
+    match s.items.get(0usize).copied() {
+        Some(n) => ::std::println!("{}", n),
+        None => {
+        }
+    }
+}

@@ -641,15 +641,15 @@ fn methods_associated_functions_the_built_in_table_and_indexing() {
     let main = file(&krate, "src/main.rs");
     assert!(main.contains("crate::tally::Tally::new()"), "{main}");
     assert!(
-        main.contains("let mut tasks: Vec<Task> = Vec::new();"),
+        main.contains("let mut tasks: Vec<Item> = Vec::new();"),
         "{main}"
     );
-    assert!(main.contains("Task::new(\"write\")"), "{main}");
+    assert!(main.contains("Item::new(\"write\")"), "{main}");
     assert!(
-        main.contains("Task::complete(&mut tasks[0usize]);"),
+        main.contains("Item::complete(&mut tasks[0usize]);"),
         "{main}"
     );
-    assert!(main.contains("Task::is_done(&tasks[i])"), "{main}");
+    assert!(main.contains("Item::is_done(&tasks[i])"), "{main}");
     assert!(main.contains("let first = &tasks[0usize];"), "{main}");
     // `clone` on a `&str` is spelled `.to_string()` (spec 3.5).
     assert!(main.contains("lit.to_string()"), "{main}");
@@ -1384,4 +1384,316 @@ fn checks() {
         "{main}"
     );
     insta::assert_snapshot!("tests_and_asserts_main_rs", main);
+}
+
+// --- Async functions (milestone 5b1 spec 5) ---------------------------------
+
+/// An async `main` runs its body on `varyk-std`'s runtime, logging started
+/// first inside it; an async function and method keep `async`, and
+/// `.await` follows the call, whose arguments are lent as any call's are;
+/// `time::sleep` is written by its full path.
+#[test]
+fn async_main_with_logging_and_awaited_calls() {
+    let krate = generate_str(
+        "struct User {
+    name: string,
+}
+
+impl User {
+    pub async fn greet(self, times: i64) -> string {
+        format!(\"{} x{}\", self.name, times)
+    }
+}
+
+async fn load(u: User) -> i64 {
+    time::sleep(10).await;
+    u.name.len() as i64
+}
+
+async fn main() {
+    log::info(\"starting\");
+    let u = User { name: \"ann\" };
+    let n = load(u).await;
+    println!(\"{} {}\", n, u.greet(2).await);
+}
+",
+    );
+    let main = file(&krate, "src/main.rs");
+    assert!(
+        main.contains("fn main() {\n    ::varyk_std::run(async {\n        ::varyk_std::start();\n"),
+        "{main}"
+    );
+    assert!(main.contains("async fn load(u: &User) -> i64 {"), "{main}");
+    assert!(
+        main.contains("pub async fn greet(&self, times: i64) -> String {"),
+        "{main}"
+    );
+    assert!(main.contains("load(&u).await"), "{main}");
+    assert!(
+        main.contains("::varyk_std::time::sleep(10u64).await;"),
+        "{main}"
+    );
+    assert!(
+        krate.cargo_toml.contains("varyk-std"),
+        "{}",
+        krate.cargo_toml
+    );
+    insta::assert_snapshot!("async_main_rs", main);
+}
+
+/// An async test is an ordinary `#[test]` running its body on a runtime
+/// of its own (milestone 5b1 spec 5); an async `main` without logging
+/// starts nothing.
+#[test]
+fn async_test_runs_on_a_runtime() {
+    let main = main_rs(
+        "async fn double(n: i64) -> i64 {
+    n * 2
+}
+
+async fn main() {
+    println!(\"{}\", double(2).await);
+}
+
+#[test]
+async fn doubles() {
+    assert_eq(double(5).await, 10);
+}
+",
+    );
+    assert!(
+        main.contains("#[test]\nfn doubles() {\n    ::varyk_std::run(async {\n"),
+        "{main}"
+    );
+    assert!(!main.contains("start()"), "{main}");
+    insta::assert_snapshot!("async_test_main_rs", main);
+}
+
+/// A single file whose only use of `varyk-std` is an async `main` depends
+/// on it (milestone 5b1 spec 4).
+#[test]
+fn a_single_file_with_only_an_async_main_depends_on_varyk_std() {
+    let krate = generate_str("async fn main() {\n    println!(\"hi\");\n}\n");
+    assert!(
+        krate
+            .cargo_toml
+            .contains(&format!("varyk-std = \"={}\"", env!("CARGO_PKG_VERSION"))),
+        "{}",
+        krate.cargo_toml
+    );
+}
+
+// --- Started calls (milestone 5b1 spec 5) -----------------------------------
+
+/// A started call evaluates its arguments in order into `varyk_N` with a
+/// `match`, then starts a task that owns them and passes each as its
+/// parameter takes it; a method is called by its path, a call with no
+/// arguments matches on `()`, an awaited argument is waited for before the
+/// task starts, and `.detach()` is written as it is.
+#[test]
+fn started_calls() {
+    let main = main_rs(
+        "struct User {
+    name: string,
+}
+
+impl User {
+    async fn load(self) -> i64 {
+        self.name.len() as i64
+    }
+}
+
+async fn score(id: i64, u: User) -> i64 {
+    id + u.name.len() as i64
+}
+
+async fn ping() {}
+
+async fn main() {
+    let u = User { name: \"ann\" };
+    let a = score(1, u);
+    let b = User { name: \"bo\" }.load();
+    let c = ping();
+    let d = score(score(2, User { name: \"x\" }).await, User { name: \"y\" });
+    ping().detach();
+    c.detach();
+    let s = time::sleep(5);
+    s.await;
+    println!(\"{} {} {}\", a.await, b.await, d.await);
+}
+",
+    );
+    for expected in [
+        "let a = match (1i64, u,) { (varyk_0, varyk_1,) => \
+         ::varyk_std::Task::start(async move { score(varyk_0, &varyk_1).await }) };",
+        "match (User { name: \"bo\".to_string() },) { (varyk_0,) => \
+         ::varyk_std::Task::start(async move { User::load(&varyk_0).await }) }",
+        "let c = match () { () => ::varyk_std::Task::start(async move { ping().await }) };",
+        "match (score(2i64, &User { name: \"x\".to_string() }).await, User { name: \"y\".to_string() },)",
+        "match () { () => ::varyk_std::Task::start(async move { ping().await }) }.detach();",
+        "c.detach();",
+        "match (5u64,) { (varyk_0,) => ::varyk_std::Task::start(async move { \
+         ::varyk_std::time::sleep(varyk_0).await }) }",
+        "s.await;",
+        "a.await, b.await, d.await",
+    ] {
+        assert!(main.contains(expected), "{expected}\n{main}");
+    }
+    insta::assert_snapshot!("started_calls_main_rs", main);
+}
+
+/// Each kind of argument of spec 3, given to one started and one awaited
+/// call: a number is copied, an owned local moved (started) or lent
+/// (awaited), a `.clone()` and a string literal are new values; the
+/// literal becomes a `String` only where the task keeps it.
+#[test]
+fn started_and_awaited_argument_kinds() {
+    let main = main_rs(
+        "struct User {
+    name: string,
+}
+
+async fn take(n: i64, u: User, c: User, s: string) -> i64 {
+    n
+}
+
+async fn main() {
+    let u = User { name: \"ann\" };
+    let v = User { name: \"bo\" };
+    let a = take(1, v, u.clone(), \"x\").await;
+    let t = take(2, u, User { name: \"c\" }.clone(), \"y\");
+    println!(\"{} {}\", a, t.await);
+}
+",
+    );
+    assert!(
+        main.contains("let a = take(1i64, &v, &u.clone(), \"x\").await;"),
+        "{main}"
+    );
+    assert!(
+        main.contains(
+            "let t = match (2i64, u, (User { name: \"c\".to_string() }).clone(), \"y\".to_string(),) \
+             { (varyk_0, varyk_1, varyk_2, varyk_3,) => ::varyk_std::Task::start(async move { \
+             take(varyk_0, &varyk_1, &varyk_2, &varyk_3).await }) };"
+        ),
+        "{main}"
+    );
+    insta::assert_snapshot!("started_and_awaited_argument_kinds_main_rs", main);
+}
+
+/// A single file whose only use of `varyk-std` is a started call depends
+/// on it (milestone 5b1 spec 4).
+#[test]
+fn a_single_file_with_only_a_started_call_depends_on_varyk_std() {
+    let krate = generate_str(
+        "async fn work() {}\nasync fn run() {\n    let t = work();\n    t.await;\n}\nfn main() {}\n",
+    );
+    assert!(
+        krate.cargo_toml.contains("varyk-std"),
+        "{}",
+        krate.cargo_toml
+    );
+}
+
+/// `Task::all` and `Task::all_settled` (milestone 5b1 spec 5): `all`
+/// over plain tasks and `all_settled` are `Task::all`, `all` over tasks
+/// giving a `Result` is `Task::try_all`; the tasks come from a local, a
+/// `vec!`, and a collected `map` whose closure starts a call for each
+/// item, a copied number and a `.clone()`d string.
+#[test]
+fn task_all_main_rs() {
+    let main = main_rs(
+        "async fn double(n: i64) -> i64 {
+    n * 2
+}
+
+async fn check(n: i64) -> Result<i64, string> {
+    if n > 2 {
+        return Err(\"too big\");
+    }
+    Ok(n)
+}
+
+async fn shout(s: string) -> usize {
+    s.len()
+}
+
+async fn sum() -> Result<i64, string> {
+    let ids: Vec<i64> = vec![1, 2];
+    let ts = vec![double(1), double(2)];
+    let a = Task::all(ts).await;
+    let b = Task::all(ids.iter().map(|id| check(id)).collect()).await?;
+    let c = Task::all_settled(vec![check(1), check(3)]).await;
+    let names: Vec<string> = vec![\"ann\"];
+    let d = Task::all(names.iter().map(|n| shout(n.clone())).collect()).await;
+    Ok(a[0] + b[0] + c.len() as i64 + d[0] as i64)
+}
+
+async fn main() {
+    match sum().await {
+        Ok(n) => println!(\"{}\", n),
+        Err(e) => println!(\"{}\", e),
+    }
+}
+",
+    );
+    for expected in [
+        "= ::varyk_std::Task::all(ts).await;",
+        "::varyk_std::Task::try_all(",
+        "let c: Vec<Result<i64, String>> = ::varyk_std::Task::all(::std::vec![",
+    ] {
+        assert!(main.contains(expected), "{expected}\n{main}");
+    }
+    insta::assert_snapshot!("task_all_main_rs", main);
+}
+
+/// `Shared<T>` is std's `Arc<T>` (milestone 5b1 spec 5): `Shared::new` is
+/// `Arc::new`, `.clone()` copies the pointer, and fields and methods are
+/// reached through it by auto-deref, a method by its path as ever. A
+/// program whose only new call is `Shared` does not use `varyk-std`.
+#[test]
+fn shared_main_rs() {
+    let krate = generate_str(
+        "struct Config {
+    factor: i64,
+    name: string,
+    items: Vec<i64>,
+}
+
+impl Config {
+    fn describe(self) -> string {
+        self.name.clone()
+    }
+}
+
+fn scale(c: Shared<Config>, n: i64) -> i64 {
+    c.factor * n + c.items.len() as i64
+}
+
+fn main() {
+    let s = Shared::new(Config { factor: 3, name: \"ten\", items: vec![1, 2] });
+    let t: Shared<Config> = s.clone();
+    println!(\"{} {} {}\", scale(t, 2), s.describe(), s.name);
+    match s.items.get(0) {
+        Some(n) => println!(\"{}\", n),
+        None => {}
+    }
+}
+",
+    );
+    let main = file(&krate, "src/main.rs");
+    assert!(
+        !krate.cargo_toml.contains("varyk-std"),
+        "{}",
+        krate.cargo_toml
+    );
+    for expected in [
+        "fn scale(c: &::std::sync::Arc<Config>, n: i64) -> i64",
+        "let s = ::std::sync::Arc::new(Config {",
+        "let t = s.clone();",
+        "Config::describe(&s)",
+    ] {
+        assert!(main.contains(expected), "{expected}\n{main}");
+    }
+    insta::assert_snapshot!("shared_main_rs", main);
 }

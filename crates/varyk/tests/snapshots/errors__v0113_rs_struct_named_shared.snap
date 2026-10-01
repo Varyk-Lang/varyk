@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `Shared` is already taken by the standard type of a value many tasks share
+ --> crates/varyk/tests/fixtures/errors/v0113_rs_struct_named_shared/state.rs:1:12
+  |
+1 | pub struct Shared {
+  |            ^^^^^^ the name `Shared` is already taken by the standard type of a value many tasks share
+  |
+  = note: `Shared` is always the standard one wherever it is written, so a type of your own needs another name, such as `State` or `Common`

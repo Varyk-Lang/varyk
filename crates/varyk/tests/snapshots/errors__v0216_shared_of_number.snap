@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0216]: `Shared` can only hold a struct
+ --> crates/varyk/tests/fixtures/errors/v0216_shared_of_number/main.vr:2:16
+  |
+2 |     let port = Shared::new(8080);
+  |                ^^^^^^^^^^^^^^^^^ `Shared` can only hold a struct
+  |
+  = note: a `Shared` lets many tasks read one struct's fields and methods; put the value in a field of a struct and share the struct

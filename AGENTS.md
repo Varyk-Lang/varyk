@@ -11,7 +11,7 @@ compiles to Rust. The compiler is a Rust workspace: `crates/varyk-syntax`
 (lexer, parser, AST), `crates/varyk` (diagnostics, resolver, type
 checker, borrow analysis, Rust backend, cargo driver, CLI), and
 `crates/varyk-std` (the runtime that generated programs call: errors,
-JSON, configuration, logging). The design lives
+JSON, configuration, logging, the async runtime and tasks). The design lives
 in `docs/specs/`; read the current spec before changing what the language
 accepts or how it compiles.
 

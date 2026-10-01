@@ -33,7 +33,7 @@ use super::chains::ItemKind;
 use super::returns::Classification;
 use super::{
     Assigned, BORROWED_NOTE, Context, GONE_NOTE, Refers, captured_in, clone_fix_it, dangling,
-    gone_message, owner_text, place_in, place_root, push_unique, what_to_do,
+    gone_message, owner_text, place_in, place_root, push_unique, started_modes, what_to_do,
 };
 use crate::builtins::Owner;
 use crate::diagnostics::{Diagnostic, codes};
@@ -422,18 +422,26 @@ impl Flows<'_> {
             | HirExprKind::Bool(_)
             | HirExprKind::String(_)
             | HirExprKind::Local(_) => {}
-            HirExprKind::Call { callee, args, .. } => {
+            HirExprKind::Call {
+                callee,
+                args,
+                started,
+                ..
+            } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
+                let (modes, keeps) = started_modes(*started, modes, keeps);
                 self.call(args.iter(), &modes, keeps);
             }
             HirExprKind::MethodCall {
                 receiver,
                 method,
                 args,
+                started,
                 ..
             } => {
                 self.chain_params(receiver, *method, args);
                 let (_, modes, keeps) = self.cx.method(*method);
+                let (modes, keeps) = started_modes(*started, modes, keeps);
                 self.call(std::iter::once(&**receiver).chain(args), &modes, keeps);
             }
             HirExprKind::Field { base, .. } => self.expr(base),
@@ -449,7 +457,8 @@ impl Flows<'_> {
             }
             HirExprKind::Unary { operand, .. }
             | HirExprKind::Cast { expr: operand, .. }
-            | HirExprKind::Assert { cond: operand, .. } => {
+            | HirExprKind::Assert { cond: operand, .. }
+            | HirExprKind::Await(operand) => {
                 self.expr(operand);
             }
             HirExprKind::Binary { lhs, rhs, .. } => {
@@ -798,9 +807,10 @@ impl Flows<'_> {
 }
 
 /// Whether `leaf`, a `string` value, is new text: a call or method call
-/// result (a `clone` included), a `format!` (spec 3.5), or the value of a
-/// `?`, taken out of an owned `Result`; not a call with `rooted`, which is
-/// part of its argument (M4 spec 3.1).
+/// result (a `clone` included, and an awaited call, which never returns a
+/// part), a `format!` (spec 3.5), or the value of a `?`, taken out of an
+/// owned `Result`; not a call with `rooted`, which is part of its argument
+/// (M4 spec 3.1).
 fn is_new_text(leaf: &HirExpr) -> bool {
     matches!(
         leaf.kind,
@@ -808,5 +818,6 @@ fn is_new_text(leaf: &HirExpr) -> bool {
             | HirExprKind::MethodCall { .. }
             | HirExprKind::Format { .. }
             | HirExprKind::Try { .. }
+            | HirExprKind::Await(_)
     ) && rooted_argument(leaf).is_none()
 }

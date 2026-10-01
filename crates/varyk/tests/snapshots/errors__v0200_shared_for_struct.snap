@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0200]: mismatched types: expected `Config`, found `Shared<Config>`
+  --> crates/varyk/tests/fixtures/errors/v0200_shared_for_struct/main.vr:11:29
+   |
+11 |     println!("{}", describe(config));
+   |                             ^^^^^^ mismatched types: expected `Config`, found `Shared<Config>`
+   |
+   = note: a `Shared` is a handle to the struct, not the struct itself; read the fields it needs through the handle and pass those instead

@@ -1,0 +1,43 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn double(n: i64) -> i64 {
+    n * 2i64
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn check(n: i64) -> Result<i64, String> {
+    if n > 2i64 {
+        return Err("too big".to_string());
+    }
+    Ok(n)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn shout(s: &str) -> usize {
+    s.len()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn sum() -> Result<i64, String> {
+    let ids: Vec<i64> = ::std::vec![1i64, 2i64];
+    let ts: Vec<::varyk_std::Task<i64>> = ::std::vec![match (1i64,) { (varyk_0,) => ::varyk_std::Task::start(async move { double(varyk_0).await }) }, match (2i64,) { (varyk_0,) => ::varyk_std::Task::start(async move { double(varyk_0).await }) }];
+    let a: Vec<i64> = ::varyk_std::Task::all(ts).await;
+    let b: Vec<i64> = ::varyk_std::Task::try_all(ids.iter().copied().map(|id| match (id,) { (varyk_0,) => ::varyk_std::Task::start(async move { check(varyk_0).await }) }).collect::<Vec<_>>()).await?;
+    let c: Vec<Result<i64, String>> = ::varyk_std::Task::all(::std::vec![match (1i64,) { (varyk_0,) => ::varyk_std::Task::start(async move { check(varyk_0).await }) }, match (3i64,) { (varyk_0,) => ::varyk_std::Task::start(async move { check(varyk_0).await }) }]).await;
+    let names: Vec<String> = ::std::vec!["ann".to_string()];
+    let d: Vec<usize> = ::varyk_std::Task::all(names.iter().map(|n| match (n.clone(),) { (varyk_0,) => ::varyk_std::Task::start(async move { shout(&varyk_0).await }) }).collect::<Vec<_>>()).await;
+    Ok(a[0usize] + b[0usize] + (c.len() as i64) + (d[0usize] as i64))
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    ::varyk_std::run(async {
+        match sum().await {
+            Ok(n) => ::std::println!("{}", n),
+            Err(e) => ::std::println!("{}", e),
+        }
+    })
+}

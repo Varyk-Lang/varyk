@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0309]: `bump` changes what it is given here, but a started task changes only its own copy, which nobody would ever see
+  --> crates/varyk/tests/fixtures/errors/v0309_started_mut_param/main.vr:11:21
+   |
+11 |     let task = bump(c);
+   |                     ^ `bump` changes what it is given here, but a started task changes only its own copy, which nobody would ever see
+   |
+   = note: wait for the call with `.await` so that `bump` changes this value, or have it return what it makes

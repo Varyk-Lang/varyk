@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0212]: `Task::all` waits for its tasks, so it must be followed by `.await`
+ --> crates/varyk/tests/fixtures/errors/v0212_task_all_without_await/main.vr:7:18
+  |
+7 |     let values = Task::all(tasks);
+  |                  ^^^^^^^^^^^^^^^^ `Task::all` waits for its tasks, so it must be followed by `.await`
+  |
+  = note: write `Task::all(tasks).await`
+help: insert `.await`

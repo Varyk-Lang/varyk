@@ -1,0 +1,14 @@
+struct Counter {
+    hits: i64,
+}
+
+impl Counter {
+    fn bump(mut self) {
+        self.hits = self.hits + 1;
+    }
+}
+
+fn main() {
+    let counter = Shared::new(Counter { hits: 0 });
+    counter.bump();
+}

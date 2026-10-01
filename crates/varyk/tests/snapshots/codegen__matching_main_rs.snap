@@ -15,13 +15,13 @@ enum Status {
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 #[derive(Clone, PartialEq)]
-struct Task {
+struct Item {
     title: String,
     status: Status,
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-impl Task {
+impl Item {
     fn reopen(&mut self) {
         match &self.status {
             Status::Done => {
@@ -78,8 +78,8 @@ fn parse(text: &str) -> Result<i32, String> {
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
-    let mut tasks: Vec<Task> = ::std::vec![Task { title: "write".to_string(), status: Status::Done }];
-    Task::reopen(&mut tasks[0usize]);
+    let mut tasks: Vec<Item> = ::std::vec![Item { title: "write".to_string(), status: Status::Done }];
+    Item::reopen(&mut tasks[0usize]);
     match &tasks[0usize].status {
         Status::Open => ::std::println!("open"),
         _ => ::std::println!("not open"),
@@ -96,7 +96,7 @@ fn main() {
         Ok(value) => ::std::println!("{}", value),
         Err(message) => ::std::println!("{}", message),
     }
-    let picked: Option<Task> = Some(Task { title: "pick".to_string(), status: Status::Named("x".to_string()) });
+    let picked: Option<Item> = Some(Item { title: "pick".to_string(), status: Status::Named("x".to_string()) });
     let title = match &picked {
         Some(task) => task.title.as_str(),
         None => "none",

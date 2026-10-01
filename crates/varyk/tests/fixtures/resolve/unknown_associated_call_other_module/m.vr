@@ -1,9 +1,9 @@
-pub struct Task {
+pub struct Item {
     id: i32,
 }
 
-impl Task {
-    pub fn new() -> Task {
-        Task { id: 0 }
+impl Item {
+    pub fn new() -> Item {
+        Item { id: 0 }
     }
 }

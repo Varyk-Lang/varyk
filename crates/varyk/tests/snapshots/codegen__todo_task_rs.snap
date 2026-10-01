@@ -11,15 +11,15 @@ pub enum Status {
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 #[derive(Clone, PartialEq)]
-pub struct Task {
+pub struct Item {
     title: String,
     status: Status,
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-impl Task {
-    pub fn new(title: &str) -> Task {
-        Task { title: title.to_string(), status: Status::Open }
+impl Item {
+    pub fn new(title: &str) -> Item {
+        Item { title: title.to_string(), status: Status::Open }
     }
 
     pub fn complete(&mut self) {
@@ -38,11 +38,11 @@ impl Task {
     }
 
     pub fn label(&self) -> String {
-        let mark = if Task::is_done(self) {
+        let mark = if Item::is_done(self) {
             "x"
         } else {
             " "
         };
-        ::std::format!("[{}] {}", mark, Task::title(self))
+        ::std::format!("[{}] {}", mark, Item::title(self))
     }
 }

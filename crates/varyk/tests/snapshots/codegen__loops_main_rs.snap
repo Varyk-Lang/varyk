@@ -4,7 +4,7 @@ expression: main
 ---
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 #[derive(Clone, PartialEq)]
-struct Task {
+struct Item {
     title: String,
     done: bool,
 }
@@ -12,7 +12,7 @@ struct Task {
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 #[derive(Clone, PartialEq)]
 struct Board {
-    tasks: Vec<Task>,
+    tasks: Vec<Item>,
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
@@ -29,19 +29,19 @@ impl Board {
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-fn make_tasks() -> Vec<Task> {
-    ::std::vec![Task { title: "write".to_string(), done: false }, Task { title: "test".to_string(), done: true }]
+fn make_tasks() -> Vec<Item> {
+    ::std::vec![Item { title: "write".to_string(), done: false }, Item { title: "test".to_string(), done: true }]
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-fn titles(tasks: &Vec<Task>) {
+fn titles(tasks: &Vec<Item>) {
     for t in tasks {
         ::std::println!("{}", t.title);
     }
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-fn finish_all(tasks: &mut Vec<Task>) -> i32 {
+fn finish_all(tasks: &mut Vec<Item>) -> i32 {
     let mut open = 0;
     for t in &*tasks {
         if t.done {
@@ -90,7 +90,7 @@ fn main() {
     for i in 0..3 {
         ::std::println!("{}", i);
     }
-    let mut tasks: Vec<Task> = make_tasks();
+    let mut tasks: Vec<Item> = make_tasks();
     titles(&tasks);
     ::std::println!("{} open, then {}", finish_all(&mut tasks), finish_all(&mut tasks));
     let board = Board { tasks: make_tasks() };
@@ -102,7 +102,7 @@ fn main() {
     for word in words() {
         shout(&word);
     }
-    let mut kept: Vec<Task> = Vec::new();
+    let mut kept: Vec<Item> = Vec::new();
     for t in make_tasks() {
         kept.push(t);
     }

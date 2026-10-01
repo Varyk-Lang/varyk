@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: `time` is a standard module and cannot be brought in with `use`
+ --> crates/varyk/tests/fixtures/errors/v0113_use_time_sleep/main.vr:1:5
+  |
+1 | use time::sleep;
+  |     ^^^^^^^^^^^ `time` is a standard module and cannot be brought in with `use`
+  |
+  = note: write the path where it is used, as in `time::..`, and remove this `use`

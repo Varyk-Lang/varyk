@@ -14,6 +14,12 @@ use crate::types::Ty;
 pub(super) const BORROWED_NOTE: &str =
     "in Rust terms, a borrowed value cannot move into a place that owns it";
 
+/// The plain-words note of a V0304 for a borrowed value given to a
+/// started call (milestone 5b1 spec 3).
+const STARTED_NOTE: &str = "a started task may outlive this function, so it must own what it \
+                            is given: give it a copy with `.clone()`, or share one value \
+                            between tasks with `Shared`";
+
 /// Where a value flows that must own it.
 pub(super) enum Slot {
     Return,
@@ -39,6 +45,9 @@ pub(super) enum Slot {
     Question,
     /// The receiver of the taking row of this name (M4 spec 3.4).
     Taken(String),
+    /// An argument of a started call of this name, which the task keeps
+    /// (milestone 5b1 spec 3).
+    Started(String),
 }
 
 impl FnAnalyzer<'_> {
@@ -80,6 +89,7 @@ impl FnAnalyzer<'_> {
                     "to keep a separate value in `{name}`, copy the field when making it and \
                      every value assigned to it later: `let mut {name} = {from}.clone();`"
                 ),
+                Slot::Started(_) => STARTED_NOTE.to_string(),
                 _ => self
                     .match_on_the_call(leaf)
                     .unwrap_or_else(|| what_to_do(self.cx, self.locals, info.origin)),
@@ -112,6 +122,9 @@ impl FnAnalyzer<'_> {
                 Slot::VecElement => "put in a `vec!`".to_string(),
                 Slot::Question => "used up by `?`".to_string(),
                 Slot::Taken(method) => format!("used up by `{method}`"),
+                Slot::Started(callee) => {
+                    format!("given to the task that runs `{callee}`, which keeps it")
+                }
             };
             let diagnostic = Diagnostic::new(
                 codes::V0304,

@@ -1,6 +1,6 @@
 # The Varyk language
 
-This page describes everything Varyk accepts today, in milestone 5a of an
+This page describes everything Varyk accepts today, in milestone 5b1 of an
 experimental, pre-1.0 language (see [roadmap.md](roadmap.md) for what comes
 next). Anything not described here is rejected with an error that names
 what is not supported. For the reasons behind the design, see
@@ -224,14 +224,16 @@ A comment starts with `//` and runs to the end of the line.
 
 The keywords are `fn`, `pub`, `let`, `mut`, `struct`, `mod`, `if`, `else`,
 `while`, `break`, `continue`, `return`, `enum`, `impl`, `match`, `for`, `in`,
-`self`, `crate`, `super`, `use`, `as`, `true`, and `false`. `self`, `crate`,
-and `super` also start a path: `self::`, `crate::`, and `super::`. `as`
-names a `use` (`use path as name;`) and converts a number (`n as i64`, see
-[Expressions and operators](#expressions-and-operators)); no keyword can be
+`self`, `crate`, `super`, `use`, `as`, `async`, `await`, `true`, and
+`false`. `self`, `crate`, and `super` also start a path: `self::`,
+`crate::`, and `super::`. `as` names a `use` (`use path as name;`) and
+converts a number (`n as i64`, see
+[Expressions and operators](#expressions-and-operators)). `async` comes
+before `fn` and `await` after a `.` (see
+[Async functions and tasks](#async-functions-and-tasks)); no keyword can be
 used as a name.
 
-Every other Rust keyword is reserved: `async`, `await`, `const`, `dyn`,
-`extern`, `loop`, `move`, `ref`, `Self`, `static`, `trait`, `type`,
+Every other Rust keyword is reserved: `const`, `dyn`, `extern`, `loop`, `move`, `ref`, `Self`, `static`, `trait`, `type`,
 `unsafe`, `where`, `abstract`, `become`, `box`, `do`, `final`, `gen`,
 `macro`, `override`, `priv`, `try`, `typeof`, `unsized`, `virtual`, and
 `yield`. Using one is an error that says the construct is not supported
@@ -243,9 +245,10 @@ parameter, or `let` name can be any of them, because the generated Rust
 would then hide Rust's own. A struct, enum, or module also cannot take a
 built-in type's name (`i32`, `string`, `str`, and so on); a function, field,
 or local can (`let string = "x";` is fine). `Error`, the standard error
-type, cannot name a struct, enum, module, or `use`, nor a `pub` struct or
-enum of a `.rs` module (V0113). `json`, `env`, and `log`, the standard
-modules, cannot name a module, a struct, an enum, or a `use`, and `use json;` or
+type, and `Task` and `Shared`, the standard types of async code, cannot
+name a struct, enum, module, or `use`, nor a `pub` struct or enum of a
+`.rs` module (V0113). `json`, `env`, `log`, and `time`, the
+standard modules, cannot name a module, a struct, an enum, or a `use`, and `use json;` or
 `use json::parse;` is an error: a standard module is reached by its path
 where it is used. `assert` and `assert_eq` cannot name a function, and no
 function, method, struct, enum, module, or `use` name can start with
@@ -267,6 +270,7 @@ V0113). A local or a field may use any of these names.
 | `Option<T>`, `Result<T, E>`, `Vec<T>` | Rust's standard types, written as in Rust and nested freely |
 | `HashMap<K, V>` | values of type `V` found by keys of type `K`, an integer type, `bool`, or `string` |
 | `Error` | the standard error: a message, given by every standard call that can fail |
+| `Shared<T>` | a handle many tasks read one struct `T` through; written only as a parameter's or a `let`'s type (see [Shared](#shared)) |
 
 A struct declares its fields and their types. A field is private unless
 marked `pub`, and follows the same rule as any other item without `pub`:
@@ -886,7 +890,7 @@ None of the names a pattern makes can be changed. To change a copy, first
 make a changeable one: `let mut n = n;`; to change the stored value, change
 it by its own name.
 
-So an `Option<Task>` kept in a `let` cannot give its `Task` away: `match`
+So an `Option<Item>` kept in a `let` cannot give its `Item` away: `match`
 only looks inside it. Match on the call that made it instead:
 `match tasks.pop() { Some(task) => done.push(task), None => {} }`.
 When the stored value was made by a `match`, `if`, or block, move that
@@ -1226,6 +1230,305 @@ not pick it. In Rust,
 for the mutable borrow instead, and no Varyk-declared parameter takes
 ownership of a string or struct. Copy types are passed by value.
 
+## Async functions and tasks
+
+`async` before `fn` makes an async function: one that can wait, on a timer
+here and on the network in later milestones, without holding up the rest of
+the program. It goes on a top-level function or on a method, after `pub`
+when there is one: `pub async fn load(self) -> User`. Parameters, `self`,
+`mut`, the return type, and the body follow the rules of any function.
+
+```varyk
+// main.vr
+struct User {
+    name: string,
+}
+
+impl User {
+    async fn greet(self) -> string {
+        time::sleep(10).await;
+        format!("hello, {}", self.name)
+    }
+}
+
+async fn twice(n: i64) -> i64 {
+    time::sleep(10).await;
+    n * 2
+}
+
+async fn main() {
+    let u = User { name: "ann" };
+    println!("{}", u.greet().await);
+    println!("{}", twice(21).await);
+}
+
+#[test]
+async fn doubles() {
+    assert_eq(twice(2).await, 4);
+}
+```
+
+A call to an async function is followed by `.await`, which runs it right
+there and gives what it returns: `twice(21).await` is an `i64`. Its
+arguments are lent as any call's are, so `u` above can be used again.
+`.await` can be used inside `if`, `match`, `for`, `while`, and `println!`
+like any call, and `f(x).await?` passes an `Err` on.
+
+- Only an async function can call an async function or use `.await`
+  (V0211, whose fix adds `async`), and `.await` cannot be written inside a
+  closure, which is not async (V0211).
+- `.await` goes after a call to an async function, `Task::all` or
+  `Task::all_settled`, or a name holding a task (V0212).
+- Async functions may not call each other in a cycle, directly or through
+  others, and an async function may not call itself (V0214).
+- An async function may not return part of a parameter (V0311): everything
+  it returns is new, so return a copy (`.clone()` for text).
+
+`async fn main()` starts the program on a runtime that spreads async work
+over every core of the machine; a program that logs starts logging first
+thing inside it. Nothing may call an async `main` (V0106). `#[test] async
+fn` is a test, run on a runtime of its own; otherwise the rules of
+[Tests](#tests) apply. Both keep the shape of any `main` and any test.
+
+`time` is a standard module, like `json`: its call is written with the
+module's name, and there is no `use time;`.
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `time::sleep(ms)`; `ms: u64` | none | async, nothing: waits `ms` milliseconds without holding up other work |
+
+### Two ways to call
+
+A call to an async function, a method, `time::sleep`, or an async function
+or method of a `.rs` module included, is one of two kinds, decided by what follows it:
+
+| Written | Kind | Type | Meaning |
+|---|---|---|---|
+| `f(x).await` | awaited | `T` | runs `f` here and gives its result; nothing is started |
+| `f(x)` | started | `Task<T>` | starts `f` now, running alongside this function, and gives a task for its result |
+
+```varyk
+// main.vr
+async fn fetch(id: i64) -> i64 {
+    time::sleep(10).await;
+    id * 2
+}
+
+async fn send_email(to: string) {
+    // sending takes a while, and nothing needs to wait for it
+    time::sleep(50).await;
+}
+
+async fn main() {
+    let a = fetch(1);
+    let b = fetch(2);
+    send_email("ann@example.com").detach();
+    println!("{}", a.await + b.await);
+}
+```
+
+`a` and `b` run at the same time, so the program waits about 10
+milliseconds for both, not 20, and prints `6`. Nothing waits for
+`send_email`, so the program may end before it does.
+
+An awaited call lends its arguments as any call does. A started call gives
+its arguments, the value a method is called on included, to the task,
+which keeps them while it runs and lends them to the function: a number
+is copied, a name holding an owned value is given away (using it later is
+V0305), and a new value, such as a call's result, a literal, or a
+`.clone()`, is handed over. The task may outlive the function that started
+it, so a value that function only borrows (a parameter, a field or element
+of one, or another name for one) cannot be given to it (V0304): give it a
+copy with `.clone()`. A started call cannot pass to a `mut` parameter or
+call a `mut self` method (V0309): the task would change only its own copy.
+
+A started call may stand in four places only, so that no task is thrown
+away by accident:
+
+- as the whole value of a `let` with a name: `let a = fetch(1);` (not
+  `let _ = ..`, and not a branch of an `if` or `match` there);
+- as what `.detach()` is called on: `send_email(to).detach();`;
+- as an element of `vec!`: `vec![fetch(1), fetch(2)]` starts two tasks;
+- as the whole value of the closure of a chain's last `map`, followed at
+  once by `collect`: `ids.iter().map(|id| fetch(id)).collect()` starts one
+  task per id.
+
+The last two make a `Vec` of tasks, which is kept in a `let` or given to
+`Task::all` or `Task::all_settled` to wait for every task in it (see
+[Tasks](#tasks)). The `map` closure's items are lent to it, so give the
+task a copy of anything but a number: `names.iter().map(|n|
+send_email(n.clone())).collect()` (V0304 otherwise).
+
+Anywhere else, a statement `fetch(1);` and an argument `show(fetch(1))`
+among them, it is an error (V0213), since the task would be thrown away
+and stopped at once; the fix is `.await`, or `.detach()`.
+
+### Tasks
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `t.await` | takes `t` | `T`: waits for the task and gives its result |
+| `t.detach()` | takes `t` | nothing: the task runs on with nobody waiting for it |
+| `Task::all(tasks).await` | takes `tasks`, a `Vec` of tasks giving `T` | `Vec<T>`: waits for every task |
+| `Task::all(tasks).await` | takes `tasks`, a `Vec` of tasks giving `Result<U, E>` | `Result<Vec<U>, E>`: every `Ok` value, or the first `Err` to arrive |
+| `Task::all_settled(tasks).await` | takes `tasks`, a `Vec` of tasks giving `Result<U, E>` | `Vec<Result<U, E>>`: waits for every task and keeps each outcome |
+
+- **A task that is thrown away is stopped.** When a name holding a task
+  goes out of scope before it is awaited or detached, the task's work
+  stops at its next `.await`. A `?` or `return` that leaves a function
+  early stops the tasks it started and did not await yet.
+- **A detached task** runs until it finishes or the program (or the test)
+  ends, whichever comes first; nobody sees its result. A panic in it is
+  printed and does not stop the program.
+- **A panic in a task that is awaited** continues in the function that
+  awaits it, as if the call had been made there.
+- **A task stays where it is made.** A name holding a task can only be
+  awaited or detached, once (using it again is V0305), and not inside a
+  closure, which only borrows it (V0304). A `Vec` of tasks, made by `vec!`
+  or `collect`, can only be kept in a `let` and given, once, to `Task::all`
+  or `Task::all_settled`, directly or from that `let` (using it again is
+  V0305). Anything else, indexing, `push`, a `for` over it, passing,
+  returning, or giving it to another name, is an error (V0215); so is
+  `.await` on a `Vec` of tasks, and writing `Task` as a type: a task's
+  type is always worked out from its call.
+- **A task is always used.** A name holding a task, or a `Vec` of tasks,
+  that nothing awaits, detaches, or gives to `Task::all` or
+  `Task::all_settled` is an error (V0213), so a forgotten `.await` is
+  caught.
+
+`Task::all` and `Task::all_settled` wait for every task in a `Vec` and give
+the results in the order of the `Vec`, whatever order the tasks finish in;
+an empty `Vec` gives an empty one (or `Ok` of one). Both are always
+followed by `.await` (V0212 otherwise).
+
+- `Task::all` on tasks giving a `Result` stops at the first `Err` to
+  arrive: it gives that `Err` at once and stops the tasks still running,
+  so `Task::all(tasks).await?` passes it on. On other tasks it gives every
+  value.
+- `Task::all_settled` lets every task run to its end and keeps each
+  `Ok` and `Err`. It needs tasks giving a `Result` (V0200, whose note
+  names `Task::all`).
+
+```varyk
+// main.vr
+async fn price(id: i64) -> Result<i64, string> {
+    time::sleep(10).await;
+    if id > 2 {
+        return Err(format!("no price for {}", id));
+    }
+    Ok(id * 100)
+}
+
+async fn total(ids: Vec<i64>) -> Result<i64, string> {
+    let prices = Task::all(ids.iter().map(|id| price(id)).collect()).await?;
+    Ok(prices.iter().sum())
+}
+
+async fn main() {
+    match total(vec![1, 2]).await {
+        Ok(n) => println!("total {}", n),
+        Err(e) => println!("{}", e),
+    }
+    let outcomes = Task::all_settled(vec![price(1), price(3)]).await;
+    for outcome in outcomes {
+        match outcome {
+            Ok(p) => println!("ok {}", p),
+            Err(e) => println!("failed: {}", e),
+        }
+    }
+}
+```
+
+prints `total 300`, `ok 100`, and `failed: no price for 3`. An empty
+`vec![]` of tasks has no type to take (V0207), and `Task` cannot be
+written, so a list that may be empty is a collected `map`, as in `total`.
+
+A program with an async `main`, an async test, a started call, a
+`Task::all` or `Task::all_settled` call, or a `time::sleep` call uses
+`varyk-std`, which holds the runtime. In the
+generated Rust an async function is an `async fn` and `.await` is written
+as it is; an async `main` is `fn main() { ::varyk_std::run(async { .. }) }`,
+an async test the same under `#[test]`, and `time::sleep(ms)` is
+`::varyk_std::time::sleep(ms)`. A started call `f(u, 3)` evaluates its
+arguments in order and starts the task with them:
+`match (u, 3,) { (varyk_0, varyk_1,) => ::varyk_std::Task::start(async move { f(&varyk_0, varyk_1).await }) }`,
+each passed as its parameter takes it; a method is called by its path,
+`User::load(&varyk_0)`, and a call with no arguments matches on `()`. A
+task is `::varyk_std::Task<T>`, and `t.detach()` is written as it is.
+`Task::all(ts).await` is `::varyk_std::Task::all(ts).await`, or
+`::varyk_std::Task::try_all(ts).await` for tasks giving a `Result`, and
+`Task::all_settled(ts).await` is `::varyk_std::Task::all(ts).await`.
+
+### Shared
+
+A started call needs its own copy of what it is given. To give one struct
+to many tasks without a copy for each, share it:
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `Shared::new(value)` | takes `value`, a struct | `Shared<T>`: puts the struct where many can read it |
+| `s.clone()` | reads `s` | `Shared<T>`: another handle to the same struct; the struct is not copied |
+
+```varyk
+// main.vr
+struct Config {
+    factor: i64,
+    name: string,
+}
+
+impl Config {
+    fn describe(self) -> string {
+        format!("{} x{}", self.name, self.factor)
+    }
+}
+
+async fn scale(config: Shared<Config>, n: i64) -> i64 {
+    time::sleep(10).await;
+    config.factor * n
+}
+
+async fn main() {
+    let config = Shared::new(Config { factor: 3, name: "triple" });
+    let tasks = vec![scale(config.clone(), 1), scale(config.clone(), 2)];
+    let results = Task::all(tasks).await;
+    println!("{} {}", config.describe(), results[0] + results[1]);
+}
+```
+
+prints `triple x3 9`. Each task gets a handle of its own from
+`config.clone()`, and all of them read the one `Config`.
+
+- **What it holds.** `T` is a struct, one of the program's or one from a
+  `.rs` module. `Shared::new` of anything else, a number, a `Vec`, an
+  `Option`, or an enum, is an error (V0216), whether or not a type is
+  written; to share such a value, put it in a field of a struct.
+- **Reading through it.** The struct's fields and methods are reached
+  straight through the handle: `config.factor`, `config.name.len()`,
+  `config.describe()`, `match config.kind { .. }`, `for x in
+  config.items { .. }`.
+- **Read-only.** Everything reached through a `Shared` can only be read,
+  as through a parameter without `mut`: assigning to it, passing it to a
+  `mut` parameter, calling a `mut self` method or a changing call such as
+  `push` on it is an error (V0310). Giving one of its fields to something
+  that keeps it, such as `push` or a struct literal, needs a `.clone()`
+  of the field (V0304), as for a parameter's.
+- **Where it is written.** `Shared<T>` is written only as the type of a
+  parameter or a `let`; in a field, a return type, or inside another type
+  (`Vec<Shared<T>>`) it is an error (V0216). A `Vec` or `Option` of
+  handles made with `vec!` or `Some` is fine.
+- **Not a `T`.** A `Shared<Config>` cannot be passed where a `Config` is
+  expected (V0200): pass the fields read through it instead. It cannot be
+  printed or compared (V0203), and cannot go through `json` or `env`
+  (V0210).
+- **Given away.** `Shared::new` takes its value, and a started call takes
+  a `Shared` held by a name as it takes any value (using the name later is
+  V0305), so give each task `s.clone()` and keep `s`.
+
+`Shared` alone does not make a program use `varyk-std`: in the generated
+Rust, `Shared<T>` is std's `::std::sync::Arc<T>`, `Shared::new(v)` is
+`::std::sync::Arc::new(v)`, `s.clone()` is written as it is and copies a
+pointer, and fields and methods are reached through Rust's auto-deref.
+
 ## Attributes
 
 An attribute is written `#[name]` or `#[name(value)]` on the line before
@@ -1475,7 +1778,7 @@ and in the generated Rust it is `.clone()`, or `.to_string()` when `s` is a
 copies a string's text behind your back. A string that is already owned
 moves instead, with no copy.
 
-## Not in milestone 5a
+## Not in milestone 5b1
 
 These do not exist yet; where one can be written, it is an error that names
 what is not supported. They are left out because no program has needed
@@ -1514,8 +1817,17 @@ log targets, and spans; `.env` variable expansion and several `.env`
 files; a kind or a cause on `Error`, and automatic conversion into `Error`
 from other error types at `?`; attributes on structs, methods, and
 variants with data; `#[default]` on an `Option`, enum, or struct field;
-`varyk_std::Error` in a `.rs` signature; and `async`, HTTP, and the
-database, which are milestones 5b1 and 5b2.
+`varyk_std::Error` in a `.rs` signature; and HTTP and the database, which
+are milestone 5b2.
+
+Also not yet, from async code: `race` and `any`; timeouts; channels;
+changing a value shared between tasks (a `Mutex`); a task anywhere but where
+it is made, `push` of a task among them; `Shared` of anything but a struct,
+or in a field or a return type; async closures, and `.await` in a closure;
+async recursion; an async function returning part of a parameter; cancelling
+a task by hand; a runtime the program configures (thread count,
+current-thread); and inferred async, where the compiler works out which
+functions wait.
 
 These are left out by design: closures as values (function types, and a
 closure in a `let`, a parameter, a return, or a field), `move`, a type on a
@@ -1534,7 +1846,7 @@ blocks for built-in types; a `use` of an enum variant; naming a crate from
 Varyk code (write a `.rs` facade instead: a Rust file of the package that
 wraps what the program needs from the crate in plain functions, as
 "Calling Rust" shows); and everything planned for later milestones, such
-as HTTP, databases, `async`, `varyk fmt`, and a language server.
+as HTTP, databases, `varyk fmt`, and a language server.
 
 `unwrap` and `expect` are never added, in this or any later milestone: a
 call that stops the program when a value is absent defeats the purpose of a
@@ -1578,7 +1890,8 @@ inside it is checked by rustc when you build. If rustc rejects it, the error
 or warning is shown exactly as rustc worded it, at your `.rs` file and line
 — it is your Rust, in your terms. This is different from a problem in the
 Rust Varyk itself generates: if that is ever rejected, which should not
-happen apart from the known limits under "Rust enums" below, the failure is reported as a Varyk diagnostic, V0900, at the Varyk
+happen apart from the known limits under "Rust enums" below and the
+thread rule of V0901 (also below), the failure is reported as a Varyk diagnostic, V0900, at the Varyk
 line that produced it, carrying rustc's message and asking you to report it
 as a bug (`--emit-rust` shows the generated code the report points at).
 When rustc also rejected one of your `.rs` files, a V0900 may only follow
@@ -1605,7 +1918,7 @@ references in the return type other than the ones just above (return an
 owned value such as `String`),
 `()` inside another type (`Result<(), String>`; use `bool` or a struct
 instead), and unknown types. Calling such a function is an error that shows its Rust
-signature and what to change. `unsafe fn`, `async fn`, `const fn`, trait
+signature and what to change. `unsafe fn`, `const fn`, trait
 methods, names a `pub use` brings in, and functions, methods, structs, and
 enums marked `pub(crate)`, `pub(super)`, `pub(self)`, or `pub(in ..)` are
 not imported: Varyk imports only plain `pub`. A function, method, struct,
@@ -1628,6 +1941,40 @@ error names the macro and its line; move the macro and its uses to another
 has those words or calls a macro, a call of `thread_local!` whose text has
 none of those words, and a `macro_rules!` that is never called as an item
 change nothing.
+
+A `pub async fn` and an `async` method are imported under the same rules
+and called as a Varyk async function is: awaited with `.await`, or started
+into a task (see [Two ways to call](#two-ways-to-call)), and only from an
+async function. One that returns a reference cannot be called (V0108):
+return an owned value instead, as an async Varyk function does.
+
+```rust
+// fetch.rs
+pub async fn price(id: i64) -> i64 {
+    id * 10
+}
+```
+
+```varyk
+// main.vr
+mod fetch;
+
+async fn main() {
+    let t = fetch::price(2);
+    println!("{}", fetch::price(1).await + t.await);
+}
+```
+
+It prints `30`.
+
+A started call may run on another thread, so everything its task is given,
+and everything it holds while it waits, must be able to go there. Every
+type Varyk declares can; a type from Rust code may not (in Rust terms, it
+is not `Send`, or not `Sync`: an `Rc`, a `Cell`, or a `RefCell` inside it).
+Only rustc can tell, so `varyk check` accepts such a program and `varyk
+build` reports V0901 at the started call, naming the Rust type: use `Arc`
+in place of `Rc` and `Mutex` or an atomic in place of `Cell` or `RefCell`
+in the Rust code, or await the call instead of starting it.
 
 A Rust type is found two ways: a bare name is an item of the same `.rs`
 file, and a full path, `crate::other::Thing`, is an item of another `.rs`
@@ -1944,8 +2291,10 @@ package it says "no Varyk package here". `cargo add` needs the
 `src/main.rs` (or `src/lib.rs`) stub that `varyk init` writes; in a package
 without one, add the line to `Cargo.toml` by hand.
 
-A program that uses `varyk-std` (it names `Error` or calls one of its
-features) needs `varyk-std` in `[dependencies]`, as `"X.Y"` or `"X.Y.Z"`
+A program that uses `varyk-std` (it names `Error`, calls one of its
+features, such as `json`, `log`, `time::sleep`, or `Task::all`, starts a call, or has an
+async `main` or an async test; `Shared` alone, which is std's `Arc`, does
+not count) needs `varyk-std` in `[dependencies]`, as `"X.Y"` or `"X.Y.Z"`
 (a leading `^` is fine) or a table with such a `version` and no `path`,
 `git`, `optional`, or `package`, where `X.Y` is the compiler's version
 (`~`, `=`, `>=`, `*` and lists are refused); and if `Cargo.lock` locks
@@ -1992,44 +2341,54 @@ Every error has a code. A code is never reused for a different meaning.
 | V0010 | `&x` or `&mut x` written at a call; Varyk works out references itself |
 | V0011 | `&T` or `&mut T` written in a parameter type or a return type; write `name: T` or `mut name: T`, and `-> T` (`-> string` for `-> &str`) |
 | V0012 | lifetime syntax such as `<'a>` or `&'a T`; lifetimes are worked out by the compiler |
-| V0100 | unknown name, or a variant, method, or associated function the type does not have; for `Vec`, `string`, `Option`, `Result`, `HashMap`, and a chain the message lists their calls; for an imported struct, a note says when the `.rs` file has the method but Varyk does not import it (a trait method, `unsafe`, `const`, `async`, behind `#[cfg]`, or `pub(crate)` or another `pub(..)`), and likewise for a function or `pub use` name of a `.rs` module and for any method of an imported enum, which Varyk does not import yet; a path into an inline `mod` of a `.rs` file, whose items Varyk does not read, says so; also naming a variant of an opaque imported enum, saying why it is opaque; `.clone()` on a number or `bool`, which is copied on use |
+| V0100 | unknown name, or a variant, method, or associated function the type does not have; for `Vec`, `string`, `Option`, `Result`, `HashMap`, and a chain the message lists their calls; for an imported struct, a note says when the `.rs` file has the method but Varyk does not import it (a trait method, `unsafe`, `const`, behind `#[cfg]`, or `pub(crate)` or another `pub(..)`), and likewise for a function or `pub use` name of a `.rs` module and for any method of an imported enum, which Varyk does not import yet; a path into an inline `mod` of a `.rs` file, whose items Varyk does not read, says so; also naming a variant of an opaque imported enum, saying why it is opaque; `.clone()` on a number or `bool`, which is copied on use |
 | V0101 | unknown type, or `Option`, `Result`, `Vec`, or `HashMap` with the wrong number of types, a `HashMap` key type that is not an integer type, `bool`, or `string`, or a Rust struct or enum Varyk does not import (a tuple or unit struct, one with type or lifetime parameters, a `#[repr(packed)]` struct or one with no fixed size, one behind `#[cfg]`, or one marked `pub(crate)` or another `pub(..)`), or a type a `pub use` of the `.rs` file brings in, saying why |
 | V0102 | unknown field, of a struct or of a variant with named fields, in a value or a pattern |
 | V0103 | a name defined more than once (a method included, a field of a variant, a field named twice in a value or a pattern, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
 | V0104 | a module file that is missing, present as both `.vr` and `.rs` or as both `shop.vr` and `shop/mod.vr`, unreadable, a `.rs` file that cannot be parsed as Rust, or named `main` or `lib` (or `bin` in the entry file), in any capitalization; a `.rs` file that uses a crate not in `[dependencies]` (or only in `[dev-dependencies]`, or any crate in a single file) in a `use` or `extern crate` item (a crate named only in a path, `other::f()`, is rustc's to report, at build), declares a module of its own, or uses `include!`, shown at that line of the `.rs` file |
 | V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see; a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub` |
-| V0106 | a missing or malformed `fn main()`, or `main` defined in a library's `src/lib.vr` |
+| V0106 | a missing or malformed `fn main()`, `main` defined in a library's `src/lib.vr`, or a call to an async `main` |
 | V0107 | `String` or `str` written where `string` is meant |
 | V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change. Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path, and a type in a `.rs` file with a glob `use` or a macro that could define names |
 | V0109 | a struct or enum that contains itself, directly or through other structs, enums, `Option`, or `Result`; a `Vec` or `HashMap` breaks the cycle |
 | V0110 | a `use` naming a crate this compiler recognizes by name (`std`, `core`, `alloc`, and in a package every crate in `[dependencies]`); call a crate from a `.rs` module in the package instead |
 | V0111 | a path Varyk cannot follow: `super` in the entry file, a `use` ending at an enum variant or at a type's method or associated function, a `use` whose leading name, or whose only name (`use shop;`), is a module declared elsewhere in the package (write it from `crate::` or `super::`), or a `use` whose leading name another `use` made |
 | V0112 | an attribute Varyk does not have (the message lists the four; `derive` gets a note that `.clone()`, `==`, and JSON need none), one in a place it cannot go (the note says where it goes), the same attribute twice on one item, or a value missing (`#[rename]`, `#[default]`) or not expected (`#[skip(1)]`, `#[test(1)]`) |
-| V0113 | the name `Error`, the standard error type, given to a struct, an enum, a module, or a `use`, or to a `pub` struct or enum of a `.rs` module; `json`, `env`, or `log`, the standard modules, given to a module, a struct, an enum, or a `use`, or a `use` of one (`use json;`, `use json::parse;`); `assert` or `assert_eq` given to a function or a `use`; a function, method, struct, enum, module, or `use` name starting with `varyk_`, kept for what Varyk adds to the Rust it writes |
+| V0113 | the name `Error`, the standard error type, or `Task` or `Shared`, the standard types of async code, given to a struct, an enum, a module, or a `use`, or to a `pub` struct or enum of a `.rs` module; `json`, `env`, `log`, or `time`, the standard modules, given to a module, a struct, an enum, or a `use`, or a `use` of one (`use json;`, `use json::parse;`); `assert` or `assert_eq` given to a function or a `use`; a function, method, struct, enum, module, or `use` name starting with `varyk_`, kept for what Varyk adds to the Rust it writes |
 | V0114 | a `#[test]` function with parameters or a return type, a call to or `use` of one, or `main` of the entry file marked `#[test]`; `assert` or `assert_eq` outside a `#[test]` function |
-| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool` |
+| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool`; `Task::all` or `Task::all_settled` given anything but a `Vec` of tasks, and `Task::all_settled` on tasks that do not give a `Result`; a `Shared` given where the struct it holds is expected |
 | V0201 | wrong number of arguments, or of values in an enum value; a variant value with named fields that leaves one out, or with the wrong kind of brackets; a closure with more or fewer than one parameter |
 | V0202 | `println!`, `format!`, or a `log` call with the wrong number of `{}`, or something other than `{}` in braces; a `log` call whose text is not a string literal written in quotes |
-| V0203 | `{}` used on anything but a number, `bool`, string, or `Error`; `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file |
+| V0203 | `{}` used on anything but a number, `bool`, string, or `Error`; `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file; `==` or `!=` on a `Shared`, or on a type holding one |
 | V0204 | a `match` that does not handle every value: a variant at any depth, a `bool` value, or, on a number or a string, the catch-all it always needs; the message names a value shape it misses |
 | V0205 | a pattern that does not fit the value: a variant of another type, the wrong number of positions in a variant, a variant pattern leaving out a named field, a literal or range of another type or not fitting it, a range whose ends are reversed, a float literal, or a string literal inside another pattern; an arm that can never run, such as one after `_` or a name; or a `match`, `if let`, or `while let` on something that is not an enum, `Option`, `Result`, number, `bool`, or string |
 | V0206 | `?` in a function that does not return a `Result` or an `Option`, on a `Result` in a function returning an `Option` or the reverse, or on a value that is not a `Result` with the function's error type |
 | V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, `parse()`, `json::parse(..)`, or `env::parse()` whose type cannot be worked out where it is written, `Err(e)?;`, `text.parse().ok()`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
 | V0208 | a value that must be used where it is made: an `Option` from `get`, or from `find` on a chain of borrowed items, holding part of a stored value, stored in a `let`, passed, returned, used with `?`, given any method, or named whole by a pattern (look inside it with `match` or `if let`); an unfinished chain anywhere but as the value the next call of the chain is made on or the head of a `for` (finish the chain there) |
 | V0209 | a `#[rename]` value that is not a string in quotes, or is empty; a `#[default]` value that does not fit its field's type (`"x"` on an `i32`, `300` on a `u8`, `1` on an `f64`); `#[default]` on an `Option` field or on a field that is not a number, `string`, or `bool`; on a type a `json` call reaches, a skipped field with no `#[default]` that is not an `Option` when the type is read, or two fields that are not skipped, or two variants, with the same key once renamed, and, on a type `env::parse` reaches, two fields whose upper-cased keys are the same variable |
-| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
+| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
+| V0211 | a call to an async function, or `.await`, in a function that is not `async`; `.await` inside a closure |
+| V0212 | `.await` after something that is not a call to an async function, `Task::all`, `Task::all_settled`, or a name holding a task; `Task::all` or `Task::all_settled` without `.await` |
+| V0213 | a started call anywhere but a `let` with a name, the value `.detach()` is called on, a `vec!` element, or the value of a collected `map`'s closure, `let _ =` included; a name holding a task, or a `Vec` of tasks, that nothing awaits, detaches, or gives to `Task::all` or `Task::all_settled`: its task would be thrown away |
+| V0214 | async functions that call each other in a cycle, or an async function that calls itself, whether the calls are awaited or started; the message names the cycle |
+| V0215 | a name holding a task used other than by `.await` or `.detach()`, or a `Vec` of tasks used other than by `Task::all` or `Task::all_settled` (indexed, given `push`, looped over, passed, returned, given to another name, or followed by `.await`); `Task` written as a type |
+| V0216 | `Shared` of anything but a struct, at `Shared::new` or written, or `Shared` written anywhere but a parameter's or a `let`'s type (a field, a return type, or inside another type) |
 | V0300 | changing a parameter that was declared without `mut`, by assigning to it or calling `push` or `pop` on it |
 | V0301 | changing a `let` name that was declared without `mut`, or a name a `match` pattern or a `for` made, by assigning to it or calling `push` or `pop` on it; also changing, inside a closure, a name from outside it or the closure's parameter |
 | V0302 | a `let` name without `mut` passed to a `mut` parameter or used to call a `mut self` method |
 | V0303 | a parameter without `mut`, or a name a `match` pattern or a `for` made, passed to a `mut` parameter or used to call a `mut self` method; also, inside a closure, a name from outside it or the closure's parameter so passed |
-| V0304 | a value the function only borrows, stored in a struct, an element, an enum value, `Some`, `Ok`, `Err`, or a `vec!`, passed to `push`, used with `?`, or returned; a stored `Option` or `Result` with more than numbers and `bool`s inside, used up by `unwrap_or`, `ok_or`, or `ok`; returns that mix part of a parameter with something new, or that are part of a `let` of the function, of a number or `bool` parameter or `for` variable, of a `mut` parameter, or of a parameter of a function that calls itself; also a binding of a `match` on an enum that runs code when it is thrown away (an `impl Drop`), kept or given away; a name from outside a closure kept inside it, or given by a closure of `map` or `map_err`, as is part of its parameter; `collect` on a chain of borrowed items (copy them with `.map(\|w\| w.clone())`); the item a closure of `filter`, `any`, `all`, or `find` looks at, kept or given away; a chain's `map` closure giving part of an owned item, or something new beside a part; for text the fix is `.clone()` |
-| V0305 | a value used after it was given away |
+| V0304 | a value the function only borrows, stored in a struct, an element, an enum value, `Some`, `Ok`, `Err`, or a `vec!`, passed to `push`, used with `?`, or returned; a stored `Option` or `Result` with more than numbers and `bool`s inside, used up by `unwrap_or`, `ok_or`, or `ok`; returns that mix part of a parameter with something new, or that are part of a `let` of the function, of a number or `bool` parameter or `for` variable, of a `mut` parameter, or of a parameter of a function that calls itself; also a binding of a `match` on an enum that runs code when it is thrown away (an `impl Drop`), kept or given away; a name from outside a closure kept inside it, or given by a closure of `map` or `map_err`, as is part of its parameter; `collect` on a chain of borrowed items (copy them with `.map(\|w\| w.clone())`); the item a closure of `filter`, `any`, `all`, or `find` looks at, kept or given away; a chain's `map` closure giving part of an owned item, or something new beside a part; a value the function only borrows given to a started call, whose task keeps it, or a task detached inside a closure; for text the fix is `.clone()` |
+| V0305 | a value used after it was given away, to a started call's task among others, or a task awaited or detached twice, or a `Vec` of tasks given to `Task::all` or `Task::all_settled` twice |
 | V0306 | a later argument changes or gives away a value that an earlier argument of the same call still borrows, or uses the value a method is called on while the method may change it, as in `v.push(v.len())`, or an index changes the `Vec` it indexes, as in `v[g(v)]` with `g` taking `mut v` |
 | V0307 | a value changed or given away while another name for part of it is still used later (a name bound inside a looked-into `get` or `find`, or the result of a call returning part of it, included), or inside a `for` that goes over it or whose head reads it (the argument of `split`, or a name a closure of a chain in the head reads) |
 | V0308 | a function returning part of one parameter in one place and part of another in another, or a closure giving parts of two names (a chain's `map` closure giving part of its item and part of a name from outside included); return a copy in one of them (in both, for a chain's `map`), or make two functions |
+| V0309 | a started call passing a value to a `mut` parameter, or calling a `mut self` method: the task would change only its own copy |
+| V0310 | changing something reached through a `Shared`: assigning to it, passing it to a `mut` parameter, or calling a `mut self` method or a changing call such as `push` on it |
+| V0311 | an async function that returns part of a parameter; return a copy instead |
 | V0400 | a package whose `Cargo.toml` does not say `edition = "2024"` |
 | V0401 | something in `Cargo.toml` Varyk does not support yet: a key outside the fixed set `check` reads, a `src/bin/`, `examples/`, `tests/`, or `benches/` directory or the root file of the other kind (`src/lib.rs` beside `src/main.vr`), which cargo would build as further targets, a setting taken from a Cargo workspace (`workspace = true`), dependencies for only some platforms (`[target.'cfg(..)'.dependencies]`), `links`, which needs a build script the published crate does not carry, a custom `build` script, `[lints]`, or `[patch]` or `[replace]`, in the package or in the root manifest of an enclosing workspace |
 | V0402 | a Cargo target table (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`), not supported yet: a package is one program from `src/main.vr` or one library from `src/lib.vr`, found by cargo's defaults |
 | V0403 | a `Cargo.toml` that cannot be used: it cannot be read, is not valid TOML, has a top-level key cargo reads as a table (`workspace`, `dependencies`, `features`, ...) that is not one, has no `[package]` `name`, names with `workspace` a directory that has no workspace manifest or sits under a `Cargo.toml` whose `workspace` is not a table, or its `name` is not letters, digits, `-`, and `_` starting with a letter or `_`, or a `[package]` key has a value of the wrong shape (`license = 1`), or its `rust-version` is not `MAJOR.MINOR[.PATCH]`, or is `cache` or `package`, or a program (not a library) is called `deps`, `examples`, `build`, or `incremental` in any case, the names of Cargo's own build folders, or its `version` is present but not text of the form `MAJOR.MINOR.PATCH` that cargo accepts; or its package has both `src/main.vr` and `src/lib.vr` (from the command line, a `Cargo.toml` found but whose package has neither is reported before any check runs: "no Varyk package here" and why, in one line) |
 | V0404 | the `varyk-std` dependency of a program that uses it is missing, comes from a `path` or `git`, is `optional` or renamed, has a requirement that is not `X.Y` or `X.Y.Z` (optionally `^`) on the compiler's version, or `Cargo.lock` locks an older `varyk-std`; the note gives the line to write, or `cargo update -p varyk-std` |
 | V0900 | rustc rejected the Rust code Varyk generated, which should not happen, except for the known limits listed under "Calling Rust"; the message carries rustc's own message and code and asks you to report it, or, when rustc also rejected a `.rs` module you wrote, says it may follow from that error. An error or warning in a `.rs` module you wrote is not this code: it is shown at your file, unchanged |
+| V0901 | at `varyk build`: a started call whose task holds a value from Rust code that cannot be sent to, or shared with, another thread (an `Rc`, `Cell`, or `RefCell` inside it); the message names the Rust type |

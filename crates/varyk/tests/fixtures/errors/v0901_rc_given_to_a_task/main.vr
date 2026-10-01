@@ -1,0 +1,7 @@
+mod ext;
+
+async fn main() {
+    let session = ext::Session::open(1);
+    let t = ext::report(session);
+    println!("{}", t.await);
+}

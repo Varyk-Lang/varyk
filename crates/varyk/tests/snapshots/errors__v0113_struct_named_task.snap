@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `Task` is already taken by the standard type of a started call
+ --> crates/varyk/tests/fixtures/errors/v0113_struct_named_task/main.vr:1:8
+  |
+1 | struct Task {
+  |        ^^^^ the name `Task` is already taken by the standard type of a started call
+  |
+  = note: `Task` is always the standard one wherever it is written, so a type of your own needs another name, such as `Item` or `Job`

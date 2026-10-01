@@ -1,0 +1,12 @@
+mod ext;
+
+async fn count(counter: ext::Counter) -> i64 {
+    time::sleep(1).await;
+    counter.hit()
+}
+
+async fn main() {
+    let counter = ext::Counter::new(1);
+    let t = count(counter);
+    println!("{}", t.await);
+}

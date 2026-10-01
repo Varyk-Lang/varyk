@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0215]: `task` holds a task, which can only be waited for with `.await` or let go with `.detach()`
+  --> crates/varyk/tests/fixtures/errors/v0215_task_passed/main.vr:11:10
+   |
+11 |     show(task);
+   |          ^^^^ `task` holds a task, which can only be waited for with `.await` or let go with `.detach()`
+   |
+   = note: a task stays where it is made: it cannot be stored, passed, returned, or looked inside; only the function that started it waits for it
+   = note: wait for it with `task.await` and use what it gives instead

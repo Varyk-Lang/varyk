@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0216]: `Shared` can only be written as the type of a parameter or a `let`
+ --> crates/varyk/tests/fixtures/errors/v0216_shared_in_field/main.vr:6:13
+  |
+6 |     config: Shared<Config>,
+  |             ^^^^^^^^^^^^^^ `Shared` can only be written as the type of a parameter or a `let`
+  |
+  = note: a `Shared` is a handle to one struct, given to whoever reads it; a field, a return type, or another type cannot hold one, so hold the struct itself there

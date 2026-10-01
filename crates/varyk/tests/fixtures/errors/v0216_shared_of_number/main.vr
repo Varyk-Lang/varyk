@@ -1,0 +1,3 @@
+fn main() {
+    let port = Shared::new(8080);
+}

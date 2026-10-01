@@ -1,0 +1,8 @@
+struct Config {
+    port: i64,
+}
+
+fn main() {
+    let config = Shared::new(Config { port: 8080 });
+    println!("{}", config);
+}

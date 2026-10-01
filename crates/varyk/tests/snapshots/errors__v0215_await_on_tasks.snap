@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0215]: a list of tasks cannot be waited for with `.await` itself
+ --> crates/varyk/tests/fixtures/errors/v0215_await_on_tasks/main.vr:7:19
+  |
+7 |     let results = tasks.await;
+  |                   ^^^^^ a list of tasks cannot be waited for with `.await` itself
+  |
+  = note: wait for every task in it with `Task::all(tasks).await`

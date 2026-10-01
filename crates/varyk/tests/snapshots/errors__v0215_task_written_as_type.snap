@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0215]: `Task` cannot be written as a type
+ --> crates/varyk/tests/fixtures/errors/v0215_task_written_as_type/main.vr:6:15
+  |
+6 |     let task: Task<i64> = fetch(1);
+  |               ^^^^^^^^^ `Task` cannot be written as a type
+  |
+  = note: a task's type is always worked out from the call that starts it, as in `let t = fetch(1);`, and a task stays in the function that started it, so no parameter, field, or return type can hold one

@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0212]: `fetch` is not an async function, so there is nothing to wait for
+ --> crates/varyk/tests/fixtures/errors/v0212_await_on_plain_call/main.vr:6:21
+  |
+6 |     let n = fetch(1).await;
+  |                     ^^^^^^ `fetch` is not an async function, so there is nothing to wait for
+  |
+  = note: `.await` follows a call to an async function, as in `fetch(1).await`
+help: remove `.await`

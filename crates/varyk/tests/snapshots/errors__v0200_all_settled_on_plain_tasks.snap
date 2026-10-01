@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0200]: `Task::all_settled` keeps each task's `Result`, and these tasks give `i64`, which is not a `Result`
+ --> crates/varyk/tests/fixtures/errors/v0200_all_settled_on_plain_tasks/main.vr:7:20
+  |
+7 |     let outcomes = Task::all_settled(ids.iter().map(|id| fetch(id)).collect()).await;
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Task::all_settled` keeps each task's `Result`, and these tasks give `i64`, which is not a `Result`
+  |
+  = note: wait for tasks that cannot fail with `Task::all(tasks).await`

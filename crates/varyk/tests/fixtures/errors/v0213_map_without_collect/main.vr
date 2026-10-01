@@ -1,0 +1,9 @@
+async fn fetch(id: i64) -> i64 {
+    id * 2
+}
+
+async fn main() {
+    let ids: Vec<i64> = vec![1, 2, 3];
+    let n = ids.iter().map(|id| fetch(id)).count();
+    println!("{}", n);
+}

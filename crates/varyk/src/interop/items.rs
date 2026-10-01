@@ -24,7 +24,7 @@ use crate::types::Derives;
 /// [`ImportedStruct`] per top-level plain-`pub` struct with the `pub fn`
 /// items of its inherent `impl` blocks in this file (spec 4.1, 4.2), and
 /// one [`ImportedEnum`] per top-level plain-`pub` enum (spec 4.3),
-/// skipping `unsafe`/`async`/`const`/`extern` fns, `pub use` re-exports,
+/// skipping `unsafe`/`const`/`extern` fns, `pub use` re-exports,
 /// and `#[cfg(...)]`-gated items, each recorded with why so that naming
 /// it can say so. `text` is the file's source, for byte ranges.
 pub(super) fn import_items(items: Vec<Item>, names: &Names, text: &str) -> ImportedModule {
@@ -221,7 +221,7 @@ pub(super) fn import_items(items: Vec<Item>, names: &Names, text: &str) -> Impor
     // Every inherent `impl S` block of the file, in source order, adds its
     // `pub fn` items to `S` (spec 4.2: several blocks merge).
     // A method left out for a reason a caller could not guess (a trait
-    // method, `unsafe`, `const`, `async`, `#[cfg]`) is recorded with it.
+    // method, `unsafe`, `const`, `#[cfg]`) is recorded with it.
     for item in impls {
         let Some(owner) = inherent_owner(&item) else {
             if let Some(owner) = trait_impl_owner(&item) {
@@ -366,14 +366,13 @@ fn derives(attrs: &[syn::Attribute]) -> Derives {
 }
 
 /// Why a signature is not imported at all, in words for a note: `unsafe`,
-/// `const`, `async`, or `extern`; `None` when it is.
+/// `const`, or `extern`; `None` when it is. An `async` one is imported
+/// (milestone 5b1 spec 2.8).
 fn why_not_imported(sig: &Signature) -> Option<&'static str> {
     if !matches!(sig.safety, Safety::Default) {
         Some("`unsafe`")
     } else if sig.constness.is_some() {
         Some("`const`")
-    } else if sig.asyncness.is_some() {
-        Some("`async`")
     } else if sig.abi.is_some() {
         Some("`extern`")
     } else {
@@ -404,8 +403,8 @@ fn inherent_owner(item: &ItemImpl) -> Option<String> {
 }
 
 /// The [`ImportedFn`] of signature `sig`, a method or associated function
-/// when `owner` is its struct; `None` for an `unsafe`, `async`, `const`,
-/// or `extern` fn, which is not imported at all.
+/// when `owner` is its struct; `None` for an `unsafe`, `const`, or
+/// `extern` fn, which is not imported at all.
 fn import_fn(sig: &Signature, owner: Option<&str>, names: &Names) -> Option<ImportedFn> {
     if why_not_imported(sig).is_some() {
         return None;
@@ -433,7 +432,11 @@ fn import_fn(sig: &Signature, owner: Option<&str>, names: &Names) -> Option<Impo
     let signature = sig.to_token_stream().to_string();
     let generics = &sig.generics;
     let generic = !generics.params.is_empty() || generics.where_clause.is_some();
-    let root = if generic {
+    let is_async = sig.asyncness.is_some();
+    // An async function's result outlives the call that starts it, so a
+    // reference it returns is never rooted, and stays opaque (milestone
+    // 5b1 spec 2.8: V0108).
+    let root = if generic || is_async {
         None
     } else {
         elided_root(sig, receiver, owner.is_some())
@@ -457,6 +460,7 @@ fn import_fn(sig: &Signature, owner: Option<&str>, names: &Names) -> Option<Impo
         owner: owner.map(str::to_string),
         signature,
         ret_root,
+        is_async,
     })
 }
 

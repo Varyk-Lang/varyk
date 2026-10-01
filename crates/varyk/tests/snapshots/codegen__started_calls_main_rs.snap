@@ -1,0 +1,41 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct User {
+    name: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+impl User {
+    async fn load(&self) -> i64 {
+        (self.name.len() as i64)
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn score(id: i64, u: &User) -> i64 {
+    id + (u.name.len() as i64)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn ping() {
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    ::varyk_std::run(async {
+        let u = User { name: "ann".to_string() };
+        let a = match (1i64, u,) { (varyk_0, varyk_1,) => ::varyk_std::Task::start(async move { score(varyk_0, &varyk_1).await }) };
+        let b = match (User { name: "bo".to_string() },) { (varyk_0,) => ::varyk_std::Task::start(async move { User::load(&varyk_0).await }) };
+        let c = match () { () => ::varyk_std::Task::start(async move { ping().await }) };
+        let d = match (score(2i64, &User { name: "x".to_string() }).await, User { name: "y".to_string() },) { (varyk_0, varyk_1,) => ::varyk_std::Task::start(async move { score(varyk_0, &varyk_1).await }) };
+        match () { () => ::varyk_std::Task::start(async move { ping().await }) }.detach();
+        c.detach();
+        let s = match (5u64,) { (varyk_0,) => ::varyk_std::Task::start(async move { ::varyk_std::time::sleep(varyk_0).await }) };
+        s.await;
+        ::std::println!("{} {} {}", a.await, b.await, d.await);
+    })
+}

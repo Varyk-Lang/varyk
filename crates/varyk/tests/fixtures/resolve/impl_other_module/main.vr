@@ -1,6 +1,6 @@
 mod m;
 
-impl Task {
+impl Item {
     fn f() {}
 }
 

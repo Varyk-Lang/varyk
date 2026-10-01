@@ -1,0 +1,8 @@
+async fn fetch(id: i64) -> i64 {
+    id * 2
+}
+
+async fn main() {
+    let task: Task<i64> = fetch(1);
+    println!("{}", task.await);
+}

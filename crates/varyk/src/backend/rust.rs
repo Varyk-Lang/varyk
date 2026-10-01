@@ -381,6 +381,10 @@ pub(super) fn rust_type(program: &HirProgram, ty: &Ty, from: ModuleId) -> String
         // In full, so that no module of the program can shadow it (M5a
         // spec 7.5).
         Ty::Error => "::varyk_std::Error".to_string(),
+        // Never spelled for a program `check` accepts (V0215).
+        Ty::Task(t) => format!("::varyk_std::Task<{}>", rust_type(program, t, from)),
+        // Std's own pointer, in full (milestone 5b1 spec 5).
+        Ty::Shared(t) => format!("::std::sync::Arc<{}>", rust_type(program, t, from)),
         Ty::Unit => "()".to_string(),
     }
 }
@@ -501,24 +505,35 @@ impl FnEmitter<'_> {
         if f.is_test {
             writer.line(indent, "#[test]", None);
         }
+        let is_main = f.owner.is_none() && f.module == self.program.entry && f.name == "main";
+        // An async `main` or test is an ordinary Rust function that runs
+        // its body on `varyk-std`'s runtime (milestone 5b1 spec 5).
+        let runs = f.is_async && (is_main || f.is_test);
+        let asyncness = if f.is_async && !runs { "async " } else { "" };
         writer.line(
             indent,
             &format!(
-                "{vis}fn {}{generics}({}){ret} {{",
+                "{vis}{asyncness}fn {}{generics}({}){ret} {{",
                 f.name,
                 params.join(", ")
             ),
             Some(f.span),
         );
-        // A program that logs starts logging first thing (M5a spec 7.5).
-        if self.program.logs
-            && f.owner.is_none()
-            && f.module == self.program.entry
-            && f.name == "main"
-        {
-            writer.line(indent + 1, "::varyk_std::start();", Some(f.span));
+        let inner = if runs { indent + 1 } else { indent };
+        if runs {
+            writer.line(inner, "::varyk_std::run(async {", Some(f.span));
         }
-        self.block_after(writer, &f.body, self.return_need(), indent);
+        // A program that logs starts logging first thing (M5a spec 7.5).
+        if self.program.logs && is_main {
+            writer.line(inner + 1, "::varyk_std::start();", Some(f.span));
+        }
+        if runs {
+            self.block_lines(writer, &f.body, self.return_need(), inner);
+            writer.line(inner, "})", None);
+            writer.line(indent, "}", None);
+        } else {
+            self.block_after(writer, &f.body, self.return_need(), indent);
+        }
     }
 
     /// Writes `block`'s statements and tail into `writer`, each physical
@@ -532,6 +547,13 @@ impl FnEmitter<'_> {
         need: Need,
         indent: usize,
     ) {
+        self.block_lines(writer, block, need, indent);
+        writer.line(indent, "}", None);
+    }
+
+    /// Writes `block`'s statements and tail into `writer` at `indent + 1`,
+    /// as [`FnEmitter::block_after`] does, without the closing `}`.
+    fn block_lines(&self, writer: &mut Writer, block: &HirBlock, need: Need, indent: usize) {
         let inner = indent + 1;
         for stmt in &block.stmts {
             self.stmt(writer, stmt, inner);
@@ -540,7 +562,6 @@ impl FnEmitter<'_> {
             let text = self.expr(tail, need, inner);
             push_lines(writer, inner, &text, Some(tail.span));
         }
-        writer.line(indent, "}", None);
     }
 
     /// Writes one statement's physical lines into `writer` at `indent`,

@@ -220,6 +220,8 @@ impl<'a> Parser<'a> {
         let keyword = match self.peek() {
             Some(TokenKind::ReservedKeyword(word)) => Some(word.as_str()),
             Some(TokenKind::As) => Some("as"),
+            Some(TokenKind::Async) => Some("async"),
+            Some(TokenKind::Await) => Some("await"),
             _ => None,
         };
         if let Some(word) = keyword {

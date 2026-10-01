@@ -1,0 +1,12 @@
+struct Config {
+    port: i64,
+}
+
+fn load() -> Result<i64, Error> {
+    let c: Shared<Config> = env::parse()?;
+    Ok(c.port)
+}
+
+fn main() {
+    println!("{}", load().is_ok());
+}

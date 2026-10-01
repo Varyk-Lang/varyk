@@ -7,20 +7,20 @@
 
 mod task;
 
-fn count_done(tasks: Vec<task::Task>) -> usize {
+fn count_done(tasks: Vec<task::Item>) -> usize {
     tasks.iter().filter(|t| t.is_done()).count()
 }
 
-fn print_all(tasks: Vec<task::Task>) {
+fn print_all(tasks: Vec<task::Item>) {
     for t in tasks {
         println!("{}", t.label());
     }
 }
 
 fn main() {
-    let mut tasks: Vec<task::Task> = Vec::new();
-    tasks.push(task::Task::new("Buy milk"));
-    tasks.push(task::Task::new("Write spec"));
+    let mut tasks: Vec<task::Item> = Vec::new();
+    tasks.push(task::Item::new("Buy milk"));
+    tasks.push(task::Item::new("Write spec"));
     print_all(tasks);
     tasks[0].complete();
     print_all(tasks);

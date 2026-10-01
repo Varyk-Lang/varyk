@@ -5,27 +5,27 @@ expression: main
 mod task;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-fn count_done(tasks: &Vec<crate::task::Task>) -> usize {
+fn count_done(tasks: &Vec<crate::task::Item>) -> usize {
     tasks.iter().filter(|t| {
         let t = *t;
-        crate::task::Task::is_done(t)
+        crate::task::Item::is_done(t)
     }).count()
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
-fn print_all(tasks: &Vec<crate::task::Task>) {
+fn print_all(tasks: &Vec<crate::task::Item>) {
     for t in tasks {
-        ::std::println!("{}", crate::task::Task::label(t));
+        ::std::println!("{}", crate::task::Item::label(t));
     }
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
-    let mut tasks: Vec<crate::task::Task> = Vec::new();
-    tasks.push(crate::task::Task::new("Buy milk"));
-    tasks.push(crate::task::Task::new("Write spec"));
+    let mut tasks: Vec<crate::task::Item> = Vec::new();
+    tasks.push(crate::task::Item::new("Buy milk"));
+    tasks.push(crate::task::Item::new("Write spec"));
     print_all(&tasks);
-    crate::task::Task::complete(&mut tasks[0usize]);
+    crate::task::Item::complete(&mut tasks[0usize]);
     print_all(&tasks);
     ::std::println!("{} of {} done", count_done(&tasks), tasks.len());
 }

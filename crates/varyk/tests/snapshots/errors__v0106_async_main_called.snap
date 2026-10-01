@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0106]: `main` is where the program starts and cannot be called
+ --> crates/varyk/tests/fixtures/errors/v0106_async_main_called/main.vr:2:5
+  |
+2 |     main().await;
+  |     ^^^^ `main` is where the program starts and cannot be called
+  |
+  = note: put what `main` does and another function needs in a function of its own, and call that from both

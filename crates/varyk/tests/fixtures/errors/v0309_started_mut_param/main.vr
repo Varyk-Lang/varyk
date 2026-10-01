@@ -1,0 +1,13 @@
+struct Counter {
+    n: i64,
+}
+
+async fn bump(mut c: Counter) {
+    c.n = c.n + 1;
+}
+
+async fn main() {
+    let mut c = Counter { n: 0 };
+    let task = bump(c);
+    task.await;
+}

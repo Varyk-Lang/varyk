@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0310]: this is reached through a `Shared`, so it can only be read
+ --> crates/varyk/tests/fixtures/errors/v0310_assign_through_shared/main.vr:6:5
+  |
+5 | fn reset(config: Shared<Config>) {
+  |          ------ `config` is a `Shared`
+6 |     config.port = 80;
+  |     ^^^^^^^^^^^ this is reached through a `Shared`, so it can only be read
+  |
+  = note: a `Shared` lets many tasks read one value at once, so nothing reached through it may change; to change a copy, put it in a `let mut` and change that
+  = note: in Rust terms, an `Arc<T>` gives only shared references to its `T`

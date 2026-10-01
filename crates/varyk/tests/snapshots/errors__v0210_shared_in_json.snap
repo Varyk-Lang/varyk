@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0210]: `Shared<Config>` cannot be turned into JSON
+ --> crates/varyk/tests/fixtures/errors/v0210_shared_in_json/main.vr:7:20
+  |
+7 |     println!("{}", json::stringify(config));
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^ `Shared<Config>` cannot be turned into JSON
+  |
+  = note: `Shared<Config>` is a handle to a value, not data
+  = note: a `Shared` cannot go through JSON; read the fields through it into a value of a type that can

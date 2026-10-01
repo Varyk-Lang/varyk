@@ -260,6 +260,16 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_primary()?;
         loop {
             match self.peek() {
+                Some(TokenKind::Dot) if self.peek_at(1) == Some(&TokenKind::Await) => {
+                    self.bump(); // `.`
+                    let await_span = self.current_span();
+                    self.bump(); // `await`
+                    let span = self.span_from(expr.span, await_span);
+                    expr = Expr {
+                        kind: ExprKind::Await(Box::new(expr)),
+                        span,
+                    };
+                }
                 Some(TokenKind::Dot) => {
                     self.bump();
                     let name = self.expect_identifier("a field or method name after `.`")?;
@@ -466,6 +476,24 @@ impl<'a> Parser<'a> {
                     span,
                     format!("`{word}` is not supported in Varyk yet"),
                 );
+                Err(())
+            }
+
+            Some(TokenKind::Await) => {
+                let span = self.current_span();
+                self.bump();
+                self.push_error(
+                    V0001,
+                    span,
+                    "`await` goes after what it waits for, as in `fetch(1).await`",
+                );
+                Err(())
+            }
+
+            Some(TokenKind::Async) => {
+                let span = self.current_span();
+                self.bump();
+                self.push_error(V0001, span, "`async` can only come before `fn`");
                 Err(())
             }
 
@@ -1331,6 +1359,70 @@ mod tests {
         match &expr.kind {
             ExprKind::Try { operand } => assert_eq!(path_name(operand), "x"),
             other => panic!("expected a try, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn await_after_a_call_parses() {
+        let src = "f(x).await";
+        let expr = parse_ok(src);
+        assert_eq!((expr.span.start, expr.span.end), (0, src.len() as u32));
+        match &expr.kind {
+            ExprKind::Await(operand) => {
+                assert!(matches!(operand.kind, ExprKind::Call { .. }), "{operand:?}");
+            }
+            other => panic!("expected an await, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn await_then_try_and_await_then_a_method() {
+        let expr = parse_ok("f(x).await?");
+        match &expr.kind {
+            ExprKind::Try { operand } => {
+                assert!(matches!(operand.kind, ExprKind::Await(_)), "{operand:?}");
+            }
+            other => panic!("expected a try, got {other:?}"),
+        }
+        let expr = parse_ok("a.await.len()");
+        match &expr.kind {
+            ExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method.name, "len");
+                match &receiver.kind {
+                    ExprKind::Await(operand) => assert_eq!(path_name(operand), "a"),
+                    other => panic!("expected an await, got {other:?}"),
+                }
+            }
+            other => panic!("expected a method call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn await_inside_println_arguments() {
+        let expr = parse_ok(r#"println!("{}", f(1).await)"#);
+        match &expr.kind {
+            ExprKind::Intrinsic { args, .. } => {
+                assert!(matches!(args[0].kind, ExprKind::Await(_)), "{args:?}");
+            }
+            other => panic!("expected an intrinsic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bare_await_or_async_is_v0001() {
+        for (src, message) in [
+            (
+                "await f(1)",
+                "`await` goes after what it waits for, as in `fetch(1).await`",
+            ),
+            ("async { 1 }", "`async` can only come before `fn`"),
+        ] {
+            let (_, errors) = parse(src);
+            assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+            assert_eq!(errors[0].code, V0001, "{src}");
+            assert_eq!(errors[0].message, message, "{src}");
         }
     }
 

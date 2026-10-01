@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0211]: `fetch` waits for something, so only an `async fn` can call it
+ --> crates/varyk/tests/fixtures/errors/v0211_async_call_in_plain_fn/main.vr:6:13
+  |
+6 |     let n = fetch(1).await;
+  |             ^^^^^^^^ `fetch` waits for something, so only an `async fn` can call it
+  |
+  = note: an ordinary function runs from start to end without stopping; make this function `async` so it can wait
+help: insert `async ` before `fn`

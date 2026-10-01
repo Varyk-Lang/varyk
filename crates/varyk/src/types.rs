@@ -27,15 +27,24 @@ pub enum Ty {
     /// failing `varyk-std` call. Neither Copy nor text: the ownership
     /// rules treat it like a struct.
     Error,
+    /// `Task<T>` (milestone 5b1 spec 2.4): what a started call gives,
+    /// awaited or detached where it is made. Never written: its type is
+    /// always worked out from the call (V0215).
+    Task(Box<Ty>),
+    /// `Shared<T>` (milestone 5b1 spec 2.6): a handle many can read a
+    /// struct through, `::std::sync::Arc<T>` in Rust. `T` is always a
+    /// struct (V0216), and everything reached through it is read-only
+    /// (V0310).
+    Shared(Box<Ty>),
     Unit,
 }
 
 /// Every type name Varyk knows without a declaration: the primitives,
-/// `string`, the four standard generic types, and `Error`. The reference test
-/// checks `docs/language.md` mentions each.
+/// `string`, the four standard generic types, `Error`, and `Shared`. The
+/// reference test checks `docs/language.md` mentions each.
 pub const BUILTIN_TYPE_NAMES: &[&str] = &[
     "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "string",
-    "Option", "Result", "Vec", "HashMap", "Error",
+    "Option", "Result", "Vec", "HashMap", "Error", "Shared",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -119,7 +128,8 @@ impl Ty {
         }
     }
 
-    /// A struct, an enum, `Option`, `Result`, `Vec`, `HashMap`, or `Error`: a value
+    /// A struct, an enum, `Option`, `Result`, `Vec`, `HashMap`, `Error`, a
+    /// task, or a `Shared`: a value
     /// that is neither Copy nor text, and that the ownership rules treat
     /// like a struct.
     pub fn is_compound(&self) -> bool {
@@ -132,6 +142,8 @@ impl Ty {
                 | Ty::Vec(_)
                 | Ty::HashMap(..)
                 | Ty::Error
+                | Ty::Task(_)
+                | Ty::Shared(_)
         )
     }
 
@@ -140,9 +152,31 @@ impl Ty {
     pub fn has_error(&self) -> bool {
         match self {
             Ty::Error => true,
-            Ty::Option(inner) | Ty::Vec(inner) | Ty::Chain(inner) => inner.has_error(),
+            Ty::Option(inner) | Ty::Vec(inner) | Ty::Chain(inner) | Ty::Task(inner) => {
+                inner.has_error()
+            }
             Ty::Result(a, b) | Ty::HashMap(a, b) => a.has_error() || b.has_error(),
             _ => false,
+        }
+    }
+
+    /// Whether `self` is or holds a `Shared` (milestone 5b1 spec 2.6),
+    /// which cannot be compared or printed.
+    pub fn has_shared(&self) -> bool {
+        match self {
+            Ty::Shared(_) => true,
+            Ty::Option(inner) | Ty::Vec(inner) => inner.has_shared(),
+            Ty::Result(a, b) | Ty::HashMap(a, b) => a.has_shared() || b.has_shared(),
+            _ => false,
+        }
+    }
+
+    /// The struct a field access or a method call on `self` reaches: a
+    /// struct's own, or the one a `Shared` holds (milestone 5b1 spec 2.6).
+    pub fn reached(&self) -> &Ty {
+        match self {
+            Ty::Shared(inner) => inner,
+            ty => ty,
         }
     }
 
@@ -152,6 +186,16 @@ impl Ty {
             Ty::Chain(_) => true,
             Ty::Option(inner) | Ty::Vec(inner) => inner.has_chain(),
             Ty::Result(a, b) | Ty::HashMap(a, b) => a.has_chain() || b.has_chain(),
+            _ => false,
+        }
+    }
+
+    /// Whether `self` is a task or a `Vec` of tasks (milestone 5b1 spec
+    /// 2.4), which may only be used where it is made.
+    pub fn is_tasks(&self) -> bool {
+        match self {
+            Ty::Task(_) => true,
+            Ty::Vec(inner) => matches!(**inner, Ty::Task(_)),
             _ => false,
         }
     }

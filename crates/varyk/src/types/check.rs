@@ -52,6 +52,9 @@ pub fn typecheck(
     let mut reached = Reached::new(symbols.structs.len(), symbols.enums.len());
     // And those the `env` calls reach (M5a spec 2.5).
     let mut env_reached = Reached::new(symbols.structs.len(), symbols.enums.len());
+    // Per function, the calls it makes to async functions (milestone 5b1
+    // spec 2.2), for the cycle check.
+    let mut async_calls = Vec::new();
 
     for (index, sig) in symbols.fns.iter().enumerate() {
         let id = FnId(index as u32);
@@ -72,6 +75,12 @@ pub fn typecheck(
             uses_std: false,
             logs: false,
             is_test: sig.is_test,
+            is_async: sig.is_async,
+            await_operand: None,
+            async_fix_it: asyncs::async_fix_it(decl, sources),
+            async_callees: Vec::new(),
+            task_places: Vec::new(),
+            task_uses: Vec::new(),
             base: &base,
             reached: &mut reached,
             env_reached: &mut env_reached,
@@ -80,10 +89,16 @@ pub fn typecheck(
         let function = checker.function(id, sig, decl);
         uses_std |= checker.uses_std;
         logs |= checker.logs;
+        async_calls.push(std::mem::take(&mut checker.async_callees));
+        // An async `main` or test runs on `varyk-std`'s runtime (milestone
+        // 5b1 spec 4).
+        let entry_main = sig.name == "main" && sig.owner.is_none() && sig.module == resolved.entry;
+        uses_std |= sig.is_async && (sig.is_test || entry_main);
         if let Some(function) = function {
             functions.push(function);
         }
     }
+    diagnostics.extend(asyncs::async_cycles(symbols, &async_calls));
     diagnostics.extend(derives::reached_checks(
         &symbols.structs,
         &symbols.enums,
@@ -350,6 +365,23 @@ struct FnChecker<'a> {
     /// Whether the function is a `#[test]`, the one place `assert` and
     /// `assert_eq` may be called (M5a spec 2.7).
     is_test: bool,
+    /// Whether the function is async, the one place a call to an async
+    /// function may be made (milestone 5b1 spec 2.2).
+    is_async: bool,
+    /// The span of the operand of the `.await` being checked: a call of an
+    /// async function there is awaited (milestone 5b1 spec 2.3).
+    await_operand: Option<Span>,
+    /// The fix-it making this function async, for V0211.
+    async_fix_it: FixIt,
+    /// The calls this function makes to async Varyk functions, for the
+    /// cycle check (V0214).
+    async_callees: Vec<(FnId, Span)>,
+    /// The expressions being checked that stand where a task may be made
+    /// (milestone 5b1 spec 2.3), by span, innermost last.
+    task_places: Vec<(Span, asyncs::TaskPlace)>,
+    /// The locals holding a task, or a `Vec` of tasks, that something
+    /// uses (milestone 5b1 spec 2.4).
+    task_uses: Vec<LocalId>,
     /// The directory an `assert`'s location is written from (see
     /// [`location_base`]).
     base: &'a std::path::Path,
@@ -396,6 +428,7 @@ impl FnChecker<'_> {
         let body = body?;
         let before = self.diagnostics.len();
         unfinished_chains_in_block(&body, self.diagnostics);
+        self.unused_tasks();
         if self.diagnostics.len() > before {
             return None;
         }
@@ -432,6 +465,7 @@ impl FnChecker<'_> {
             name: sig.name.clone(),
             is_pub: sig.is_pub,
             is_test: sig.is_test,
+            is_async: sig.is_async,
             params,
             ret: sig.ret.clone(),
             body,
@@ -549,7 +583,7 @@ impl FnChecker<'_> {
             } => {
                 let annotated = match ty {
                     None => None,
-                    Some(ty) => match self.symbols.resolve_type(ty, self.module) {
+                    Some(ty) => match self.symbols.resolve_binding_type(ty, self.module) {
                         Ok(ty) => Some(ty),
                         Err(diagnostic) => {
                             self.diagnostics.push(diagnostic);
@@ -558,7 +592,13 @@ impl FnChecker<'_> {
                         }
                     },
                 };
-                let value = self.expr(value, annotated.clone());
+                // A task is kept by a `let` with a name (milestone 5b1
+                // spec 2.3); `let _` drops it at once.
+                let value = if name.name == "_" {
+                    self.expr(value, annotated.clone())
+                } else {
+                    self.expr_in(value, annotated.clone(), asyncs::TaskPlace::Let)
+                };
                 let value = match (value, annotated) {
                     (Some(value), Some(ty)) => self.expect(value, &ty),
                     (value, _) => value,
@@ -828,7 +868,9 @@ impl FnChecker<'_> {
             ExprKind::Call { callee, args } => return self.call(callee, args, expected, span),
             ExprKind::Field { base, name } => {
                 let base = self.expr(base, None)?;
-                let field = match base.ty {
+                // A `Shared`'s fields are its struct's (milestone 5b1
+                // spec 2.6).
+                let field = match *base.ty.reached() {
                     Ty::Struct(id) => self.symbols.structs[id.0 as usize]
                         .fields
                         .iter()
@@ -845,7 +887,7 @@ impl FnChecker<'_> {
                         .push(Diagnostic::new(codes::V0102, name.span, message));
                     return None;
                 };
-                let Ty::Struct(id) = base.ty else {
+                let Ty::Struct(id) = *base.ty.reached() else {
                     unreachable!("only a struct has fields")
                 };
                 if !field_visible(self.symbols, self.module, id, field_index) {
@@ -901,6 +943,7 @@ impl FnChecker<'_> {
             } => return self.method_call(receiver, method, args, expected, span),
             ExprKind::Index { base, index } => return self.index(base, index, span),
             ExprKind::Try { operand } => return self.try_(operand, expected, span),
+            ExprKind::Await(operand) => return self.await_expr(operand, expected, span),
             ExprKind::Match { scrutinee, arms } => {
                 return self.match_expr(scrutinee, arms, expected, span);
             }
@@ -1171,6 +1214,15 @@ impl FnChecker<'_> {
 
         let symbol = op.as_str();
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+            if ty.has_shared() {
+                let message = format!("`{}` cannot be compared with `{symbol}`", self.ty_name(&ty));
+                self.diagnostics
+                    .push(Diagnostic::new(codes::V0203, span, message).with_note(
+                        "a `Shared` is a handle to a struct, not a value of its own; compare \
+                         the fields you read through it instead",
+                    ));
+                return None;
+            }
             if let Err(blocker) = self.derives.can_compare(&ty) {
                 let headline =
                     format!("`{}` cannot be compared with `{symbol}`", self.ty_name(&ty));
@@ -1327,7 +1379,7 @@ impl FnChecker<'_> {
                     return None;
                 }
                 // The last module segment may be a type written without
-                // its module (`Task::new()`): look for it elsewhere.
+                // its module (`Item::new()`): look for it elsewhere.
                 let hint = module_path
                     .and_then(|p| p.segments.last())
                     .map_or(name.name.as_str(), |s| s.name.as_str());
@@ -1335,9 +1387,28 @@ impl FnChecker<'_> {
                 return None;
             }
         };
+        let mut started = false;
         // A test is run by `varyk test` alone (M5a spec 2.7).
         if let Callee::Varyk(id) = found {
-            if self.symbols.fns[id.0 as usize].is_test {
+            let sig = &self.symbols.fns[id.0 as usize];
+            // An async `main` is run by the generated `main`, an ordinary
+            // Rust function (milestone 5b1 spec 2.2).
+            let entry = sig.module == ModuleId(0);
+            if sig.is_async && sig.name == "main" && sig.owner.is_none() && entry {
+                self.diagnostics.push(
+                    Diagnostic::new(
+                        codes::V0106,
+                        callee.span,
+                        "`main` is where the program starts and cannot be called",
+                    )
+                    .with_note(
+                        "put what `main` does and another function needs in a function of its \
+                         own, and call that from both",
+                    ),
+                );
+                return None;
+            }
+            if sig.is_test {
                 self.diagnostics.push(
                     Diagnostic::new(
                         codes::V0114,
@@ -1350,6 +1421,9 @@ impl FnChecker<'_> {
                     ),
                 );
                 return None;
+            }
+            if sig.is_async {
+                started = self.async_call(Some(id), &path, span)?;
             }
         }
 
@@ -1368,10 +1442,14 @@ impl FnChecker<'_> {
                         .push(unsupported_rust_signature(&path, sig, span));
                     return None;
                 }
-                (
+                let found = (
                     sig.params.iter().map(|p| p.0.clone()).collect(),
                     sig.ret.clone(),
-                )
+                );
+                if sig.is_async {
+                    started = self.async_call(None, &path, span)?;
+                }
+                found
             }
             Callee::Builtin(_) => unreachable!("a plain name never finds a built-in"),
         };
@@ -1382,8 +1460,9 @@ impl FnChecker<'_> {
                 callee: found,
                 args,
                 rooted: None,
+                started,
             },
-            ty: ret,
+            ty: asyncs::started_ty(started, ret),
             span,
         })
     }
@@ -1789,6 +1868,19 @@ impl FnChecker<'_> {
                     );
                     failed = true;
                 }
+                Ty::Shared(_) => {
+                    let message = format!(
+                        "a `{}` cannot be printed with `{{}}`; print the fields you read through \
+                         it instead",
+                        self.ty_name(&arg.ty)
+                    );
+                    self.diagnostics.push(
+                        Diagnostic::new(codes::V0203, arg.span, message).with_note(
+                            "only numbers, `bool`, `string`, and `Error` have a printed form",
+                        ),
+                    );
+                    failed = true;
+                }
                 Ty::Unit => {
                     self.diagnostics.push(Diagnostic::new(
                         codes::V0200,
@@ -1844,14 +1936,23 @@ impl FnChecker<'_> {
         if let Some(note) = usize_note(expected, found) {
             diagnostic = diagnostic.with_note(note);
         }
+        // A `Shared` is not the struct it holds (milestone 5b1 spec 2.6).
+        if let Ty::Shared(inner) = found {
+            if **inner == *expected {
+                diagnostic = diagnostic.with_note(
+                    "a `Shared` is a handle to the struct, not the struct itself; read the \
+                     fields it needs through the handle and pass those instead",
+                );
+            }
+        }
         self.diagnostics.push(diagnostic);
     }
 
     /// V0100 for an unknown item; V0105 with a `pub ` fix-it for one that
     /// is not visible from here. `hint`, when the item was unknown, is the
-    /// bare name to look for in other modules: `Some("Task")` for a call
-    /// `Task::new()` that took `Task` for an unknown module, so a note can
-    /// say "did you mean `task::Task`?" when another module declares it.
+    /// bare name to look for in other modules: `Some("Item")` for a call
+    /// `Item::new()` that took `Item` for an unknown module, so a note can
+    /// say "did you mean `task::Item`?" when another module declares it.
     fn lookup_error(
         &mut self,
         error: LookupError,
@@ -2054,7 +2155,8 @@ fn unfinished_chains(expr: &HirExpr, next: bool, out: &mut Vec<Diagnostic>) {
         HirExprKind::Unary { operand, .. }
         | HirExprKind::Cast { expr: operand, .. }
         | HirExprKind::Try { operand, .. }
-        | HirExprKind::Assert { cond: operand, .. } => unfinished_chains(operand, false, out),
+        | HirExprKind::Assert { cond: operand, .. }
+        | HirExprKind::Await(operand) => unfinished_chains(operand, false, out),
         HirExprKind::Binary { lhs, rhs, .. } => {
             unfinished_chains(lhs, false, out);
             unfinished_chains(rhs, false, out);
@@ -2248,6 +2350,7 @@ fn opaque_variant(full: &str, name: &str, reason: &str, span: Span) -> Diagnosti
     ))
 }
 
+mod asyncs;
 mod closures;
 mod exhaustive;
 mod methods;

@@ -140,6 +140,8 @@ pub struct FnSig {
     pub member: Option<usize>,
     /// Marked `#[test]` (M5a spec 2.7): run by `varyk test`, never called.
     pub is_test: bool,
+    /// `async fn` (milestone 5b1 spec 2.2).
+    pub is_async: bool,
     /// The whole declaration, starting at `fn` (or `pub`).
     pub span: Span,
 }
@@ -181,6 +183,9 @@ pub struct ImportedSig {
     /// could redefine a type the signature names: the file's name, for
     /// the V0108 headline.
     pub redefined_in: Option<String>,
+    /// `async fn` (milestone 5b1 spec 2.8): awaited or started, as a
+    /// Varyk async function is.
+    pub is_async: bool,
 }
 
 impl ImportedSig {
@@ -755,6 +760,34 @@ impl Symbols {
     pub fn resolve_type(&self, ty: &TypeExpr, from: ModuleId) -> Result<Ty, Diagnostic> {
         let name = ty.name.name.as_str();
         let span = ty.name.span;
+        // No type of the program can take the name (V0113), and a task's
+        // type is always worked out from its call (milestone 5b1 spec 2.4).
+        if name == "Task" && ty.path.is_none() {
+            return Err(Diagnostic::new(
+                codes::V0215,
+                ty.span,
+                "`Task` cannot be written as a type",
+            )
+            .with_note(
+                "a task's type is always worked out from the call that starts it, as in \
+                 `let t = fetch(1);`, and a task stays in the function that started it, so \
+                 no parameter, field, or return type can hold one",
+            ));
+        }
+        // Only a parameter's or a `let`'s type may be `Shared` (milestone
+        // 5b1 spec 2.6), which `resolve_binding_type` resolves.
+        if name == "Shared" && ty.path.is_none() {
+            return Err(Diagnostic::new(
+                codes::V0216,
+                ty.span,
+                "`Shared` can only be written as the type of a parameter or a `let`",
+            )
+            .with_note(
+                "a `Shared` is a handle to one struct, given to whoever reads it; a field, a \
+                 return type, or another type cannot hold one, so hold the struct itself \
+                 there",
+            ));
+        }
         if let Some((arity, shape)) = generic_shape(name).filter(|_| ty.path.is_none()) {
             if ty.args.len() != arity {
                 return Err(Diagnostic::new(
@@ -854,6 +887,30 @@ impl Symbols {
             })
     }
 
+    /// Resolves the written type of a parameter or a `let`, the one place
+    /// `Shared<T>` may be written (milestone 5b1 spec 2.6), `T` a struct
+    /// (V0216); anything else as [`Self::resolve_type`] does.
+    #[expect(
+        clippy::result_large_err,
+        reason = "a single diagnostic on a cold path, as for `resolve_type`"
+    )]
+    pub fn resolve_binding_type(&self, ty: &TypeExpr, from: ModuleId) -> Result<Ty, Diagnostic> {
+        if ty.name.name != "Shared" || ty.path.is_some() {
+            return self.resolve_type(ty, from);
+        }
+        let [inner] = ty.args.as_slice() else {
+            return Err(Diagnostic::new(
+                codes::V0101,
+                ty.span,
+                "`Shared` takes one type, written `Shared<T>`",
+            ));
+        };
+        match self.resolve_type(inner, from)? {
+            Ty::Struct(id) => Ok(Ty::Shared(Box::new(Ty::Struct(id)))),
+            _ => Err(shared_of_other(ty.span)),
+        }
+    }
+
     /// Modules other than `from` that declare a type or a function named
     /// `name`, for [`Self::did_you_mean`], each as a path usable from
     /// `from`: from the root, `shop::cart`; from anywhere else,
@@ -906,6 +963,15 @@ impl Symbols {
             Some(path) => self.module_at(from, path),
         }
     }
+}
+
+/// V0216 at `span`, a `Shared` of something that is not a struct
+/// (milestone 5b1 spec 2.6), written or made by `Shared::new`.
+pub fn shared_of_other(span: Span) -> Diagnostic {
+    Diagnostic::new(codes::V0216, span, "`Shared` can only hold a struct").with_note(
+        "a `Shared` lets many tasks read one struct's fields and methods; put the value in a \
+         field of a struct and share the struct",
+    )
 }
 
 /// The argument count and written shape of `Option`, `Result`, `Vec`, and
@@ -1039,10 +1105,11 @@ fn parse(file: &SourceFile) -> Result<Program, Vec<Diagnostic>> {
 /// namespace with the primitives, `String`, `Option`, `Result`, and `Vec`,
 /// so a user item with one of those names would capture them in rustc
 /// (`mod String;` makes every `String` a module).
-/// `Error` is V0113 instead: the standard error type's name.
+/// `Error`, `Task`, and `Shared` are V0113 instead: the standard types'
+/// names.
 pub(crate) fn reserved_type_name(name: &str, span: Span) -> Option<Diagnostic> {
-    if name == "Error" {
-        return Some(error_name_taken(span));
+    if let Some(diagnostic) = std_type_taken(name, span) {
+        return Some(diagnostic);
     }
     let primitive = Ty::from_primitive_name(name).is_some() || matches!(name, "string" | "str");
     if primitive {
@@ -1081,8 +1148,35 @@ pub(crate) fn error_name_taken(span: Span) -> Diagnostic {
     )
 }
 
-/// V0113 at `span` for a module, struct, or enum named `json`, `env`, or `log`, the
-/// standard modules (M5a spec 2.10).
+/// V0113 at `span` for a struct, enum, module, `use` alias, or `.rs`
+/// struct or enum named `Error`, `Task`, or `Shared`, the standard types
+/// (M5a spec 2.10, milestone 5b1 spec 2.8).
+pub(crate) fn std_type_taken(name: &str, span: Span) -> Option<Diagnostic> {
+    let (what, other) = match name {
+        "Error" => return Some(error_name_taken(span)),
+        "Task" => ("the standard type of a started call", "`Item` or `Job`"),
+        "Shared" => (
+            "the standard type of a value many tasks share",
+            "`State` or `Common`",
+        ),
+        _ => return None,
+    };
+    Some(
+        Diagnostic::new(
+            codes::V0113,
+            span,
+            format!("the name `{name}` is already taken by {what}"),
+        )
+        .with_note(format!(
+            "`{name}` is always the standard one wherever it is written, so a type of your \
+             own needs another name, such as {other}"
+        )),
+    )
+}
+
+/// V0113 at `span` for a module, struct, or enum named `json`, `env`,
+/// `log`, or `time`, the standard modules (M5a spec 2.10, milestone 5b1
+/// spec 2.8).
 pub(crate) fn std_module_taken(name: &str, span: Span) -> Option<Diagnostic> {
     if !is_std_module(name) {
         return None;
@@ -1100,9 +1194,10 @@ pub(crate) fn std_module_taken(name: &str, span: Span) -> Option<Diagnostic> {
     )
 }
 
-/// `json`, `env`, and `log`, the standard modules (M5a spec 2.10).
+/// `json`, `env`, `log`, and `time`, the standard modules (M5a spec 2.10,
+/// milestone 5b1 spec 2.8).
 pub(crate) fn is_std_module(name: &str) -> bool {
-    matches!(name, "json" | "env" | "log")
+    matches!(name, "json" | "env" | "log" | "time")
 }
 
 /// V0113 at `span` for a function named `assert` or `assert_eq`, the
@@ -1610,6 +1705,7 @@ fn push_fn(
         item,
         member,
         is_test: false,
+        is_async: function.is_async,
         span: function.span,
     });
     id
@@ -1785,7 +1881,7 @@ fn resolve_signature(
             diagnostics.push(duplicate(&name.name, name.span, first));
         }
         seen.entry(&name.name).or_insert(name.span);
-        match symbols.resolve_type(&param.ty, module) {
+        match symbols.resolve_binding_type(&param.ty, module) {
             Ok(ty) => {
                 if function.is_pub {
                     if let Some(diagnostic) =

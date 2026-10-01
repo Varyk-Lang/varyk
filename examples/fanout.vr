@@ -1,0 +1,44 @@
+// expected output:
+// prices: 12 + 24 + 48
+// failed: no price for item 3
+// item 1: 12
+// item 2: 24
+// item 3 failed: no price for item 3
+// item 4: 48
+
+async fn price(item: i64) -> Result<i64, Error> {
+    time::sleep(10 * item as u64).await;
+    if item == 3 {
+        return Err(Error::new(format!("no price for item {}", item)));
+    }
+    Ok(item * 12)
+}
+
+async fn prices(items: Vec<i64>) -> Result<Vec<i64>, Error> {
+    let found = Task::all(items.iter().map(|item| price(item)).collect()).await?;
+    Ok(found)
+}
+
+async fn main() {
+    let good: Vec<i64> = vec![1, 2, 4];
+    let bad: Vec<i64> = vec![1, 2, 3];
+    match prices(good).await {
+        Ok(found) => println!("prices: {} + {} + {}", found[0], found[1], found[2]),
+        Err(e) => println!("failed: {}", e.message()),
+    }
+    match prices(bad).await {
+        Ok(found) => println!("prices: {}", found.len()),
+        Err(e) => println!("failed: {}", e.message()),
+    }
+
+    let items: Vec<i64> = vec![1, 2, 3, 4];
+    let outcomes = Task::all_settled(items.iter().map(|item| price(item)).collect()).await;
+    let mut n: i64 = 1;
+    for outcome in outcomes.iter() {
+        match outcome {
+            Ok(value) => println!("item {}: {}", n, value),
+            Err(e) => println!("item {} failed: {}", n, e.message()),
+        }
+        n = n + 1;
+    }
+}

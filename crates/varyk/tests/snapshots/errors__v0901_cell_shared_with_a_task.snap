@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0901]: the task started here holds `Cell<i64>`, which cannot be shared between threads
+  --> crates/varyk/tests/fixtures/errors/v0901_cell_shared_with_a_task/main.vr:10:5
+   |
+10 |     let t = count(counter);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^ the task started here holds `Cell<i64>`, which cannot be shared between threads
+   |
+   = note: a started task may run on another thread, so what it is given, and what it holds while it waits, must be able to go there; this value comes from Rust code, a `.rs` module or a crate it uses
+   = note: in Rust terms, `Cell<i64>` is not `Sync`; in the Rust code, use `Arc` in place of `Rc`, and `Mutex` or an atomic in place of `Cell` or `RefCell`, or wait for the call with `.await` instead of starting it
+error: the generated Rust did not compile; run `varyk build --emit-rust` to inspect it

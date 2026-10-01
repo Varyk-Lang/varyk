@@ -168,6 +168,8 @@ pub struct HirFunction {
     pub is_pub: bool,
     /// Marked `#[test]` (M5a spec 2.7).
     pub is_test: bool,
+    /// `async fn` (milestone 5b1 spec 2.2).
+    pub is_async: bool,
     /// A method's receiver comes first, as `LocalId(0)` named `self`,
     /// with the `impl` type and the receiver's mode.
     pub params: Vec<HirParam>,
@@ -396,10 +398,16 @@ pub enum HirExprKind {
     Local(LocalId),
     /// `rooted` as on [`HirExprKind::MethodCall`], set by borrow analysis
     /// for a call of a function with a borrowed return (M4 spec 3.1).
+    ///
+    /// `started` marks a call of an async function written without
+    /// `.await` (milestone 5b1 spec 2.3): it starts a task, of type
+    /// `Task<T>`, and its arguments are owned slots the task keeps
+    /// (spec 3).
     Call {
         callee: Callee,
         args: Vec<HirExpr>,
         rooted: Option<usize>,
+        started: bool,
     },
     Field {
         base: Box<HirExpr>,
@@ -488,12 +496,16 @@ pub enum HirExprKind {
     /// what the chain's source reads, and must be looked inside where it
     /// is made, as a looked-into row with `rooted` must; the checker
     /// leaves it unset.
+    ///
+    /// `started` as on [`HirExprKind::Call`]: the receiver is then an
+    /// owned slot too.
     MethodCall {
         receiver: Box<HirExpr>,
         method: MethodRef,
         args: Vec<HirExpr>,
         rooted: Option<usize>,
         looked_into: bool,
+        started: bool,
     },
     /// `base[index]`: an element of the `Vec` `base`, a place derived from
     /// `base` like a field (spec 2.6).
@@ -531,6 +543,11 @@ pub enum HirExprKind {
         operand: Box<HirExpr>,
         kind: TryKind,
     },
+    /// `operand.await` (milestone 5b1 spec 2.3): `operand` is a call of an
+    /// async function, a `Call` or a `MethodCall`, run here, or a local
+    /// holding a task, which it takes (spec 2.4); the value is what the
+    /// call returns.
+    Await(Box<HirExpr>),
     /// `expr as T` (M4 spec 2.9): a conversion between number types; the
     /// target is the expression's type.
     Cast {
