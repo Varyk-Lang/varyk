@@ -20,6 +20,31 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  tags:
+    # Every version in the manifest must have its tag. A release whose crate
+    # section release-please could not read is published but never tagged,
+    # and the next release pull request then proposes a version that has
+    # already shipped; this fails the run on the day that happens.
+    needs: release-please
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every released version has its tag
+        run: |
+          missing=0
+          for crate_dir in crates/varyk crates/varyk-syntax crates/varyk-std; do
+            version=$(jq -r --arg p "$crate_dir" '.[$p]' .release-please-manifest.json)
+            tag="$(basename "$crate_dir")-v$version"
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+              echo "found $tag"
+            else
+              echo "::error::$tag is missing: release-please did not tag it (see the angle-bracket rule in CONTRIBUTING.md); create it at the release commit before merging the next release pull request"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
   publish:
     needs: release-please
     if: needs.release-please.outputs.releases_created == 'true'

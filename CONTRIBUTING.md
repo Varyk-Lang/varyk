@@ -60,11 +60,21 @@ A `!` after the prefix (`feat!:`) marks a breaking change. Before 1.0,
 `feat` and `fix` bump the patch version and a breaking change bumps the
 minor version.
 
+Keep `<` and `>` out of commit subjects and `BREAKING CHANGE:` footers:
+write `Option of T`, not `Option<T>`. release-please copies them into the
+release pull request, reads that body as HTML, and an unclosed `<T>` hides
+the sections after it, so their crates are published but never tagged, and
+the next release pull request proposes a version that has already shipped.
+The `Commit messages` check enforces this on every pull request, and the
+release workflow's `tags` job fails if a released version has no tag; such
+a tag is then created by hand at its release commit, the one exception to
+release-please making every tag.
+
 release-please opens a release pull request on `main` with the version
 bumps and `CHANGELOG.md`. Merging that pull request is the release decision:
-it creates the tags `varyk-vX.Y.Z` and `varyk-syntax-vX.Y.Z` and the GitHub
-releases, and the publish job then uploads both crates to crates.io with no
-further approval. The crates.io token is a secret of the `release`
+it creates the tags `varyk-vX.Y.Z`, `varyk-syntax-vX.Y.Z`, and
+`varyk-std-vX.Y.Z` and the GitHub releases, and the publish job then uploads
+the three crates to crates.io with no further approval. The crates.io token is a secret of the `release`
 environment, which only workflow runs from protected branches (`main`) may
 use; the environment has no required reviewer, so nothing waits on a click
 after the merge.

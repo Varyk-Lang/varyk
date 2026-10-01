@@ -87,8 +87,13 @@ commit per concern. release-please turns the history on `main` into a
 release pull request; merging that is the release decision: it tags
 `varyk-vX.Y.Z`, `varyk-syntax-vX.Y.Z`, and `varyk-std-vX.Y.Z` and publishes
 the three crates, with no
-further approval. Never create release tags by hand. Details and the
-full prefix table are in `CONTRIBUTING.md`.
+further approval. Never create release tags by hand, except one the
+release workflow's `tags` job reports missing, at its release commit. Keep
+`<` and `>` out of commit subjects, pull request titles, and
+`BREAKING CHANGE:` footers (`Option of T`, not `Option<T>`), which CI
+checks: release-please reads the release pull request as HTML, and an
+unclosed tag there leaves crates untagged. Details and the full prefix
+table are in `CONTRIBUTING.md`.
 
 ## Where things are
 
