@@ -1,5 +1,5 @@
 {
-  "crates/varyk-std": "0.4.0",
-  "crates/varyk-syntax": "0.4.0",
-  "crates/varyk": "0.4.0"
+  "crates/varyk-std": "0.5.0",
+  "crates/varyk-syntax": "0.5.0",
+  "crates/varyk": "0.5.0"
 }
