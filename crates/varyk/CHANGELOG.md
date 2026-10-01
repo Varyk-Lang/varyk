@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.3.0...varyk-v0.4.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* s.parse() returns Result<T, Error> instead of Option<T>; the old Option is `let r: Result<i32, Error> = s.parse();` then `r.ok()`. The names json, env, log, Error, assert, assert_eq, and any item name starting with varyk_ are reserved.
+* the public syntax tree of varyk-syntax changed (new expression, statement, and pattern variants, and new fields), so code matching on it must be updated. Varyk programs that milestone 3 accepted are still accepted.
+* struct fields are private unless marked `pub`; a milestone-2 program that reads a field across a module boundary must add `pub` to the field.
+
+### Features
+
+* milestone 1, the compiler skeleton and the borrow-by-default proof ([da90c5f](https://github.com/Varyk-Lang/varyk/commit/da90c5f77bf80da14147776d05dc9d0fbd9d9654))
+* milestone 2, enums, matching, methods, and collections ([05b742d](https://github.com/Varyk-Lang/varyk/commit/05b742d5790b0196d1ea4e656900381f8fdea5d8))
+* milestone 3, packages and interop ([ae30ac9](https://github.com/Varyk-Lang/varyk/commit/ae30ac9c7730651eb2488ece3f0782ba64f2c62c))
+* milestone 4, closures, iterators, and patterns ([d336da5](https://github.com/Varyk-Lang/varyk/commit/d336da5c8687af3593867b704957f59c91a5de84))
+* milestone 5a, data, config, logging, and tests ([efedf8d](https://github.com/Varyk-Lang/varyk/commit/efedf8d4077704aa11601de1b73f7a7deb753526))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * varyk-syntax bumped from 0.3.0 to 0.4.0
+
 ## [0.3.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.2.0...varyk-v0.3.0) (2026-10-01)
 
 
