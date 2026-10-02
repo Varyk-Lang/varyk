@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 varyk-std = "0.1"
+
+[[bin]]
+name = "app"
+path = "src/main.vr"

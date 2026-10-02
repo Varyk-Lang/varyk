@@ -122,6 +122,22 @@ pub fn with_local_std(mut manifest: toml::Table) -> toml::Table {
     manifest
 }
 
+/// `manifest` with `[patch.crates-io] varyk-std = { path = .. }` on the
+/// directory `VARYK_STD_PATH` names, when that is set: for the manifest
+/// the package graph is read from, which reaches every package's own
+/// `varyk-std` line (M5b2 spec 4.7).
+pub fn with_std_patch(mut manifest: toml::Table) -> toml::Table {
+    let Some(path) = local_std() else {
+        return manifest;
+    };
+    let mut crates_io = toml::Table::new();
+    crates_io.insert("varyk-std".to_string(), path_value(&path));
+    let mut patch = toml::Table::new();
+    patch.insert("crates-io".to_string(), toml::Value::Table(crates_io));
+    manifest.insert("patch".to_string(), toml::Value::Table(patch));
+    manifest
+}
+
 impl CrateInfo {
     /// A single file's crate: `name`, version `0.0.0`, edition 2024, an
     /// empty `[workspace]` table so an enclosing workspace does not claim

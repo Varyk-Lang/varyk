@@ -23,16 +23,17 @@ cargo install varyk
 ```
 
 JSON, configuration from the environment, logging, and `varyk test` are in
-milestone 5a, and `async` functions and tasks in 5b1; HTTP and databases
-are milestone 5b2 on the [roadmap](docs/roadmap.md); what works today is under
+milestone 5a, `async` functions and tasks in 5b1, and Varyk packages that use
+Varyk packages in 5b2; HTTP and databases, as packages, are milestones 5b3
+and 5b4 on the [roadmap](docs/roadmap.md); what works today is under
 [Status](#status).
 
 ## Use Varyk until you need Rust
 
 A Varyk package is a Cargo package: a `Cargo.toml` and a `src/main.vr` or
-`src/lib.vr`. `varyk init` writes one that both `varyk run` and plain
-`cargo build` compile, and `varyk publish` ships it to crates.io as a plain
-Rust crate that needs no Varyk to use. There is nothing to bootstrap: every
+`src/lib.vr`. `varyk init` writes one, `varyk run` builds it, and `varyk
+publish` ships it to crates.io as a plain Rust crate that needs no Varyk
+to use. There is nothing to bootstrap: every
 crate on crates.io is available from the first day, and every Varyk package
 joins them.
 
@@ -182,7 +183,7 @@ cargo run -p varyk -- run examples/hello.vr
 The main commands:
 
 ```text
-varyk check [file.vr]    check the program for errors; never runs cargo
+varyk check [file.vr]    check the program for errors
 varyk build [file.vr]    generate and build the Rust; prints the executable path
 varyk run [file.vr]      build, then run the program, forwarding its exit code
 varyk init [dir]         write a new package
@@ -201,7 +202,10 @@ in the example above.
 
 Varyk is experimental and pre-1.0: anything may change, including any
 syntax, error code, or command-line flag, and a breaking change bumps the
-minor version. This is milestone 5b1: async functions and tasks, on top of milestone 5a's data, configuration, logging, and tests and milestone 4's closures, iterators, and patterns.
+minor version. This is milestone 5b2: Varyk packages that use Varyk
+packages, on top of milestone 5b1's async functions and tasks, milestone
+5a's data, configuration, logging, and tests and milestone 4's closures,
+iterators, and patterns.
 Structs, enums, and `match`, `for` loops, methods, `Option`, `Result`,
 `Vec`, `?`, and `format!` work, and so do packages with dependencies,
 modules at any depth, `use`, private fields, and Rust structs and enums
@@ -210,6 +214,11 @@ imported from `.rs` files; the compiler builds and runs every program in
 plain-word message, and, where it can, a suggested fix. HTTP,
 databases, and much more are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
+
+Milestone 5b2 lets a Varyk package use another one by its `Cargo.toml` key
+(`units::length::add(a, b)`), to any depth; `varyk` compiles each from its
+`.vr` files and is the only builder of a Varyk package. See
+`examples/packages/trip`.
 
 Milestone 5b1 adds `async fn` and `.await`; a call without `.await` starts
 a task, and `Task::all`, `Task::all_settled`, `.detach()`, `Shared<T>`, and

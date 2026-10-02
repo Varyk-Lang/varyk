@@ -1739,7 +1739,10 @@ fn imported_methods_and_associated_functions_are_members() {
     let (id, _) = imported_struct(&resolved, "ext", "Matcher");
     let new = imported_member(&resolved, id, "new");
     assert!(new.callable);
-    assert_eq!((new.owner, new.self_mode), (Some(id), None));
+    assert_eq!(
+        (new.owner, new.self_mode),
+        (Some(UserType::Struct(id)), None)
+    );
     assert_eq!(new.params, vec![(Ty::String, ParamMode::SharedBorrow)]);
     assert_eq!(new.ret, Ty::Struct(id));
     let is_match = imported_member(&resolved, id, "is_match");
@@ -2039,8 +2042,15 @@ fn resolve_root_str(text: &str, kind: Kind, crates: &[&str]) -> Result<Resolved,
     let dependencies = Dependencies {
         crates: &crates,
         dev: &[],
+        optional: &[],
     };
-    resolve_root(entry, kind, Some(dependencies), &mut sources)
+    resolve_root(
+        entry,
+        kind,
+        Some(dependencies),
+        Packages::default(),
+        &mut sources,
+    )
 }
 
 #[test]
@@ -2583,5 +2593,457 @@ fn a_negative_default_on_an_unsigned_field_is_v0209_even_zero() {
             codes::V0209,
             "the default `-0` does not fit in `u16` (0 to 65535)".to_string()
         )]
+    );
+}
+
+// --- Varyk packages (M5b2 spec 2.1 to 2.4) ----------------------------------
+
+mod packages {
+    use super::*;
+    use crate::test_packages::{Build, Dep, units_and_route};
+
+    fn callee(resolved: &Resolved, path: &str, name: &str) -> Result<Callee, LookupError> {
+        resolved
+            .symbols
+            .lookup_fn(resolved.entry, Some(&p(path)), name)
+    }
+
+    fn sig<'a>(resolved: &'a Resolved, path: &str, name: &str) -> &'a ImportedSig {
+        match callee(resolved, path, name) {
+            Ok(Callee::Imported(id)) => &resolved.symbols.imported[id.0 as usize],
+            other => panic!("`{path}::{name}` should be a package's function: {other:?}"),
+        }
+    }
+
+    fn units() -> Build {
+        let mut build = Build::default();
+        build.add("units", &[]);
+        build
+    }
+
+    fn resolve_errors(build: &mut Build, text: &str, deps: &[(&str, Dep<'_>)]) -> Vec<Diagnostic> {
+        match build.resolve(text, deps) {
+            Ok(_) => panic!("expected diagnostics for:\n{text}"),
+            Err(diagnostics) => diagnostics,
+        }
+    }
+
+    #[test]
+    fn a_dependency_names_its_package_after_local_modules_and_aliases() {
+        let mut build = units();
+        let resolved = build
+            .resolve("fn main() {}\n", &[("units", Dep::Package("units"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        let one = sig(&resolved, "units", "one");
+        assert_eq!(one.ret, I32);
+        assert_eq!(
+            one.package,
+            Some(PackageItem {
+                package: PackageId(0),
+                name: "units".to_string(),
+                path: Vec::new(),
+            })
+        );
+        let add = sig(&resolved, "units::length", "add");
+        assert_eq!(
+            add.package.as_ref().map(|item| item.path.clone()),
+            Some(vec!["length".to_string()])
+        );
+
+        // A module declared here comes first.
+        let resolved = build
+            .resolve_fixture("app_local", &[("units", Dep::Package("units"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        assert!(matches!(
+            callee(&resolved, "units", "one"),
+            Ok(Callee::Varyk(_))
+        ));
+
+        // A `use` alias comes first too.
+        let resolved = build
+            .resolve_fixture("app_alias", &[("units", Dep::Package("units"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        assert!(matches!(
+            callee(&resolved, "units", "one"),
+            Ok(Callee::Varyk(_))
+        ));
+    }
+
+    #[test]
+    fn a_dependency_key_is_named_with_its_dash_read_as_an_underscore() {
+        let mut build = units();
+        let resolved = build
+            .resolve("fn main() {}\n", &[("unit-kit", Dep::Package("units"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        assert_eq!(sig(&resolved, "unit_kit", "one").ret, I32);
+        assert_eq!(callee(&resolved, "units", "one"), Err(LookupError::Unknown));
+    }
+
+    #[test]
+    fn a_standard_name_comes_before_a_dependency_and_its_v0113_shows_the_rename() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "use json::length;\nfn main() {}\n",
+            &[("json", Dep::Package("units"))],
+        );
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0113);
+        assert!(
+            d.notes
+                .iter()
+                .any(|note| note.contains("package = \"units\"")),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
+    fn crate_inside_a_package_means_that_package() {
+        let mut build = units();
+        let resolved = build
+            .resolve("fn main() {}\n", &[("units", Dep::Package("units"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        assert_eq!(sig(&resolved, "units", "zero_value").ret, I32);
+    }
+
+    #[test]
+    fn an_item_of_a_package_without_pub_is_v0105() {
+        let mut build = units();
+        let resolved = build
+            .resolve("fn main() {}\n", &[("units", Dep::Package("units"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        assert!(matches!(
+            callee(&resolved, "units", "secret"),
+            Err(LookupError::NotVisible { .. })
+        ));
+        assert!(matches!(
+            callee(&resolved, "units::hidden", "deep"),
+            Err(LookupError::PrivateModule { .. })
+        ));
+        let d = resolve_errors(
+            &mut build,
+            "use units::secret;\nfn main() {}\n",
+            &[("units", Dep::Package("units"))],
+        );
+        assert_eq!(only(&d).code, codes::V0105);
+    }
+
+    #[test]
+    fn a_rust_crate_in_a_path_or_a_use_is_v0110() {
+        let mut build = units();
+        let deps = [("regex", Dep::Rust)];
+        let d = resolve_errors(&mut build, "use regex::Regex;\nfn main() {}\n", &deps);
+        assert_eq!(only(&d).code, codes::V0110);
+        let d = resolve_errors(
+            &mut build,
+            "fn f(r: regex::Regex) {}\nfn main() {}\n",
+            &deps,
+        );
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0110);
+        assert!(
+            d.message.contains("`regex` is a library written in Rust"),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
+    fn naming_an_optional_dependency_is_v0401() {
+        let mut build = units();
+        let deps = [("units", Dep::Optional("units"))];
+        let d = resolve_errors(&mut build, "use units::one;\nfn main() {}\n", &deps);
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0401);
+        assert!(d.message.contains("optional"), "{d:#?}");
+    }
+
+    #[test]
+    fn use_of_a_package_alone_is_v0111() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "use units;\nfn main() {}\n",
+            &[("units", Dep::Package("units"))],
+        );
+        assert_eq!(only(&d).code, codes::V0111);
+    }
+
+    #[test]
+    fn a_package_s_tests_are_not_visible() {
+        let mut build = units();
+        let resolved = build
+            .resolve("fn main() {}\n", &[("units", Dep::Package("units"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        assert_eq!(
+            callee(&resolved, "units", "one_is_one"),
+            Err(LookupError::Unknown)
+        );
+    }
+
+    #[test]
+    fn v0100_shows_the_rename_when_the_name_is_a_dependency_it_cannot_reach() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "fn f(m: varyk_units::length::Meters) {}\nfn main() {}\n",
+            &[("varyk-units", Dep::Package("units"))],
+        );
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0101);
+        // A type is V0101; a call is V0100, checked in the type checker.
+        let mut build = units();
+        let resolved = build.resolve(
+            "fn main() {\n    let n = varyk_units::one();\n}\n",
+            &[("varyk-units", Dep::Package("units"))],
+        );
+        let resolved = resolved.unwrap_or_else(|d| panic!("{d:#?}"));
+        assert_eq!(
+            callee(&resolved, "varyk_units", "one"),
+            Err(LookupError::Unknown)
+        );
+    }
+
+    #[test]
+    fn v0111_for_a_module_declared_elsewhere_comes_first_and_shows_the_rename() {
+        let mut build = units();
+        let d = match build.resolve_fixture("app_elsewhere", &[("units", Dep::Package("units"))]) {
+            Ok(_) => panic!("`use units::one;` should be V0111"),
+            Err(d) => d,
+        };
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0111);
+        assert!(
+            d.notes
+                .iter()
+                .any(|note| note.contains("is also a dependency")),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
+    fn a_single_name_is_never_a_package() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "fn f(u: units) {}\nfn main() {}\n",
+            &[("units", Dep::Package("units"))],
+        );
+        assert_eq!(only(&d).code, codes::V0101);
+    }
+
+    #[test]
+    fn an_impl_of_a_package_s_type_is_v0001() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "use units::length::Meters;\nimpl Meters {\n    fn f(self) {}\n}\nfn main() {}\n",
+            &[("units", Dep::Package("units"))],
+        );
+        assert_eq!(only(&d).code, codes::V0001);
+    }
+
+    #[test]
+    fn a_rust_dependency_never_gets_the_rename_note() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "use json::parse;\nfn main() {}\n",
+            &[("json", Dep::Rust)],
+        );
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0113);
+        assert!(
+            !d.notes
+                .iter()
+                .any(|note| note.contains("also a dependency")),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
+    fn a_standard_name_comes_before_a_rust_dependency_of_that_name() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "fn f(t: time::Clock) {}\nfn main() {}\n",
+            &[("time", Dep::Rust)],
+        );
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0101, "{d:#?}");
+    }
+
+    #[test]
+    fn a_package_keyed_with_a_standard_name_gets_the_right_reason() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "use time::one;\nfn main() {}\n",
+            &[("time", Dep::Package("units"))],
+        );
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0113);
+        assert!(
+            d.notes
+                .iter()
+                .any(|note| note.contains("`time` is a standard module, which comes first")),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
+    fn a_dependency_s_module_present_as_vr_and_rs_loads_from_the_vr() {
+        let mut build = Build::default();
+        build.add("twin", &[]);
+        let resolved = build
+            .resolve("fn main() {}\n", &[("twin", Dep::Package("twin"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        assert_eq!(sig(&resolved, "twin::part", "which").ret, I32);
+        assert_eq!(
+            callee(&resolved, "twin::part", "other"),
+            Err(LookupError::Unknown)
+        );
+    }
+
+    #[test]
+    fn an_imported_function_keeps_its_modes_async_ness_and_borrowed_return() {
+        let mut build = units_and_route();
+        let resolved = build
+            .resolve(
+                "fn main() {}\n",
+                &[
+                    ("units", Dep::Package("units")),
+                    ("route", Dep::Package("route")),
+                ],
+            )
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        let grow = sig(&resolved, "units::length", "grow");
+        assert_eq!(grow.params[0].1, ParamMode::MutableBorrow);
+        let add = sig(&resolved, "units::length", "add");
+        assert_eq!(add.params[0].1, ParamMode::SharedBorrow);
+        assert!(sig(&resolved, "units", "ready").is_async);
+        assert!(!add.is_async);
+        assert_eq!(sig(&resolved, "route", "longest").ret_root, Some(0));
+        assert_eq!(add.ret_root, None);
+        let meters = resolved
+            .symbols
+            .lookup_type(resolved.entry, Some(&p("units::length")), "Meters")
+            .expect("Meters");
+        let doubled = resolved
+            .symbols
+            .lookup_member(resolved.entry, meters, "doubled")
+            .expect("doubled");
+        let Callee::Imported(doubled) = doubled else {
+            panic!("a package's method is imported: {doubled:?}");
+        };
+        let doubled = &resolved.symbols.imported[doubled.0 as usize];
+        assert_eq!(
+            (doubled.owner, doubled.self_mode, doubled.ret_root),
+            (Some(meters), Some(ParamMode::SharedBorrow), None)
+        );
+    }
+
+    #[test]
+    fn a_package_reached_twice_gives_its_types_one_identity() {
+        let mut build = units_and_route();
+        let resolved = build
+            .resolve(
+                "fn main() {}\n",
+                &[
+                    ("units", Dep::Package("units")),
+                    ("route", Dep::Package("route")),
+                ],
+            )
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        let meters: Vec<StructId> = (0..resolved.symbols.structs.len())
+            .filter(|&id| resolved.symbols.structs[id].name == "Meters")
+            .map(|id| StructId(id as u32))
+            .collect();
+        assert_eq!(meters.len(), 1, "one `Meters`");
+        assert_eq!(sig(&resolved, "route", "total").ret, Ty::Struct(meters[0]));
+        // A package the program does not list is imported, not named.
+        let resolved = build
+            .resolve("fn main() {}\n", &[("route", Dep::Package("route"))])
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        assert_eq!(
+            callee(&resolved, "units::length", "add"),
+            Err(LookupError::Unknown)
+        );
+    }
+}
+
+/// A library's `pub` items in `pub` modules are used by other packages,
+/// so a type they name must be one those packages can name too (M5b2 spec
+/// 2.3): a `.vr` field, and a `.rs` field and method. The same files as a
+/// program are fine.
+#[test]
+fn a_library_s_items_other_packages_use_must_name_types_they_can_see() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/resolve/library_hidden_types/src");
+    let entry = || {
+        let path = dir.join("lib.vr");
+        let text = std::fs::read_to_string(&path).expect("fixture should exist");
+        SourceFile::new(FileId(0), path, text)
+    };
+    let mut sources = Vec::new();
+    let diagnostics = resolve_root(
+        entry(),
+        Kind::Library,
+        None,
+        Packages::default(),
+        &mut sources,
+    )
+    .err()
+    .unwrap_or_default();
+    let mut found: Vec<(&str, String)> = diagnostics
+        .iter()
+        .map(|d| {
+            let file = sources[d.span.file.0 as usize]
+                .path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            (d.code, format!("{file}: {}", d.message))
+        })
+        .collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            (
+                codes::V0105,
+                "api.rs: `Square` is in module `parts`, which other packages cannot see, but \
+                 `Shelf` can be used from other packages; write `pub mod parts;`"
+                    .to_string()
+            ),
+            (
+                codes::V0105,
+                "api.rs: `Square` is in module `parts`, which other packages cannot see, but \
+                 `top` can be used from other packages; write `pub mod parts;`"
+                    .to_string()
+            ),
+            (
+                codes::V0105,
+                "lib.vr: `Note` is in module `notes`, which other packages cannot see, but \
+                 `Order` can be used from other packages; write `pub mod notes;` (or make \
+                 `Order` private)"
+                    .to_string()
+            ),
+        ],
+        "{diagnostics:#?}"
+    );
+
+    // As a program, nothing outside uses it: no `main`, and nothing else.
+    let mut sources = Vec::new();
+    let diagnostics = resolve_root(
+        entry(),
+        Kind::Binary,
+        None,
+        Packages::default(),
+        &mut sources,
+    )
+    .err()
+    .unwrap_or_default();
+    assert!(
+        diagnostics.iter().all(|d| d.code != codes::V0105),
+        "{diagnostics:#?}"
     );
 }

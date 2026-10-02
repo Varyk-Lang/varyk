@@ -15,8 +15,8 @@ fn workspace_root() -> PathBuf {
 
 fn generate_source(entry: SourceFile) -> GeneratedCrate {
     let mut sources = Vec::new();
-    let program = match varyk::check_file(entry, varyk::package::Kind::Binary, None, &mut sources) {
-        Ok(program) => program,
+    let program = match varyk::check_file(entry, None, None, &mut sources) {
+        Ok(checked) => checked.program,
         Err(diagnostics) => panic!("expected the program to check, got {diagnostics:#?}"),
     };
     let std = StdDependency::for_program(program.uses_std);

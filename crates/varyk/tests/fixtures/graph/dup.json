@@ -1,0 +1,81 @@
+{
+  "packages": [
+    {
+      "id": "path+file:///work/app_dup#app@0.1.0",
+      "name": "app",
+      "version": "0.1.0",
+      "source": null,
+      "manifest_path": "/work/app_dup/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "units",
+          "rename": null,
+          "kind": null,
+          "target": null,
+          "optional": false
+        },
+        {
+          "name": "units",
+          "rename": "units-copy",
+          "kind": null,
+          "target": null,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "path+file:///work/units#0.1.0",
+      "name": "units",
+      "version": "0.1.0",
+      "source": null,
+      "manifest_path": "/work/units/Cargo.toml",
+      "dependencies": []
+    },
+    {
+      "id": "git+file:///work/unitsgit#units@0.1.0",
+      "name": "units",
+      "version": "0.1.0",
+      "source": "git+file:///work/unitsgit#0cfe9e90a3c52fe14d3b5343fc8da07c996c3f36",
+      "manifest_path": "/cargo/git/checkouts/unitsgit/0000000/Cargo.toml",
+      "dependencies": []
+    }
+  ],
+  "resolve": {
+    "root": "path+file:///work/app_dup#app@0.1.0",
+    "nodes": [
+      {
+        "id": "path+file:///work/app_dup#app@0.1.0",
+        "deps": [
+          {
+            "name": "units",
+            "pkg": "path+file:///work/units#0.1.0",
+            "dep_kinds": [
+              {
+                "kind": null,
+                "target": null
+              }
+            ]
+          },
+          {
+            "name": "units_copy",
+            "pkg": "git+file:///work/unitsgit#units@0.1.0",
+            "dep_kinds": [
+              {
+                "kind": null,
+                "target": null
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "path+file:///work/units#0.1.0",
+        "deps": []
+      },
+      {
+        "id": "git+file:///work/unitsgit#units@0.1.0",
+        "deps": []
+      }
+    ]
+  }
+}

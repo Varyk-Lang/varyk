@@ -18,15 +18,18 @@ use varyk_syntax::{
     TypeExpr, VariantFields, parse_source,
 };
 
+use crate::CheckedPackage;
 use crate::builtins::BuiltinId;
 use crate::diagnostics::{Diagnostic, codes};
 use crate::interop::ImportedModule;
 use crate::package::Kind;
+use crate::packages::{DepTarget, Listing};
 use crate::types::{Derives, ParamMode, Ty};
 
 mod attrs;
 mod imports;
 mod modules;
+mod package_items;
 mod paths;
 mod signatures;
 #[cfg(test)]
@@ -38,6 +41,7 @@ use attrs::Place;
 pub use attrs::{FieldAttrs, HirDefault};
 use imports::skipped_note;
 use modules::load_modules;
+pub(crate) use package_items::rename_help;
 pub use paths::resolve_path;
 pub(crate) use paths::{display_path, no_parent, path_text, split_last};
 pub(crate) use uses::UseTarget;
@@ -67,6 +71,22 @@ pub struct StructId(pub u32);
 /// Index into [`Symbols::enums`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EnumId(pub u32);
+
+/// A Varyk package of the build, by its index in
+/// [`crate::packages::Graph::varyk_packages`] (M5b2 spec 4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PackageId(pub usize);
+
+/// Where an item imported from another Varyk package of the build is
+/// declared (M5b2 spec 4.2): the package, and the modules from its root
+/// down to the item's, `["length"]` for `units::length::Meters`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PackageItem {
+    pub package: PackageId,
+    /// The package's `[package]` name, for messages.
+    pub name: String,
+    pub path: Vec<String>,
+}
 
 /// A user-declared type: what a type name, a struct literal's path, and
 /// an `impl` block resolve to.
@@ -153,9 +173,10 @@ pub struct FnSig {
 pub struct ImportedSig {
     pub name: String,
     pub module: ModuleId,
-    /// The imported struct whose `impl` block declares it; `None` for a
-    /// free function.
-    pub owner: Option<StructId>,
+    /// The imported struct whose `impl` block declares it (or, for a
+    /// function of a Varyk package, the struct or enum); `None` for a free
+    /// function.
+    pub owner: Option<UserType>,
     /// A method's receiver mode: `&self` is a shared borrow, `&mut self`
     /// a mutable one. `None` for a free or associated function. The
     /// receiver is not in `params`; [`ImportedSig::modes`] puts it first.
@@ -186,6 +207,15 @@ pub struct ImportedSig {
     /// `async fn` (milestone 5b1 spec 2.8): awaited or started, as a
     /// Varyk async function is.
     pub is_async: bool,
+    /// For a function of a Varyk package declared without `pub`: its
+    /// declaration, for the V0105 naming it. `None` for a `pub` one and
+    /// for every function of a `.rs` module, which Varyk imports only
+    /// when `pub`.
+    pub private: Option<Span>,
+    /// For a function of another Varyk package of the build, where it is
+    /// declared (M5b2 spec 4.2); `None` for one of this package's `.rs`
+    /// modules.
+    pub package: Option<PackageItem>,
 }
 
 impl ImportedSig {
@@ -215,6 +245,9 @@ pub struct StructDef {
     /// 2.12); `None` for a Varyk one, whose derives follow from its fields
     /// (see `types::derives`).
     pub derives: Option<Derives>,
+    /// For a struct of another Varyk package of the build, where it is
+    /// declared (M5b2 spec 4.2): checked like any struct, never emitted.
+    pub package: Option<PackageItem>,
     /// The whole declaration, starting at `struct` (or `pub`); for an
     /// imported struct, its name in the `.rs` file.
     pub span: Span,
@@ -279,6 +312,9 @@ pub struct EnumDef {
     /// (holdable, passable, returnable), but naming a variant to
     /// construct or match it is V0100.
     pub opaque: Option<String>,
+    /// For an enum of another Varyk package of the build, where it is
+    /// declared (M5b2 spec 4.2): checked like any enum, never emitted.
+    pub package: Option<PackageItem>,
     /// The whole declaration, starting at `enum` (or `pub`); for an
     /// imported enum, its name in the `.rs` file.
     pub span: Span,
@@ -403,6 +439,34 @@ pub enum LookupError {
     /// The path starts with `super` in the crate root (V0111); holds the
     /// span of the keyword.
     NoParent { span: Span },
+    /// The path starts with a dependency Varyk code cannot name (M5b2
+    /// spec 2.1, 2.2): a Rust crate (V0110) or an `optional` one (V0401).
+    /// Holds the span of that first name and the dependency's index in
+    /// the package's list; [`Symbols::dependency_error`] says which.
+    Dependency { span: Span, dep: u32 },
+}
+
+/// A dependency of the package being resolved, as Varyk code names it
+/// (M5b2 spec 2.1).
+#[derive(Debug, Clone)]
+pub(crate) struct Dep {
+    /// Its key in `[dependencies]`, with `-` read as `_`.
+    name: String,
+    /// The package the key names, for the help that renames it.
+    package: String,
+    kind: DepKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DepKind {
+    /// A Varyk package of the build, whose root module is this one.
+    Varyk(ModuleId),
+    /// A Rust crate, or a dependency the graph does not list (no graph
+    /// was read, as for a package whose only dependency is `varyk-std`).
+    Rust,
+    /// Marked `optional`: cargo leaves it out unless a feature turns it
+    /// on, so Varyk cannot tell what it is.
+    Optional,
 }
 
 /// Every module's functions, imported functions, structs, and enums, and
@@ -422,10 +486,17 @@ pub struct Symbols {
     /// The methods of an imported struct with a restricted `pub(...)` in
     /// its `.rs` file, by type then name: the visibility as written.
     restricted_members: HashMap<(UserType, String), String>,
-    /// Per-module name tables, indexed by `ModuleId`.
+    /// Per-module name tables, indexed by `ModuleId`: this package's
+    /// modules, then those of every Varyk package of the build.
     scopes: Vec<Scope>,
-    /// The package's dependencies, as Rust code names them (`-` as `_`).
-    crates: Vec<String>,
+    /// The package's `[dependencies]` (M5b2 spec 2.1).
+    deps: Vec<Dep>,
+    /// Every Varyk package of the build as this package would list it,
+    /// by graph index, for V0115; empty when not known.
+    listings: Vec<Listing>,
+    /// The package is a library, whose `pub` items other packages use
+    /// (M5b2 spec 2.3).
+    library: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -463,6 +534,9 @@ struct Scope {
     expander: Option<String>,
     /// For a `.rs` module, its file's name (`ext.rs`), for messages.
     file: String,
+    /// For a module of another Varyk package of the build, the package
+    /// (M5b2 spec 4.2); `None` for this package's own.
+    package: Option<PackageId>,
     /// This file's `use` aliases of a module or type (spec 3.3), sharing
     /// the type namespace with `types` and `children`; consulted by
     /// lookups for the first segment of a path (or a bare name) before
@@ -508,13 +582,16 @@ impl Symbols {
             .get(name)
             .ok_or(LookupError::Unknown)?;
         // An imported Rust function is always `pub`, but its module may
-        // not be.
+        // not be; a package's function may be neither.
         let private = match callee {
             Callee::Varyk(id) => {
                 let sig = &self.fns[id.0 as usize];
                 (!sig.is_pub).then_some((sig.span, "fn"))
             }
-            Callee::Imported(_) | Callee::Builtin(_) => None,
+            Callee::Imported(id) => self.imported[id.0 as usize]
+                .private
+                .map(|decl| (decl, "fn")),
+            Callee::Builtin(_) => None,
         };
         match visibility::check_visible(self, from, target, private) {
             Some(err) => Err(err),
@@ -559,6 +636,23 @@ impl Symbols {
         }
     }
 
+    /// The `mod` declaration of `module` in its parent's file; `None` for
+    /// the root.
+    pub fn mod_decl(&self, module: ModuleId) -> Option<Span> {
+        self.scopes[module.0 as usize].decl
+    }
+
+    /// The Rust path of every module from `ModuleId(own)` on, the modules
+    /// of the other Varyk packages of the build: from this package's key
+    /// for the package, `::units::length` (M5b2 spec 5).
+    pub fn package_module_paths(&self, own: usize) -> Vec<String> {
+        self.scopes
+            .iter()
+            .skip(own)
+            .map(|scope| format!("::{}", scope.name))
+            .collect()
+    }
+
     /// Looks up a struct by name in module `from` itself.
     pub fn lookup_struct(&self, from: ModuleId, name: &str) -> Option<StructId> {
         match self.scopes[from.0 as usize].types.get(name) {
@@ -585,9 +679,12 @@ impl Symbols {
                 let sig = &self.fns[id.0 as usize];
                 (sig.module, (!sig.is_pub).then_some((sig.span, "fn")))
             }
-            // An imported method is always `pub`, but its module may not
-            // be.
-            Callee::Imported(id) => (self.imported[id.0 as usize].module, None),
+            // An imported Rust method is always `pub`, but its module may
+            // not be; a package's method may be neither.
+            Callee::Imported(id) => {
+                let sig = &self.imported[id.0 as usize];
+                (sig.module, sig.private.map(|decl| (decl, "fn")))
+            }
             Callee::Builtin(_) => unreachable!("a type's members are never built-ins"),
         };
         match visibility::check_visible(self, from, module, private) {
@@ -854,6 +951,7 @@ impl Symbols {
                     Err(self.private_module(module, "type", &full, ty.span))
                 }
                 Err(LookupError::NoParent { span }) => Err(no_parent(span)),
+                Err(LookupError::Dependency { span, dep }) => Err(self.dependency_error(span, dep)),
             };
         }
         if let Some(prim) = Ty::from_primitive_name(name) {
@@ -921,6 +1019,7 @@ impl Symbols {
             .enumerate()
             .filter(|&(id, scope)| {
                 id as u32 != from.0
+                    && scope.package.is_none()
                     && (scope.types.contains_key(name) || scope.fns.contains_key(name))
             })
             .map(|(id, scope)| {
@@ -1017,7 +1116,7 @@ pub fn resolve(
     entry: SourceFile,
     sources: &mut Vec<SourceFile>,
 ) -> Result<Resolved, Vec<Diagnostic>> {
-    resolve_root(entry, Kind::Binary, None, sources)
+    resolve_root(entry, Kind::Binary, None, Packages::default(), sources)
 }
 
 /// A package's dependency names, as its manifest writes them.
@@ -1028,12 +1127,36 @@ pub struct Dependencies<'a> {
     /// `[dev-dependencies]`: only tests may use them, which a message
     /// about a `.rs` module naming one says.
     pub dev: &'a [String],
+    /// The keys of `crates` marked `optional`, which Varyk code cannot
+    /// name (M5b2 spec 2.2).
+    pub optional: &'a [String],
+}
+
+/// The Varyk packages of the build, as the package being resolved sees
+/// them (M5b2 spec 2.1, 4.2).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Packages<'a> {
+    /// What each of the package's `[dependencies]` keys, `-` read as `_`,
+    /// resolved to in the graph; empty when no graph was read.
+    pub keys: &'a [(String, DepTarget)],
+    /// Every Varyk package checked so far, each after those it depends
+    /// on: all are imported into the package's tables, so a type has one
+    /// identity however it is reached, and the package names those its
+    /// `keys` reach.
+    pub checked: &'a [CheckedPackage],
+    /// The package being resolved is a dependency of the build: a module
+    /// file present as both `.vr` and `.rs` loads from the `.vr` (M5b2
+    /// spec 3).
+    pub dependency: bool,
+    /// Every Varyk package of the build, by graph index, as the package
+    /// being resolved would list it (for V0115's help); may be empty.
+    pub listings: &'a [Listing],
 }
 
 /// Resolves the program rooted at `entry`, a crate root of `kind` (a
 /// binary must define `main`, a library must not) whose package has
-/// `dependencies` (a `use` naming one of its crates is V0110), or a
-/// single file when `dependencies` is `None`.
+/// `dependencies` (a `use` naming one of its crates is V0110) and uses
+/// `packages`, or a single file when `dependencies` is `None`.
 ///
 /// Pushes `entry` onto `sources` (the caller builds it with
 /// `FileId(sources.len())`, so its id is its index), then every module
@@ -1043,6 +1166,7 @@ pub fn resolve_root(
     entry: SourceFile,
     kind: Kind,
     dependencies: Option<Dependencies<'_>>,
+    packages: Packages<'_>,
     sources: &mut Vec<SourceFile>,
 ) -> Result<Resolved, Vec<Diagnostic>> {
     let entry_file = entry.id;
@@ -1066,6 +1190,7 @@ pub fn resolve_root(
     let mut imports = Vec::new();
     if !load_modules(
         dependencies,
+        packages.dependency,
         sources,
         &mut modules,
         &mut imports,
@@ -1074,9 +1199,16 @@ pub fn resolve_root(
         return Err(diagnostics);
     }
 
-    let crates = dependencies.map_or(&[][..], |dependencies| dependencies.crates);
-    let symbols = collect_symbols(&modules, imports, crates, &mut diagnostics);
+    let symbols = collect_symbols(
+        &modules,
+        imports,
+        kind,
+        dependencies,
+        packages,
+        &mut diagnostics,
+    );
     check_entry_main(&modules[0], kind, &mut diagnostics);
+    rename_help(&symbols, &modules, sources, &mut diagnostics);
 
     if diagnostics.is_empty() {
         Ok(Resolved {
@@ -1264,11 +1396,14 @@ fn duplicate(name: &str, span: Span, first: Span) -> Diagnostic {
 fn collect_symbols(
     modules: &[Module],
     imports: Vec<(ModuleId, ImportedModule)>,
-    crates: &[String],
+    kind: Kind,
+    dependencies: Option<Dependencies<'_>>,
+    packages: Packages<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Symbols {
     let mut symbols = Symbols {
-        crates: crates.iter().map(|name| name.replace('-', "_")).collect(),
+        library: kind == Kind::Library,
+        listings: packages.listings.to_vec(),
         scopes: modules
             .iter()
             .map(|module| Scope {
@@ -1364,6 +1499,7 @@ fn collect_symbols(
                         imported: false,
                         derives: None,
                         fields: Vec::new(),
+                        package: None,
                         span: decl.span,
                     });
                     match first_type.entry(&name.name) {
@@ -1403,6 +1539,7 @@ fn collect_symbols(
                         derives: None,
                         drops: None,
                         opaque: None,
+                        package: None,
                         span: decl.span,
                     });
                     match first_type.entry(&name.name) {
@@ -1485,7 +1622,13 @@ fn collect_symbols(
         }
     }
 
-    imports::register(&mut symbols, modules, imports);
+    imports::register(&mut symbols, modules, imports, diagnostics);
+
+    // Pass 1b': the Varyk packages of the build, after every struct and
+    // enum of this package (pass 2 counts those from 0), and before any
+    // `use` or type can name them.
+    let roots = package_items::register(&mut symbols, packages);
+    symbols.deps = package_items::deps(dependencies, packages, &roots);
 
     // Pass 1c: `use` declarations (spec 3.3). Every module's own fns,
     // types, children, and imports are known now, in any order across
@@ -1508,8 +1651,14 @@ fn collect_symbols(
             match item {
                 Item::Function(function) => {
                     let reach = symbols.fn_reach(FnId(next_fn as u32));
-                    let (params, ret) =
-                        resolve_signature(&symbols, function, module.id, reach, diagnostics);
+                    let outside = symbols.fn_exported(FnId(next_fn as u32));
+                    let (params, ret) = resolve_signature(
+                        &symbols,
+                        function,
+                        module.id,
+                        (reach, outside),
+                        diagnostics,
+                    );
                     let sig = &mut symbols.fns[next_fn];
                     sig.params = params;
                     sig.ret = ret;
@@ -1518,8 +1667,14 @@ fn collect_symbols(
                 Item::Impl(block) => {
                     for function in &block.functions {
                         let reach = symbols.fn_reach(FnId(next_fn as u32));
-                        let (params, ret) =
-                            resolve_signature(&symbols, function, module.id, reach, diagnostics);
+                        let outside = symbols.fn_exported(FnId(next_fn as u32));
+                        let (params, ret) = resolve_signature(
+                            &symbols,
+                            function,
+                            module.id,
+                            (reach, outside),
+                            diagnostics,
+                        );
                         let sig = &mut symbols.fns[next_fn];
                         sig.params = params;
                         sig.ret = ret;
@@ -1551,6 +1706,7 @@ fn collect_symbols(
                                         field.ty.span,
                                         &decl.name.name,
                                         symbols.reach(module.id, decl.is_pub),
+                                        symbols.exported(module.id, decl.is_pub),
                                     ));
                                 }
                                 parts.push((ty.clone(), field.span));
@@ -1622,6 +1778,7 @@ fn collect_symbols(
                                             written.span,
                                             &decl.name.name,
                                             symbols.reach(module.id, decl.is_pub),
+                                            symbols.exported(module.id, decl.is_pub),
                                         ));
                                     }
                                     parts.push((ty.clone(), written.span));
@@ -1865,12 +2022,13 @@ fn check_recursive_types(
 /// Resolves a Varyk function's parameter and return types. Parameter
 /// modes follow spec 4.2: `mut` is a mutable borrow; otherwise a Copy type
 /// is owned and anything else a shared borrow. A `pub` function's types
-/// must be nameable everywhere in its `reach` (V0105).
+/// must be nameable everywhere in its reach, and, when it is `exported`,
+/// by other packages (V0105).
 fn resolve_signature(
     symbols: &Symbols,
     function: &Function,
     module: ModuleId,
-    reach: ModuleId,
+    (reach, exported): (ModuleId, bool),
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<(String, Ty, ParamMode)>, Ty) {
     let mut seen: HashMap<&str, Span> = HashMap::new();
@@ -1884,9 +2042,13 @@ fn resolve_signature(
         match symbols.resolve_binding_type(&param.ty, module) {
             Ok(ty) => {
                 if function.is_pub {
-                    if let Some(diagnostic) =
-                        symbols.private_in_public(&ty, param.ty.span, &function.name.name, reach)
-                    {
+                    if let Some(diagnostic) = symbols.private_in_public(
+                        &ty,
+                        param.ty.span,
+                        &function.name.name,
+                        reach,
+                        exported,
+                    ) {
                         diagnostics.push(diagnostic);
                     }
                 }
@@ -1907,9 +2069,13 @@ fn resolve_signature(
         Some(written) => match symbols.resolve_type(written, module) {
             Ok(ty) => {
                 if function.is_pub {
-                    if let Some(diagnostic) =
-                        symbols.private_in_public(&ty, written.span, &function.name.name, reach)
-                    {
+                    if let Some(diagnostic) = symbols.private_in_public(
+                        &ty,
+                        written.span,
+                        &function.name.name,
+                        reach,
+                        exported,
+                    ) {
                         diagnostics.push(diagnostic);
                     }
                 }

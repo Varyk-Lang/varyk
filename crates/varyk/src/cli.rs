@@ -3,15 +3,13 @@
 //! Shape (spec section 6.7):
 //!
 //! ```text
-//! varyk check [file.vr]                          parse and analyze; never runs cargo
+//! varyk check [file.vr]                          parse and analyze; runs cargo only to
+//!                                                  read the package graph (M5b2 spec 4.1)
 //! varyk build [file.vr] [--release] [--emit-rust] generate and build; prints the executable path
 //! varyk run   [file.vr] [--release] [-- args...]  build, then execute, forwarding the exit code
 //! varyk test  [file.vr]                          build the tests and run them, exiting with
 //!                                                  the first failing run's code (M5a spec 2.7)
-//! varyk emit  [file.vr] --out-dir DIR             check, then write the generated tree to DIR;
-//!                                                  never runs cargo (M3 spec 2.5)
-//! varyk init  [dir] [--lib]                       write a package that plain cargo build compiles
-//!                                                  (M3 spec 2.5)
+//! varyk init  [dir] [--lib]                       write a new package (M3 spec 2.5)
 //! varyk add   [cargo add args]                   run cargo add in the package
 //! varyk publish [-- cargo args]                   check, assemble a plain Rust crate, and
 //!                                                  run cargo publish there, forwarding its
@@ -35,12 +33,15 @@ use std::process::{Command as StdCommand, ExitCode};
 use clap::{Parser, Subcommand, ValueEnum};
 use varyk_syntax::{FileId, SourceFile};
 
-use crate::backend::{Backend, CrateInfo, RustBackend, StdDependency, with_local_std};
-use crate::check_file;
+use crate::backend::{
+    Backend, CrateInfo, GeneratedCrate, RustBackend, StdDependency, with_local_std,
+};
 use crate::diagnostics::{Diagnostic, render_human, render_json};
-use crate::driver::{self, DriverError};
+use crate::driver::{self, DriverError, PackageCrate};
 use crate::hir::HirProgram;
 use crate::package::{self, Kind, Package};
+use crate::packages::Graph;
+use crate::{CheckedPackage, check_file};
 
 /// The `varyk` command-line interface.
 #[derive(Debug, Parser)]
@@ -78,11 +79,14 @@ fn json_line(message_format: MessageFormat, line: &str) {
     }
 }
 
-/// The `check`, `build`, `run`, `test`, `emit`, `init`, `add`, and
+/// The `check`, `build`, `run`, `test`, `init`, `add`, and
 /// `publish` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Check the program for errors; never runs cargo.
+    /// Check the program for errors.
+    ///
+    /// Runs cargo only to learn which packages the build uses, when the
+    /// package lists a dependency besides `varyk-std`.
     Check {
         /// The entry `.vr` file; without one, the package here.
         file: Option<PathBuf>,
@@ -117,28 +121,14 @@ pub enum Command {
         /// The entry `.vr` file; without one, the package here.
         file: Option<PathBuf>,
     },
-    /// Write the generated Rust to a directory; `build.rs` runs this under
-    /// plain `cargo build`.
-    ///
-    /// Checks the program, then writes the generated `src/` tree to the
-    /// directory; never runs cargo.
-    Emit {
-        /// The entry `.vr` file; without one, the package here.
-        file: Option<PathBuf>,
-        /// Directory to write the generated Rust into; its `src/` is
-        /// cleared and rewritten.
-        #[arg(long)]
-        out_dir: PathBuf,
-    },
     /// Write a new package.
     ///
-    /// The package is one that plain `cargo build` compiles with `varyk` (or
-    /// `$VARYK`) on the path. Refuses if any file it would write already
-    /// exists.
+    /// Writes `Cargo.toml`, `.gitignore`, and the root `.vr` file. Refuses
+    /// if any file it would write already exists.
     Init {
         /// Where to write the package; without one, the current directory.
         dir: Option<PathBuf>,
-        /// Write a library (`src/lib.rs`/`src/lib.vr`) instead of a binary.
+        /// Write a library (`src/lib.vr`) instead of a program.
         #[arg(long)]
         lib: bool,
     },
@@ -189,7 +179,6 @@ pub fn run() -> ExitCode {
             args,
         } => run_run(file.as_deref(), release, &args, message_format),
         Command::Test { file } => run_test(file.as_deref(), message_format),
-        Command::Emit { file, out_dir } => run_emit(file.as_deref(), &out_dir, message_format),
         Command::Init { dir, lib } => run_init(dir.as_deref(), lib),
         Command::Add { args } => run_add(&args),
         Command::Publish {
@@ -295,7 +284,8 @@ fn manifest_here() -> Option<PathBuf> {
 }
 
 /// Runs `check`: reads and parses the target, then renders any
-/// diagnostics to the stream `message_format` selects. Never runs cargo.
+/// diagnostics to the stream `message_format` selects. Runs cargo only to
+/// read the package graph (see [`load`]).
 ///
 /// Reading the entry happens in `load`, not in `check_file`: an
 /// unreadable file is a plain CLI-level error, not a diagnostic, so it's
@@ -308,13 +298,19 @@ fn run_check(file: Option<&Path>, message_format: MessageFormat) -> ExitCode {
     }
 }
 
-/// Reads `target`'s entry and checks it into HIR; reports an unreadable
-/// file or any diagnostics itself and returns the exit code to use on
-/// failure.
-fn load(
-    mut target: Target,
-    message_format: MessageFormat,
-) -> Result<(HirProgram, Target), ExitCode> {
+/// A checked target: its program, the Varyk packages of its build, and
+/// the package graph they were found in, when one was read.
+struct Loaded {
+    program: HirProgram,
+    packages: Vec<CheckedPackage>,
+    graph: Option<Graph>,
+}
+
+/// Reads `target`'s entry and checks it into HIR, after reading the
+/// package graph when the package lists a dependency besides `varyk-std`
+/// (M5b2 spec 4.1); reports an unreadable file or any diagnostics itself
+/// and returns the exit code to use on failure.
+fn load(mut target: Target, message_format: MessageFormat) -> Result<(Loaded, Target), ExitCode> {
     let path = &target.entry;
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
@@ -323,27 +319,53 @@ fn load(
             return Err(ExitCode::FAILURE);
         }
     };
+    let graph = match &target.package {
+        Some(package) => match Graph::read(package) {
+            Ok(graph) => graph,
+            Err(diagnostics) => {
+                emit_diagnostics(&diagnostics, &target.sources, message_format);
+                return Err(ExitCode::FAILURE);
+            }
+        },
+        None => None,
+    };
     let sources = &mut target.sources;
     let entry = SourceFile::new(FileId(sources.len() as u32), path.to_path_buf(), text);
-    let (kind, crates, dev) = match &target.package {
-        Some(package) => (
-            package.kind,
-            Some(package.dependencies.keys().cloned().collect::<Vec<_>>()),
-            package.dev_dependencies.as_slice(),
-        ),
-        None => (Kind::Binary, None, &[][..]),
-    };
-    let dependencies = crates
-        .as_deref()
-        .map(|crates| crate::Dependencies { crates, dev });
 
-    match check_file(entry, kind, dependencies, sources) {
-        Ok(program) => {
+    match check_file(entry, target.package.as_ref(), graph.as_ref(), sources) {
+        Ok(checked) => {
+            let build_uses_std = checked.program.uses_std
+                || checked
+                    .packages
+                    .iter()
+                    .any(|package| package.program.uses_std);
             let std_problems = target.package.as_ref().map_or_else(Vec::new, |package| {
-                package::check_std_dependency(package, program.uses_std, env!("CARGO_PKG_VERSION"))
+                package::check_build_std(
+                    package,
+                    checked.program.uses_std,
+                    build_uses_std,
+                    graph.as_ref().and_then(Graph::std_version),
+                    env!("CARGO_PKG_VERSION"),
+                )
             });
+            // The program needs `varyk-std` only because a package logs, so
+            // whatever is wrong with its `varyk-std` line, say why it needs it.
+            let std_problems: Vec<_> = std_problems
+                .into_iter()
+                .map(|problem| match &checked.logging_package {
+                    Some(logger) => problem.with_note(format!(
+                        "the package `{logger}` writes log lines, which need it"
+                    )),
+                    None => problem,
+                })
+                .collect();
             if std_problems.is_empty() {
-                Ok((program, target))
+                let loaded = Loaded {
+                    program: checked.program,
+                    packages: checked.packages,
+                    graph,
+                };
+                Ok((loaded, target))
             } else {
                 emit_diagnostics(&std_problems, &target.sources, message_format);
                 Err(ExitCode::FAILURE)
@@ -433,28 +455,64 @@ fn generate_and_build(
     emit_rust: bool,
     message_format: MessageFormat,
 ) -> Result<Option<PathBuf>, ExitCode> {
-    let (program, target) = load(target, message_format)?;
-    let info = crate_info(&target, &program);
-    let generated = RustBackend.generate(&program, &info);
+    let (loaded, target) = load(target, message_format)?;
+    let (generated, packages) = generate(&target, &loaded)?;
 
     if emit_rust {
         print!("{}", driver::emit_rust(&generated));
     }
 
-    let (build_dir, cache_dir, lock) = build_dirs(&target);
-    let built = driver::build(&generated, &build_dir, &cache_dir, lock, release);
+    let (build_dir, cache_dir, lock) = build_dirs(&target, loaded.graph.as_ref());
+    let built = driver::build(
+        &generated,
+        &packages,
+        &build_dir,
+        &cache_dir,
+        lock.as_deref(),
+        release,
+    );
     reported(built, &target, message_format)
 }
 
+/// What a build of `target` hands cargo (M5b2 spec 4.3): the program's
+/// crate and the crate of every Varyk package of its build, whose
+/// dependencies on Varyk packages are those crates. Reports a directory
+/// it cannot name itself and returns the exit code to use.
+fn generate(
+    target: &Target,
+    loaded: &Loaded,
+) -> Result<(GeneratedCrate, Vec<PackageCrate>), ExitCode> {
+    let (dirs, packages) = match (&target.package, &loaded.graph) {
+        (Some(package), Some(graph)) => {
+            let dirs = driver::package_dirs(&package.root, graph).map_err(|err| {
+                eprintln!("error: cannot build `{}`: {err}", target.entry.display());
+                ExitCode::FAILURE
+            })?;
+            let packages = driver::package_crates(&loaded.packages, graph, &dirs);
+            (dirs, packages)
+        }
+        _ => (Vec::new(), Vec::new()),
+    };
+    let info = crate_info(target, &loaded.program, loaded.graph.as_ref(), &dirs);
+    Ok((RustBackend.generate(&loaded.program, &info), packages))
+}
+
 /// Where `target` is built (M3 spec 2.4): the package's hidden crate, its
-/// cache directory, and its lock, or the single file's build directory
-/// and the shared cache, with no lock.
-fn build_dirs(target: &Target) -> (PathBuf, PathBuf, Option<&Path>) {
+/// cache directory, and its lock, the one the package graph was read with
+/// when there is a graph (M5b2 spec 4.1), or the single file's build
+/// directory and the shared cache, with no lock.
+fn build_dirs(target: &Target, graph: Option<&Graph>) -> (PathBuf, PathBuf, Option<PathBuf>) {
     match &target.package {
         Some(package) => (
             package.hidden_crate_dir(),
             package.cache_dir(),
-            package.lock.as_deref(),
+            // The graph's lock is copied into the hidden crate as it is. For
+            // a Varyk package cargo resolved from a registry or git, the copy
+            // still names that source, and cargo rewrites it to the `path`
+            // crate the driver wrote; so the copy is refreshed on every
+            // build, which is harmless: cargo decides what to recompile from
+            // its fingerprints, not from the lock.
+            graph.map_or_else(|| package.lock.clone(), |graph| Some(graph.lock_path())),
         ),
         None => (
             driver::build_dir_for(&target.entry),
@@ -510,14 +568,22 @@ fn run_test(file: Option<&Path>, message_format: MessageFormat) -> ExitCode {
         other => other,
     };
     let loaded = locate(file, message_format).and_then(|target| load(target, message_format));
-    let (program, target) = match loaded {
+    let (loaded, target) = match loaded {
         Ok(pair) => pair,
         Err(code) => return code,
     };
-    let info = crate_info(&target, &program);
-    let generated = RustBackend.generate(&program, &info);
-    let (build_dir, cache_dir, lock) = build_dirs(&target);
-    let built = driver::test(&generated, &build_dir, &cache_dir, lock);
+    let (generated, packages) = match generate(&target, &loaded) {
+        Ok(generated) => generated,
+        Err(code) => return code,
+    };
+    let (build_dir, cache_dir, lock) = build_dirs(&target, loaded.graph.as_ref());
+    let built = driver::test(
+        &generated,
+        &packages,
+        &build_dir,
+        &cache_dir,
+        lock.as_deref(),
+    );
     let executables = match reported(built, &target, message_format) {
         Ok(executables) => executables,
         Err(code) => return code,
@@ -545,68 +611,28 @@ fn run_test(file: Option<&Path>, message_format: MessageFormat) -> ExitCode {
 /// a single file, depending on `varyk-std` when `program` uses it (M5a
 /// spec 5.2). Under `VARYK_STD_PATH`, `varyk-std` is that directory (M5a
 /// spec 5.3); `varyk publish` writes the package's own manifest instead.
-/// Shared by `build`/`run` (which also build it) and `emit` (which only
-/// writes its tree).
-fn crate_info(target: &Target, program: &HirProgram) -> CrateInfo {
+/// With a package `graph`, each dependency on a Varyk package is the
+/// crate written for it in `dirs`, by graph index (M5b2 spec 4.3).
+fn crate_info(
+    target: &Target,
+    program: &HirProgram,
+    graph: Option<&Graph>,
+    dirs: &[PathBuf],
+) -> CrateInfo {
     match &target.package {
-        Some(package) => CrateInfo {
-            name: package.name.clone(),
-            manifest: with_local_std(package.isolated_manifest()),
-            std_dependency: None,
-        },
+        Some(package) => {
+            let deps = graph.map_or(&[][..], Graph::root_deps);
+            let manifest = driver::with_package_paths(package.generated_manifest(), deps, dirs);
+            CrateInfo {
+                name: package.name.clone(),
+                manifest: with_local_std(manifest),
+                std_dependency: None,
+            }
+        }
         None => CrateInfo::single_file(
             driver::package_name_for(&target.entry),
             StdDependency::for_program(program.uses_std),
         ),
-    }
-}
-
-/// Runs `emit`: checks the target like `check`, generates the Rust crate,
-/// and writes its `src/` tree to `out_dir` with `write_tree` (M3 spec
-/// 2.5, no `Cargo.toml`). Never runs cargo; this is the hook `build.rs`
-/// calls under plain `cargo build`.
-fn run_emit(file: Option<&Path>, out_dir: &Path, message_format: MessageFormat) -> ExitCode {
-    if out_dir
-        .components()
-        .any(|part| part == std::path::Component::ParentDir)
-    {
-        eprintln!(
-            "error: `--out-dir {}` goes up with `..`; give the directory without `..`",
-            out_dir.display()
-        );
-        return ExitCode::FAILURE;
-    }
-    let (program, target) =
-        match locate(file, message_format).and_then(|target| load(target, message_format)) {
-            Ok(pair) => pair,
-            Err(code) => return code,
-        };
-    let info = crate_info(&target, &program);
-    let generated = RustBackend.generate(&program, &info);
-    let inputs = target
-        .package
-        .iter()
-        .map(|package| match package.root.as_os_str().is_empty() {
-            true => Path::new("."),
-            false => package.root.as_path(),
-        })
-        .chain(target.sources.iter().map(|source| source.path.as_path()))
-        .chain(generated.copied.iter().map(|(_, source)| source.as_path()));
-    if let Some(input) = driver::generate::input_inside(out_dir, inputs) {
-        eprintln!(
-            "error: `varyk emit` clears `{}`, which holds `{}`, a file of this program; \
-             give a directory outside it",
-            out_dir.join("src").display(),
-            input.display()
-        );
-        return ExitCode::FAILURE;
-    }
-    match driver::generate::write_tree(&generated, out_dir) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(err) => {
-            eprintln!("error: cannot write `{}`: {err}", out_dir.display());
-            ExitCode::FAILURE
-        }
     }
 }
 
@@ -655,7 +681,7 @@ fn run_init(given: Option<&Path>, lib: bool) -> ExitCode {
                 _ => String::new(),
             };
             println!(
-                "created the package `{}` in `{}`; run {cd}`varyk {run}` or `cargo {run}`",
+                "created the package `{}` in `{}`; run {cd}`varyk {run}`",
                 driver::init::package_name(dir),
                 dir.display()
             );
@@ -680,12 +706,10 @@ fn run_init(given: Option<&Path>, lib: bool) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             eprintln!(
-                "error: these files already exist: {}; to add Varyk to an existing project, \
-                 run `{init}` in an empty directory, move its `build.rs` (merging by hand if \
-                 you already have one) and `{stem}.vr` into your project, and replace your \
-                 `{stem}.rs` with its `{stem}.rs` after moving your code into a `.rs` module; \
-                 the package needs `edition = \"2024\"`, and a Rust project with nested \
-                 modules cannot adopt Varyk yet",
+                "error: these files already exist: {}; to start a package in an existing \
+                 project, run `{init}` in an empty directory and move its `Cargo.toml` \
+                 target table and `{stem}.vr` into your project; the package needs \
+                 `edition = \"2024\"`",
                 names.join(", ")
             );
             ExitCode::FAILURE
@@ -730,12 +754,14 @@ fn run_publish(assemble_only: bool, args: &[String], message_format: MessageForm
         .package
         .clone()
         .expect("`locate(None, ..)` always resolves a package or returns an error");
-    let (program, target) = match load(target, message_format) {
+    let (loaded, target) = match load(target, message_format) {
         Ok(pair) => pair,
         Err(code) => return code,
     };
-    let info = crate_info(&target, &program);
-    let generated = RustBackend.generate(&program, &info);
+    // The assembly writes the package's own manifest, with its `version`s
+    // (M5b2 spec 4.5); only the generated tree is taken from here.
+    let info = crate_info(&target, &loaded.program, None, &[]);
+    let generated = RustBackend.generate(&loaded.program, &info);
     let dest = match driver::assemble(&package, &generated) {
         Ok(dest) => dest,
         Err(err) => {
@@ -832,11 +858,18 @@ fn print_messages(
 
     let json = message_format != MessageFormat::Human;
     let mut diagnostics = Vec::new();
+    let mut generated_error = false;
     let mut user_error = false;
     let mut others = Vec::new();
     for message in messages {
         match message {
-            Message::Generated(diagnostic) => diagnostics.push(diagnostic),
+            Message::Generated(diagnostic) => {
+                diagnostics.push(diagnostic);
+                generated_error = true;
+            }
+            // Shown with the program's, but the program's generated Rust
+            // is not what failed.
+            Message::Package(diagnostic) => diagnostics.push(diagnostic),
             Message::User {
                 rendered,
                 level,
@@ -870,8 +903,8 @@ fn print_messages(
             } => others.push((rendered, level, message)),
         }
     }
-    let generated_error = !diagnostics.is_empty();
-    if generated_error {
+    let any_diagnostic = !diagnostics.is_empty();
+    if any_diagnostic {
         emit_diagnostics(&diagnostics, sources, message_format);
     }
     let other_error = others.iter().any(|(_, level, _)| level == "error");
@@ -888,7 +921,7 @@ fn print_messages(
             eprint!("{rendered}");
         }
     }
-    generated_error || user_error || other_error
+    any_diagnostic || user_error || other_error
 }
 
 /// Renders `diagnostics` to the stream `message_format` selects: human

@@ -5,4 +5,7 @@ edition = "2024"
 description = "A Varyk example library: lengths in meters"
 license = "MIT OR Apache-2.0"
 
+[lib]
+path = "src/lib.vr"
+
 [dependencies]

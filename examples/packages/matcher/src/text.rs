@@ -6,9 +6,12 @@ pub struct Matcher {
 }
 
 impl Matcher {
-    pub fn new(pattern: &str) -> Matcher {
-        let re = regex_lite::Regex::new(pattern).expect("the pattern should be a valid regex");
-        Matcher { re }
+    /// A matcher for `pattern`, or why it is not a valid pattern.
+    pub fn new(pattern: &str) -> Result<Matcher, String> {
+        match regex_lite::Regex::new(pattern) {
+            Ok(re) => Ok(Matcher { re }),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     pub fn is_match(&self, s: &str) -> bool {

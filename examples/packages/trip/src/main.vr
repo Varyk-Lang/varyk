@@ -1,0 +1,26 @@
+// expected output:
+// total 1700 meters
+// longest Mill to Lake, 900 meters
+// stop Lake, 12 minutes
+// no stop
+// about 21 minutes on foot
+// and on stderr, from `route`, a line saying it cannot read a stop
+
+async fn main() {
+    let legs = vec![
+        route::leg("Home", "Mill", 800),
+        route::leg("Mill", "Lake", 900),
+    ];
+    let sum = units::length::add(route::total(legs), units::length::Meters { value: 0 });
+    println!("total {} meters", sum.value);
+    let best = route::longest(legs);
+    println!("longest {} to {}, {} meters", best.from, best.to, best.length.value);
+    for text in vec!["{\"name\": \"Lake\", \"minutes\": 12}", "Lake at noon"] {
+        match route::parse_stop(text) {
+            Ok(stop) => println!("stop {}, {} minutes", stop.name, stop.minutes),
+            Err(_) => println!("no stop"),
+        }
+    }
+    let minutes = route::walking_minutes(sum.value).await;
+    println!("about {} minutes on foot", minutes);
+}

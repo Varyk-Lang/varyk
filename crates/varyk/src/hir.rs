@@ -14,8 +14,8 @@ use varyk_syntax::{BinaryOp, Span, UnaryOp};
 
 use crate::builtins::{BuiltinId, ResultKind};
 use crate::resolve::{
-    Callee, DropCause, EnumId, FieldDef, FnId, ImportedFnId, ImportedSig, ModuleId, StructId,
-    UserType, VariantDef,
+    Callee, DropCause, EnumId, FieldDef, FnId, ImportedFnId, ImportedSig, ModuleId, PackageItem,
+    StructId, UserType, VariantDef,
 };
 pub use crate::resolve::{FieldAttrs, HirDefault};
 use crate::types::{Derives, ParamMode, Serde, Ty};
@@ -47,6 +47,11 @@ pub struct HirProgram {
     /// Whether the program makes a `log` call, so its `main` starts
     /// logging (M5a spec 2.6, 7.5).
     pub logs: bool,
+    /// The Rust path of each module of another Varyk package of the
+    /// build, indexed by `ModuleId` less `modules.len()`: `::units::length`,
+    /// from the key under which this package depends on the module's
+    /// (M5b2 spec 5).
+    pub package_modules: Vec<String>,
 }
 
 impl HirProgram {
@@ -61,8 +66,14 @@ impl HirProgram {
     }
 
     /// The Rust path of module `id` from the crate root: `crate` for the
-    /// entry module, `crate::shop::cart` for a nested one.
+    /// entry module, `crate::shop::cart` for a nested one, and for a
+    /// module of another Varyk package, `::units::length` (M5b2 spec 5).
     pub fn module_path(&self, id: ModuleId) -> String {
+        if let Some(package) = (id.0 as usize).checked_sub(self.modules.len()) {
+            let path = self.package_modules.get(package).cloned();
+            debug_assert!(path.is_some(), "a module id past the packages' modules");
+            return path.unwrap_or_default();
+        }
         let mut names = Vec::new();
         let mut current = &self.modules[id.0 as usize];
         while let Some(parent) = current.parent {
@@ -84,6 +95,8 @@ pub struct HirModule {
     pub parent: Option<ModuleId>,
     /// Declared `pub mod`.
     pub is_pub: bool,
+    /// The `mod` declaration in the parent's file; `None` for the entry.
+    pub decl: Option<Span>,
     /// The generated file's path under `src/`, mirroring the module tree
     /// (spec 2.3): `main.rs`, `shop.rs`, `shop/mod.rs`, `shop/cart.rs`.
     pub path: String,
@@ -133,6 +146,9 @@ pub struct HirStruct {
     /// The ways a `json` call converts it (M5a spec 2.4): what it derives
     /// of serde's `Serialize` and `Deserialize`.
     pub serde: Serde,
+    /// Declared in another Varyk package of the build (M5b2 spec 4.2):
+    /// where. The backend emits no definition for it.
+    pub package: Option<PackageItem>,
     pub span: Span,
 }
 
@@ -153,6 +169,12 @@ pub struct HirEnum {
     pub derives: Derives,
     /// The ways a `json` call converts it (M5a spec 2.4).
     pub serde: Serde,
+    /// For an imported enum Varyk cannot name the variants of (see
+    /// `EnumDef::opaque`): why.
+    pub opaque: Option<String>,
+    /// Declared in another Varyk package of the build (M5b2 spec 4.2):
+    /// where. The backend emits no definition for it.
+    pub package: Option<PackageItem>,
     pub span: Span,
 }
 

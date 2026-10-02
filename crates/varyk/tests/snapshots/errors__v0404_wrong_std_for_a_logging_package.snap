@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0404]: `varyk-std` must come from crates.io, not from a path
+  --> Cargo.toml:11:1
+   |
+11 | varyk-std = { path = "std" }
+   | ^^^^^^^^^ `varyk-std` must come from crates.io, not from a path
+   |
+   = note: write `varyk-std = "[version]"` under `[dependencies]` in `Cargo.toml`
+   = note: the package `units` writes log lines, which need it

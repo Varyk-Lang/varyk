@@ -81,8 +81,6 @@ pub fn write_tree(generated: &GeneratedCrate, dir: &Path) -> io::Result<()> {
 /// Whether Varyk may clear `dir/src`: `dir` carries the [`MARKER`], or is
 /// a direct child of a `target/varyk/` directory (where every build
 /// directory lives, including ones written before the marker existed).
-/// Nothing else: the directory `varyk emit` gets from a build script is
-/// empty on its first run and carries the marker from then on.
 pub(super) fn owned(dir: &Path) -> bool {
     // `symlink_metadata` does not follow links: a marker that is a link
     // to some real file elsewhere does not make the directory ours.
@@ -124,23 +122,6 @@ pub(super) fn has_entries(dir: &Path) -> bool {
     fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
 
-/// The first of `inputs` (files and directories a build reads) that lies
-/// inside `dir/src`, which `write_tree` would clear: writing there would
-/// destroy the program being built. `None` when `dir/src` does not exist
-/// yet or holds none of them. Symbolic links are resolved on both sides.
-pub fn input_inside<'a>(
-    dir: &Path,
-    inputs: impl IntoIterator<Item = &'a Path>,
-) -> Option<&'a Path> {
-    let src = fs::canonicalize(dir.join("src")).ok()?;
-    inputs.into_iter().find(|input| {
-        let Ok(input) = fs::canonicalize(input) else {
-            return false;
-        };
-        input.starts_with(&src)
-    })
-}
-
 /// Removes every file under `current` (recursively) that is not in
 /// `wanted`, then removes any directory this leaves empty. A symbolic
 /// link is never followed: an unwanted one is removed as a link, and
@@ -169,7 +150,7 @@ fn remove_stale(current: &Path, wanted: &HashSet<PathBuf>) -> io::Result<()> {
 /// the removal, a package whose `Cargo.lock` was deleted would keep
 /// building against the resolution the last copy pinned, where cargo run
 /// on the package itself would resolve afresh.
-pub(super) fn sync_lock(lock: Option<&Path>, dest: &Path) -> io::Result<()> {
+pub(crate) fn sync_lock(lock: Option<&Path>, dest: &Path) -> io::Result<()> {
     match lock {
         Some(lock) => copy_if_changed(lock, dest),
         None => match fs::remove_file(dest) {
@@ -204,7 +185,7 @@ pub(super) fn copy_if_changed(source: &Path, dest: &Path) -> io::Result<()> {
 /// file already holds exactly `content`. The write goes to a temporary
 /// file that is then renamed into place, so a concurrent reader never
 /// sees a half-written file.
-fn write_if_changed(path: &Path, content: &str) -> io::Result<()> {
+pub(crate) fn write_if_changed(path: &Path, content: &str) -> io::Result<()> {
     if fs::read(path).is_ok_and(|existing| existing == content.as_bytes()) {
         return Ok(());
     }

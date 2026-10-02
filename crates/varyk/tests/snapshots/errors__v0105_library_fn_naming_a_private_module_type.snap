@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0105]: `Square` is in module `parts`, which other packages cannot see, but `square` can be used from other packages; write `pub mod parts;` (or make `square` private)
+ --> crates/varyk/tests/fixtures/errors/v0105_library_fn_naming_a_private_module_type/src/lib.vr:3:29
+  |
+1 | mod parts;
+  | --- declared here without `pub`
+2 |
+3 | pub fn square(side: i32) -> parts::Square {
+  |                             ^^^^^^^^^^^^^ `Square` is in module `parts`, which other packages cannot see, but `square` can be used from other packages; write `pub mod parts;` (or make `square` private)
+  |
+  = note: this package is a library: the packages that use it can use its `pub` items in `pub` modules, and the Rust Varyk writes for them names such an item's types by their full path
+help: insert `pub ` before `mod`

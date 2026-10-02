@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0210]: `Settings` cannot be read from the environment
+ --> src/main.vr:2:52
+  |
+2 |     let settings: Result<route::Settings, Error> = env::parse();
+  |                                                    ^^^^^^^^^^^^ `Settings` cannot be read from the environment
+  |
+  = note: `Settings` is declared in the package `route`
+  = note: a package is built without knowing who uses it, so only `route` can convert its own types through the environment; do it there instead, with a `pub fn` such as `pub fn settings() -> Result<Settings, Error>`

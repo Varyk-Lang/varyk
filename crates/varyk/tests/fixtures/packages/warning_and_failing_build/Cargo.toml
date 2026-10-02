@@ -3,5 +3,9 @@ name = "noisy"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "noisy"
+path = "src/main.vr"
+
 [dependencies]
 failing = { path = "deps/failing" }

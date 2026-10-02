@@ -28,7 +28,7 @@ use crate::package::Kind;
 use crate::resolve::{
     Callee, FnId, FnSig, ImportedSig, LookupError, ModuleId, ModuleKind, Resolved, StructDef,
     StructId, Symbols, Unusable, UserType, VariantFieldsDef, display_path, is_visible, no_parent,
-    not_visible, path_text, reserved_value_name, split_last,
+    not_visible, path_text, rename_help, reserved_value_name, split_last,
 };
 use crate::types::derives::{self, Blocker, Judged, Medium, Reached};
 use crate::types::{FloatKind, IntKind, ParamMode, Ty};
@@ -115,6 +115,7 @@ pub fn typecheck(
         str::to_uppercase,
     ));
     if !diagnostics.is_empty() {
+        rename_help(symbols, &resolved.modules, sources, &mut diagnostics);
         return Err(diagnostics);
     }
     // Ledger: every `FnSig` produced a function, in the same order, so
@@ -135,6 +136,7 @@ pub fn typecheck(
             fields: def.fields.clone(),
             derives: derives.of_struct(id),
             serde: reached.structs[id].or(env_reached.structs[id]),
+            package: def.package.clone(),
             span: def.span,
         })
         .collect();
@@ -151,6 +153,8 @@ pub fn typecheck(
             drops: def.drops.clone(),
             derives: derives.of_enum(id),
             serde: reached.enums[id].or(env_reached.enums[id]),
+            opaque: def.opaque.clone(),
+            package: def.package.clone(),
             span: def.span,
         })
         .collect();
@@ -158,6 +162,7 @@ pub fn typecheck(
     let paths: Vec<String> = (0..resolved.modules.len())
         .map(|id| tree_path(&resolved, ModuleId(id as u32), sources))
         .collect();
+    let package_modules = symbols.package_module_paths(resolved.modules.len());
     let modules = resolved
         .modules
         .into_iter()
@@ -188,6 +193,7 @@ pub fn typecheck(
             };
             HirModule {
                 id: module.id,
+                decl: symbols.mod_decl(module.id),
                 name: module.name,
                 parent: module.parent,
                 is_pub: module.is_pub,
@@ -213,20 +219,25 @@ pub fn typecheck(
         enums,
         imported,
         entry: resolved.entry,
+        package_modules,
     })
 }
 
 /// Whether the program names `Error` (M5a spec 1): in a signature, a
 /// field, a variant's payload, or a local's type, which is where every
-/// written type argument ends up.
+/// written type argument ends up. A struct or enum of another Varyk
+/// package is not counted (M5b2 spec 7.4).
 fn names_error(symbols: &Symbols, functions: &[HirFunction]) -> bool {
+    // Another package's types are that package's to build.
     let fields = symbols
         .structs
         .iter()
+        .filter(|def| def.package.is_none())
         .flat_map(|def| def.fields.iter().map(|field| &field.ty));
     let payloads = symbols
         .enums
         .iter()
+        .filter(|def| def.package.is_none())
         .flat_map(|def| def.variants.iter())
         .flat_map(|variant| match &variant.fields {
             VariantFieldsDef::Tuple(types) => types.iter().collect::<Vec<_>>(),
@@ -849,7 +860,18 @@ impl FnChecker<'_> {
 
     // --- Expressions ----------------------------------------------------
 
+    /// Checks `expr`; a value whose type is declared in a package this
+    /// one does not list is V0115 (M5b2 spec 2.4), and fails.
     fn expr(&mut self, expr: &Expr, expected: Option<Ty>) -> Option<HirExpr> {
+        let checked = self.expr_of_any_package(expr, expected)?;
+        if let Some(diagnostic) = self.symbols.unlisted_package(&checked.ty, checked.span) {
+            self.diagnostics.push(diagnostic);
+            return None;
+        }
+        Some(checked)
+    }
+
+    fn expr_of_any_package(&mut self, expr: &Expr, expected: Option<Ty>) -> Option<HirExpr> {
         let span = expr.span;
         let (kind, ty) = match &expr.kind {
             ExprKind::Integer(text) => return self.integer(text, expected, false, span),
@@ -1597,6 +1619,11 @@ impl FnChecker<'_> {
                 self.diagnostics.push(no_parent(span));
                 return None;
             }
+            Err(LookupError::Dependency { span, dep }) => {
+                let diagnostic = self.symbols.dependency_error(span, dep);
+                self.diagnostics.push(diagnostic);
+                return None;
+            }
             Err(LookupError::Unknown) => {
                 // `Shape::Circle { .. }`: a variant with named fields.
                 if let Some((prefix, last)) = module.and_then(split_last) {
@@ -1963,6 +1990,7 @@ impl FnChecker<'_> {
     ) {
         let mut diagnostic = match error {
             LookupError::NoParent { span } => no_parent(span),
+            LookupError::Dependency { span, dep } => self.symbols.dependency_error(span, dep),
             LookupError::Unknown => {
                 Diagnostic::new(codes::V0100, span, format!("cannot find {what} `{path}`"))
             }

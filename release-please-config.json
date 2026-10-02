@@ -28,6 +28,16 @@
         },
         {
           "type": "toml",
+          "path": "/examples/packages/route/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
+          "path": "/examples/packages/trip/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
           "path": "/crates/varyk/tests/fixtures/errors/v0404_std_stale_lock/Cargo.toml",
           "jsonpath": "$.dependencies.varyk-std"
         }

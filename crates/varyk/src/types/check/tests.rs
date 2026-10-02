@@ -5010,3 +5010,193 @@ fn a_shared_through_json_or_env_is_v0210() {
     );
     assert_eq!(d.code, codes::V0210, "{d:#?}");
 }
+
+// --- Varyk packages (M5b2 spec 2.3, 2.4) ------------------------------------
+
+mod packages {
+    use super::*;
+    use crate::test_packages::{Dep, units_and_route};
+
+    const BOTH: [(&str, Dep<'static>); 2] = [
+        ("units", Dep::Package("units")),
+        ("route", Dep::Package("route")),
+    ];
+
+    fn checks(text: &str) {
+        let mut build = units_and_route();
+        if let Err(diagnostics) = build.check(text, &BOTH) {
+            panic!("expected success for:\n{text}\ngot {diagnostics:#?}");
+        }
+    }
+
+    fn one(text: &str) -> Diagnostic {
+        let mut build = units_and_route();
+        match build.check(text, &BOTH) {
+            Ok(_) => panic!("expected a diagnostic for:\n{text}"),
+            Err(diagnostics) => only(&diagnostics).clone(),
+        }
+    }
+
+    const LEGS: &str = "fn legs() -> Vec<route::Leg> {\n    vec![\n        route::Leg { name: \"a\", length: units::length::Meters { value: 3 } },\n        route::Leg { name: \"b\", length: units::length::Meters { value: 4 } },\n    ]\n}\n";
+
+    #[test]
+    fn a_borrowed_return_of_a_package_s_function_is_an_alias() {
+        let d = one(&format!(
+            "{LEGS}fn main() {{\n    let mut all = legs();\n    let best = route::longest(all);\n    all.push(route::Leg {{ name: \"c\", length: units::length::zero() }});\n    println!(\"{{}}\", best.name);\n}}\n"
+        ));
+        assert_eq!(d.code, codes::V0307, "{d:#?}");
+        checks(&format!(
+            "{LEGS}fn main() {{\n    let all = legs();\n    let best = route::longest(all);\n    println!(\"{{}}\", best.name);\n}}\n"
+        ));
+    }
+
+    #[test]
+    fn a_mut_parameter_of_a_package_s_function_needs_a_mut_place() {
+        checks(
+            "fn main() {\n    let mut m = units::length::zero();\n    units::length::grow(m);\n    println!(\"{}\", m.value);\n}\n",
+        );
+        let d = one(
+            "fn main() {\n    let m = units::length::zero();\n    units::length::grow(m);\n}\n",
+        );
+        assert_eq!(d.code, codes::V0302, "{d:#?}");
+    }
+
+    #[test]
+    fn a_package_s_enum_matches_with_named_fields_and_must_be_exhaustive() {
+        checks(
+            "fn size(shape: units::Shape) -> i32 {\n    match shape {\n        units::Shape::Circle { radius } => radius,\n        units::Shape::Square(side) => side,\n        units::Shape::Point => 0,\n    }\n}\nfn main() {\n    println!(\"{}\", size(units::Shape::Circle { radius: 2 }));\n}\n",
+        );
+        let d = one(
+            "fn size(shape: units::Shape) -> i32 {\n    match shape {\n        units::Shape::Circle { radius } => radius,\n        units::Shape::Point => 0,\n    }\n}\nfn main() {}\n",
+        );
+        assert_eq!(d.code, codes::V0204, "{d:#?}");
+    }
+
+    #[test]
+    fn clone_and_equality_work_on_a_package_s_struct() {
+        checks(
+            "fn main() {\n    let a = units::length::zero();\n    let b = a.clone();\n    if a == b {\n        println!(\"same\");\n    }\n    println!(\"{}\", a.doubled().value);\n}\n",
+        );
+    }
+
+    #[test]
+    fn a_meters_from_route_goes_straight_to_units() {
+        checks(&format!(
+            "{LEGS}fn main() {{\n    let all = legs();\n    let sum = units::length::add(route::total(all), units::length::zero());\n    println!(\"{{}}\", sum.value);\n}}\n"
+        ));
+    }
+
+    #[test]
+    fn a_single_name_is_never_a_package() {
+        let d = one("fn main() {\n    let u = units;\n}\n");
+        assert_eq!(d.code, codes::V0100, "{d:#?}");
+    }
+
+    #[test]
+    fn a_call_through_a_dependency_varyk_code_cannot_name_shows_the_rename() {
+        let mut build = units_and_route();
+        let deps = [("varyk-units", Dep::Package("units"))];
+        let diagnostics = build
+            .check("fn main() {\n    let n = varyk_units::one();\n}\n", &deps)
+            .err()
+            .unwrap_or_default();
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0100, "{d:#?}");
+        assert!(
+            d.notes
+                .iter()
+                .any(|note| note.contains("`varyk_units_package = { package = \"units\", .. }`")),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
+    fn a_rust_dependency_named_alone_or_as_a_method_gets_no_rename_note() {
+        let mut build = units_and_route();
+        let deps = [("helper", Dep::Rust), ("units", Dep::Package("units"))];
+        for text in [
+            "fn main() {\n    let n = helper;\n}\n",
+            "fn main() {\n    let m = units::length::zero();\n    let n = m.helper();\n}\n",
+        ] {
+            let diagnostics = build.check(text, &deps).err().unwrap_or_default();
+            let d = only(&diagnostics);
+            assert_eq!(d.code, codes::V0100, "{d:#?}");
+            assert!(
+                !d.notes
+                    .iter()
+                    .any(|note| note.contains("also a dependency")),
+                "{d:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_of_a_package_this_one_does_not_list_is_v0115() {
+        let route_only = [("route", Dep::Package("route"))];
+        for text in [
+            "fn length(leg: route::Leg) -> i32 {\n    leg.length.value\n}\nfn main() {}\n",
+            "fn sum(legs: Vec<route::Leg>) {\n    let total = route::total(legs);\n}\nfn main() {}\n",
+        ] {
+            let mut build = units_and_route();
+            let diagnostics = build.check(text, &route_only).err().unwrap_or_default();
+            let d = only(&diagnostics);
+            assert_eq!(d.code, codes::V0115, "{d:#?}");
+            assert_eq!(
+                d.message,
+                "this is a `Meters` from the package `units`, which this package does not list"
+            );
+        }
+        // A `route::Leg`, which holds a `Meters`, is fine.
+        let mut build = units_and_route();
+        let text = "fn name(leg: route::Leg) -> string {\n    leg.name.clone()\n}\nfn main() {}\n";
+        if let Err(diagnostics) = build.check(text, &route_only) {
+            panic!("{diagnostics:#?}");
+        }
+        // As is the `Meters` for a program that lists `units`.
+        checks("fn length(leg: route::Leg) -> i32 {\n    leg.length.value\n}\nfn main() {}\n");
+    }
+
+    #[test]
+    fn a_value_holding_a_type_of_an_unlisted_package_is_v0115() {
+        let mut build = units_and_route();
+        let text = "fn count(legs: Vec<route::Leg>) -> usize {\n    route::lengths(legs).len()\n}\nfn main() {}\n";
+        let diagnostics = build
+            .check(text, &[("route", Dep::Package("route"))])
+            .err()
+            .unwrap_or_default();
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0115, "{d:#?}");
+        assert_eq!(
+            d.message,
+            "this `Vec<Meters>` holds a `Meters` from the package `units`, which this package \
+             does not list"
+        );
+    }
+
+    #[test]
+    fn a_package_s_struct_holding_an_error_does_not_make_its_user_need_std() {
+        let mut build = units_and_route();
+        let program = build
+            .check(
+                "fn keep(failure: units::Failure) {}\nfn main() {\n    println!(\"{}\", units::one());\n}\n",
+                &BOTH,
+            )
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        assert!(!program.uses_std);
+        // The package itself, which names `Error`, does.
+        assert!(build.checked[0].program.uses_std);
+    }
+
+    #[test]
+    fn a_private_field_of_a_package_s_struct_is_v0105() {
+        let mut build = units_and_route();
+        let d = match build.check(
+            "fn main() {\n    let s = units::length::Secret { hidden: 1 };\n}\n",
+            &BOTH,
+        ) {
+            Ok(_) => panic!("expected V0105"),
+            Err(diagnostics) => only(&diagnostics).clone(),
+        };
+        assert_eq!(d.code, codes::V0105, "{d:#?}");
+    }
+}

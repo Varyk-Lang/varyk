@@ -1,0 +1,28 @@
+pub struct Leg {
+    pub name: string,
+    pub length: units::length::Meters,
+}
+
+pub fn total(legs: Vec<Leg>) -> units::length::Meters {
+    let mut sum = units::length::zero();
+    for leg in legs {
+        sum = units::length::add(sum, leg.length);
+    }
+    sum
+}
+
+pub fn longest(legs: Vec<Leg>) -> Leg {
+    let mut best: usize = 0;
+    let mut index: usize = 0;
+    for leg in legs {
+        if leg.length.value > legs[best].length.value {
+            best = index;
+        }
+        index = index + 1;
+    }
+    legs[best]
+}
+
+pub fn lengths(legs: Vec<Leg>) -> Vec<units::length::Meters> {
+    legs.iter().map(|leg| units::length::Meters { value: leg.length.value }).collect()
+}

@@ -1,0 +1,11 @@
+pub mod api;
+mod parts;
+mod notes;
+
+pub struct Order {
+    pub note: notes::Note,
+}
+
+pub fn first() -> Order {
+    Order { note: notes::Note { text: "first" } }
+}

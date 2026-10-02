@@ -1,0 +1,4 @@
+fn main() {
+    let stop = route::Stop { name: "Lake", minutes: 12 };
+    println!("{}", json::stringify(stop));
+}

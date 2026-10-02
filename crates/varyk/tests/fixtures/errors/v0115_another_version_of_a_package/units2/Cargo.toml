@@ -1,0 +1,10 @@
+[package]
+name = "units"
+version = "0.2.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.vr"
+
+[workspace]
+

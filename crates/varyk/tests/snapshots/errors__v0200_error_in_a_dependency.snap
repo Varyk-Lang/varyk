@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0200]: mismatched types: expected `i32`, found `string`
+ --> units/src/lib.vr:2:5
+  |
+2 |     "one"
+  |     ^^^^^ mismatched types: expected `i32`, found `string`
+  |
+  = note: in the package `units` 0.1.0, which this build uses

@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use varyk_syntax::Span;
 use varyk_syntax::{Item, UseDecl};
 
+use crate::diagnostics::Diagnostic;
 use crate::interop::{
     Expander, FieldVis, ImportedEnum, ImportedModule, ImportedStruct, MacroRisk, StructKind,
     tidy_signature,
@@ -90,10 +91,14 @@ fn mark_drops(symbols: &mut Symbols, modules: &[Module], imports: &[(ModuleId, I
 /// signature, field, or variant payload in any `.rs` module can name any
 /// of them (spec 4.4); then free functions, struct fields and methods,
 /// and enum variants, mapped.
+///
+/// In a library, a function, method, or `pub` field other packages can
+/// reach that names a type they cannot is V0105 (M5b2 spec 2.3).
 pub(super) fn register(
     symbols: &mut Symbols,
     modules: &[Module],
     imports: Vec<(ModuleId, ImportedModule)>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut structs: Vec<(ModuleId, StructId, ImportedStruct)> = Vec::new();
     let mut enums: Vec<(ModuleId, EnumId, ImportedEnum)> = Vec::new();
@@ -158,6 +163,7 @@ pub(super) fn register(
                 imported: true,
                 derives: Some(s.derives),
                 fields: Vec::new(),
+                package: None,
                 span: Span::new(file, s.span.start as u32, s.span.end as u32),
             });
             structs.push((*module, id, s.clone()));
@@ -184,6 +190,7 @@ pub(super) fn register(
                 drops: None,
                 opaque: e.opaque.clone(),
                 variants: Vec::new(),
+                package: None,
                 span: Span::new(file, e.span.start as u32, e.span.end as u32),
             });
             enums.push((*module, id, e.clone()));
@@ -193,10 +200,13 @@ pub(super) fn register(
     mark_drops(symbols, modules, &imports);
 
     for (module, imported) in imports {
+        let file = modules[module.0 as usize].file;
         for f in imported.fns {
+            let span = Span::new(file, f.span.start as u32, f.span.end as u32);
             let id = ImportedFnId(symbols.imported.len() as u32);
             let mut sig = Mapper::new(symbols, module).sig(None, f);
             hide_if_unreachable(symbols, &mut sig);
+            diagnostics.extend(hidden_from_outside(symbols, &sig, span));
             symbols.scopes[module.0 as usize]
                 .fns
                 .entry(sig.name.clone())
@@ -216,6 +226,18 @@ pub(super) fn register(
                     FieldVis::Pub => symbols.hidden_type(ty, symbols.reach(module, true)),
                     _ => None,
                 };
+                let span = Span::new(file, field.span.start as u32, field.span.end as u32);
+                if field.vis == FieldVis::Pub && symbols.exported(module, true) {
+                    let found = mapper
+                        .field(&field.ty)
+                        .ok()
+                        .and_then(|ty| symbols.hidden_from_other_packages(&ty));
+                    if let Some((name, blocker)) = found {
+                        diagnostics.push(
+                            symbols.rust_item_hidden_from_outside(&name, blocker, span, &s.name),
+                        );
+                    }
+                }
                 let (ty, unusable) = match mapper.field(&field.ty) {
                     Ok(ty) => match hidden(&ty) {
                         None => (ty, None),
@@ -236,7 +258,7 @@ pub(super) fn register(
                     is_pub: field.vis == FieldVis::Pub,
                     unusable,
                     attrs: FieldAttrs::default(),
-                    span: Span::new(file, field.span.start as u32, field.span.end as u32),
+                    span,
                 }
             })
             .collect();
@@ -244,8 +266,16 @@ pub(super) fn register(
             .methods
             .into_iter()
             .map(|method| {
+                let span = Span::new(file, method.span.start as u32, method.span.end as u32);
                 let mut sig = mapper.sig(Some(id), method);
                 hide_if_unreachable(symbols, &mut sig);
+                (sig, span)
+            })
+            .collect();
+        let sigs: Vec<_> = sigs
+            .into_iter()
+            .map(|(sig, span)| {
+                diagnostics.extend(hidden_from_outside(symbols, &sig, span));
                 sig
             })
             .collect();
@@ -342,6 +372,22 @@ fn hide_if_unreachable(symbols: &Symbols, sig: &mut ImportedSig) {
         sig.note = Some(note);
         sig.within = Some(within);
     }
+}
+
+/// V0105 at `span` when `sig`, a callable function of a library's `.rs`
+/// module that other packages can reach, names a type they cannot (M5b2
+/// spec 2.3). A method's module is its struct's.
+fn hidden_from_outside(symbols: &Symbols, sig: &ImportedSig, span: Span) -> Option<Diagnostic> {
+    if !sig.callable || !symbols.exported(sig.module, true) {
+        return None;
+    }
+    let (name, blocker) = sig
+        .params
+        .iter()
+        .map(|(ty, _)| ty)
+        .chain(std::iter::once(&sig.ret))
+        .find_map(|ty| symbols.hidden_from_other_packages(ty))?;
+    Some(symbols.rust_item_hidden_from_outside(&name, blocker, span, &sig.name))
 }
 
 /// Why a `.rs` struct is not imported (spec 4.1), as the end of a sentence

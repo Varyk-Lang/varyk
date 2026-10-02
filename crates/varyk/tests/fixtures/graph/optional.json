@@ -1,0 +1,52 @@
+{
+  "packages": [
+    {
+      "id": "path+file:///work/app_optional#app@0.1.0",
+      "name": "app",
+      "version": "0.1.0",
+      "source": null,
+      "manifest_path": "/work/app_optional/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "units",
+          "rename": null,
+          "kind": null,
+          "target": null,
+          "optional": true
+        }
+      ]
+    },
+    {
+      "id": "path+file:///work/units#0.1.0",
+      "name": "units",
+      "version": "0.1.0",
+      "source": null,
+      "manifest_path": "/work/units/Cargo.toml",
+      "dependencies": []
+    }
+  ],
+  "resolve": {
+    "root": "path+file:///work/app_optional#app@0.1.0",
+    "nodes": [
+      {
+        "id": "path+file:///work/app_optional#app@0.1.0",
+        "deps": [
+          {
+            "name": "units",
+            "pkg": "path+file:///work/units#0.1.0",
+            "dep_kinds": [
+              {
+                "kind": null,
+                "target": null
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "path+file:///work/units#0.1.0",
+        "deps": []
+      }
+    ]
+  }
+}

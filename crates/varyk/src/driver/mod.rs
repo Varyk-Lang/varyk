@@ -11,7 +11,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use crate::backend::GeneratedCrate;
+use varyk_syntax::FileId;
+
+use crate::CheckedPackage;
+use crate::backend::{Backend, CrateInfo, GeneratedCrate, RustBackend, with_local_std};
+use crate::packages::{DepTarget, Graph};
 
 mod cargo;
 pub mod generate;
@@ -78,9 +82,10 @@ pub fn package_name_for(entry: &Path) -> String {
 /// letter or digit with `_`; prefixes `v_` if the result would otherwise
 /// start with a digit, be empty, or collide with `cache` (the shared
 /// build cache directory, spec 2.4), `package` (where `varyk publish`
-/// assembles its crate), or a folder of Cargo's own that a program cannot
-/// be named after (`deps`, `examples`, `build`, `incremental`) — the ways
-/// a sanitized name could fail `package::name_problem` or
+/// assembles its crate), `packages` (where the packages a build uses are
+/// written), or a folder of Cargo's own that a program cannot be named
+/// after (`deps`, `examples`, `build`, `incremental`) — the ways a
+/// sanitized name could fail `package::name_problem` or
 /// `package::program_name_problem`. Shared by `package_name_for` (a build
 /// directory's name) and `init` (a directory's own name).
 pub fn sanitize_name(name: &str) -> String {
@@ -98,6 +103,7 @@ pub fn sanitize_name(name: &str) -> String {
         || sanitized.starts_with(|c: char| c.is_ascii_digit())
         || sanitized == "cache"
         || sanitized == "package"
+        || sanitized == "packages"
         || crate::package::program_name_problem(&sanitized).is_some()
     {
         format!("v_{sanitized}")
@@ -106,8 +112,152 @@ pub fn sanitize_name(name: &str) -> String {
     }
 }
 
-/// Writes `generated` under `build_dir`, copies `lock` (the package's
-/// `Cargo.lock`, when it has one) in beside it (M3 spec 2.2; never copied
+/// Where the crates of a build's Varyk packages are written, under the
+/// program's package (M5b2 spec 4.3).
+const PACKAGES_DIR: &str = "target/varyk/packages";
+
+/// The crate the driver writes for a Varyk package of the build (M5b2
+/// spec 4.3): its manifest is the package's own, built from its generated
+/// root, and its `src/` holds its generated tree and its `.rs` modules,
+/// nothing else of the package's directory.
+#[derive(Debug, Clone)]
+pub struct PackageCrate {
+    pub name: String,
+    pub version: String,
+    /// Its `Cargo.toml` among the sources, where a rustc error in the
+    /// crate is shown.
+    pub manifest_file: FileId,
+    /// `<root>/target/varyk/packages/<name>-<version>`, absolute.
+    pub dir: PathBuf,
+    pub generated: GeneratedCrate,
+}
+
+/// The directory of the crate written for each Varyk package of `graph`,
+/// by graph index: `target/varyk/packages/<name>-<version>` under `root`,
+/// the program's package, made absolute.
+pub fn package_dirs(root: &Path, graph: &Graph) -> io::Result<Vec<PathBuf>> {
+    graph
+        .varyk_packages()
+        .iter()
+        .map(|package| {
+            let name = format!("{}-{}", package.name, package.version);
+            std::path::absolute(root.join(PACKAGES_DIR).join(name))
+        })
+        .collect()
+}
+
+/// The crate of every package of `checked`, the Varyk packages of
+/// `graph`'s build, to be written in `dirs` (see [`package_dirs`]): each
+/// generated from its own HIR, whose paths to another package's items use
+/// its own keys (M5b2 spec 5), with its isolated manifest given the
+/// generated root as its library target, named after the package with
+/// `-` as `_` (cargo refuses a `-` there), its dependencies on Varyk
+/// packages turned into those packages' crates, and, under
+/// `VARYK_STD_PATH`, its `varyk-std` that directory (spec 4.7).
+pub fn package_crates(
+    checked: &[CheckedPackage],
+    graph: &Graph,
+    dirs: &[PathBuf],
+) -> Vec<PackageCrate> {
+    checked
+        .iter()
+        .filter_map(|package| {
+            let deps = &graph.varyk_packages().get(package.graph_index)?.deps;
+            let dir = dirs.get(package.graph_index)?;
+            let manifest = with_lib_target(package.manifest.clone(), &package.name);
+            let info = CrateInfo {
+                name: package.name.clone(),
+                manifest: with_local_std(with_package_paths(manifest, deps, dirs)),
+                std_dependency: None,
+            };
+            Some(PackageCrate {
+                name: package.name.clone(),
+                version: package.version.clone(),
+                manifest_file: package.manifest_file,
+                dir: dir.clone(),
+                generated: RustBackend.generate(&package.program, &info),
+            })
+        })
+        .collect()
+}
+
+/// `manifest` with its `[lib]` target the generated root, `src/lib.rs`,
+/// named `name` with `-` as `_`.
+fn with_lib_target(mut manifest: toml::Table, name: &str) -> toml::Table {
+    let lib = manifest
+        .entry("lib")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if let toml::Value::Table(lib) = lib {
+        lib.insert(
+            "name".to_string(),
+            toml::Value::String(name.replace('-', "_")),
+        );
+        lib.insert(
+            "path".to_string(),
+            toml::Value::String("src/lib.rs".to_string()),
+        );
+    }
+    manifest
+}
+
+/// The keys of a dependency on a Varyk package that a build drops, since
+/// it is the crate the driver writes for the package (M5b2 spec 4.3).
+const SOURCE_KEYS: [&str; 7] = ["version", "git", "branch", "tag", "rev", "registry", "path"];
+
+/// `manifest` with each `[dependencies]` entry that `deps` (keys with `-`
+/// as `_`) resolves to a Varyk package made a `path` to the crate written
+/// for it in `dirs`, by graph index: the key stays, and so do `package`,
+/// `features`, and `default-features`; where the package comes from
+/// (`version`, `git`, `branch`, `tag`, `rev`, `registry`) goes (M5b2 spec
+/// 4.3). For every manifest the driver writes for a build; never for the
+/// one `varyk publish` assembles.
+pub fn with_package_paths(
+    mut manifest: toml::Table,
+    deps: &[(String, DepTarget)],
+    dirs: &[PathBuf],
+) -> toml::Table {
+    let Some(toml::Value::Table(dependencies)) = manifest.get_mut("dependencies") else {
+        return manifest;
+    };
+    for (key, value) in dependencies.iter_mut() {
+        let name = key.replace('-', "_");
+        let target = deps.iter().find(|(dep, _)| *dep == name).map(|(_, to)| *to);
+        let Some(dir) = target.and_then(|target| match target {
+            DepTarget::Varyk(index) => dirs.get(index),
+            DepTarget::Rust => None,
+        }) else {
+            continue;
+        };
+        let mut table = match value {
+            toml::Value::Table(table) => std::mem::take(table),
+            _ => toml::Table::new(),
+        };
+        for key in SOURCE_KEYS {
+            table.remove(key);
+        }
+        table.insert(
+            "path".to_string(),
+            toml::Value::String(dir.to_string_lossy().into_owned()),
+        );
+        *value = toml::Value::Table(table);
+    }
+    manifest
+}
+
+/// Writes every crate of `packages` in its directory, each file only when
+/// its content changed and files no longer generated removed (M5b2 spec
+/// 4.3).
+fn write_packages(packages: &[PackageCrate]) -> io::Result<()> {
+    for package in packages {
+        generate::write_files(&package.dir, &package.generated)?;
+    }
+    Ok(())
+}
+
+/// Writes the crate of every Varyk package of the build in `packages`,
+/// then `generated` under `build_dir`, copies `lock` (the lock the
+/// package graph was read with, else the package's `Cargo.lock`, when it
+/// has one) in beside it (M3 spec 2.2, M5b2 spec 4.1; never copied
 /// back), builds it with cargo into `target_dir`, and returns the
 /// executable's path, read from cargo's `compiler-artifact` message, or
 /// `None` for a library, which has none. This is the only reliable way to
@@ -128,11 +278,13 @@ pub fn sanitize_name(name: &str) -> String {
 /// warning never fails the build).
 pub fn build(
     generated: &GeneratedCrate,
+    packages: &[PackageCrate],
     build_dir: &Path,
     target_dir: &Path,
     lock: Option<&Path>,
     release: bool,
 ) -> Result<(Option<PathBuf>, Vec<Message>), DriverError> {
+    write_packages(packages)?;
     generate::write_files(build_dir, generated)?;
     generate::sync_lock(lock, &build_dir.join("Cargo.lock"))?;
     let binary = generated
@@ -141,8 +293,14 @@ pub fn build(
         .any(|file| file.path == "src/main.rs");
     let map = generated.source_map();
     let goal = cargo::Goal::Build { release };
-    let (stdout, stderr, messages) =
-        cargo::run_cargo(build_dir, target_dir, goal, &map, &generated.copied)?;
+    let (stdout, stderr, messages) = cargo::run_cargo(
+        build_dir,
+        target_dir,
+        goal,
+        &map,
+        &generated.copied,
+        packages,
+    )?;
     if !binary {
         return Ok((None, messages));
     }
@@ -158,17 +316,19 @@ pub fn build(
     }
 }
 
-/// Writes `generated` under `build_dir` as [`build`] does, builds its
+/// Writes `packages` and `generated` as [`build`] does, builds its
 /// tests with `cargo test --no-run` into `target_dir` (M5a spec 2.7), and
 /// returns the test executables, read from cargo's `compiler-artifact`
 /// messages, alongside every classified compiler message; rustc's errors
 /// are mapped as for a build (M3 spec 5).
 pub fn test(
     generated: &GeneratedCrate,
+    packages: &[PackageCrate],
     build_dir: &Path,
     target_dir: &Path,
     lock: Option<&Path>,
 ) -> Result<(Vec<PathBuf>, Vec<Message>), DriverError> {
+    write_packages(packages)?;
     generate::write_files(build_dir, generated)?;
     generate::sync_lock(lock, &build_dir.join("Cargo.lock"))?;
     let map = generated.source_map();
@@ -178,6 +338,7 @@ pub fn test(
         cargo::Goal::Test,
         &map,
         &generated.copied,
+        packages,
     )?;
     Ok((cargo::test_executables_from(stdout.lines()), messages))
 }
@@ -265,6 +426,7 @@ mod tests {
             "2fast",
             "cache",
             "package",
+            "packages",
             "deps",
             "Examples",
             "build",
@@ -285,5 +447,63 @@ mod tests {
                 "{name:?} -> {sanitized:?}"
             );
         }
+    }
+
+    fn table(text: &str) -> toml::Table {
+        text.parse().expect("valid TOML")
+    }
+
+    /// Each dependency on a Varyk package becomes a `path` to its crate,
+    /// keeping its key, `package`, `features`, and `default-features`; a
+    /// Rust crate's stays as written (M5b2 spec 4.3).
+    #[test]
+    fn a_dependency_on_a_varyk_package_becomes_a_path_to_its_crate() {
+        let manifest = table(
+            "[dependencies]\n\
+             units = \"0.1.0\"\n\
+             u = { version = \"0.2\", package = \"units\", registry = \"r\", \
+             features = [\"f\"], default-features = false }\n\
+             route-planner = { git = \"https://x\", branch = \"b\", tag = \"t\", rev = \"r\", \
+             path = \"../route\" }\n\
+             regex-lite = \"0.1\"\n",
+        );
+        let deps = [
+            ("units".to_string(), DepTarget::Varyk(0)),
+            ("u".to_string(), DepTarget::Varyk(1)),
+            ("route_planner".to_string(), DepTarget::Varyk(2)),
+            ("regex_lite".to_string(), DepTarget::Rust),
+        ];
+        let dirs = [
+            PathBuf::from("/p/units-0.1.0"),
+            PathBuf::from("/p/units-0.2.0"),
+            PathBuf::from("/p/route-planner-0.1.0"),
+        ];
+
+        let rewritten = with_package_paths(manifest, &deps, &dirs);
+
+        let expected = table(
+            "[dependencies]\n\
+             units = { path = \"/p/units-0.1.0\" }\n\
+             u = { path = \"/p/units-0.2.0\", package = \"units\", features = [\"f\"], \
+             default-features = false }\n\
+             route-planner = { path = \"/p/route-planner-0.1.0\" }\n\
+             regex-lite = \"0.1\"\n",
+        );
+        assert_eq!(rewritten, expected);
+    }
+
+    /// A package crate's target is the generated root, named after the
+    /// package with `-` as `_`, since cargo refuses a `-` there.
+    #[test]
+    fn a_package_crate_s_library_is_the_generated_root_named_without_a_hyphen() {
+        let manifest = table("[lib]\npath = \"src/lib.vr\"\n");
+        assert_eq!(
+            with_lib_target(manifest, "route-planner"),
+            table("[lib]\nname = \"route_planner\"\npath = \"src/lib.rs\"\n")
+        );
+        assert_eq!(
+            with_lib_target(toml::Table::new(), "units"),
+            table("[lib]\nname = \"units\"\npath = \"src/lib.rs\"\n")
+        );
     }
 }

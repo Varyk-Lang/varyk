@@ -84,7 +84,7 @@ pub fn std_config() -> String {
 
 /// A fresh, empty directory under `CARGO_TARGET_TMPDIR`, named `label`
 /// plus a counter so repeated calls with the same label never collide;
-/// for tests (`init`, `emit`) that build a package from nothing rather
+/// for tests (`init`) that build a package from nothing rather
 /// than from a fixture.
 pub fn empty_dir(label: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -101,13 +101,22 @@ pub fn empty_dir(label: &str) -> PathBuf {
 /// under `CARGO_TARGET_TMPDIR`, so a test that builds it never writes
 /// into the source tree. Each call gets its own directory.
 pub fn package_dir(case: &str) -> PathBuf {
+    fixture_dir("packages", case)
+}
+
+/// A fresh copy of the fixture `tests/fixtures/<kind>/<case>/` under
+/// `CARGO_TARGET_TMPDIR/<kind>/`, one per call: for a package fixture that
+/// is built, or whose package graph is read (M5b2 spec 9), which writes
+/// its `target/`.
+pub fn fixture_dir(kind: &str, case: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/packages")
+        .join("tests/fixtures")
+        .join(kind)
         .join(case);
     let dest = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("packages")
+        .join(kind)
         .join(format!("{case}-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&dest);
     copy_dir(&source, &dest);
@@ -118,6 +127,8 @@ pub fn package_dir(case: &str) -> PathBuf {
 /// `CARGO_TARGET_TMPDIR/examples/<pid>/<n>/<name>/`, one per call, so that building it never
 /// writes into the source tree (its `target/`, its `Cargo.lock`) and two
 /// test processes in one checkout never clear each other's copy. The
+/// example packages it depends on by `path = "../<other>"`, and those
+/// they depend on, are copied beside it (M5b2 spec 4.7). The
 /// first call in a process removes the directory of any earlier process
 /// that has ended (or after an hour, in case its id was reused), and
 /// anything else there once it is a day old, as the soundness harness
@@ -133,13 +144,36 @@ pub fn example_dir(name: &str) -> PathBuf {
     // same example must not clear each other's copy.
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/packages")
-        .join(name);
-    let dest = root.join(n.to_string()).join(name);
-    let _ = fs::remove_dir_all(&dest);
-    copy_dir(&source, &dest);
-    dest
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/packages");
+    let parent = root.join(n.to_string());
+    let _ = fs::remove_dir_all(&parent);
+    let mut copied: Vec<String> = Vec::new();
+    let mut next = vec![name.to_string()];
+    while let Some(package) = next.pop() {
+        if copied.contains(&package) {
+            continue;
+        }
+        copy_dir(&examples.join(&package), &parent.join(&package));
+        next.extend(sibling_dependencies(&examples.join(&package)));
+        copied.push(package);
+    }
+    parent.join(name)
+}
+
+/// The directory names of the packages the package at `dir` lists under
+/// `[dependencies]` with `path = "../<name>"`.
+fn sibling_dependencies(dir: &Path) -> Vec<String> {
+    let text = fs::read_to_string(dir.join("Cargo.toml")).expect("read the example's Cargo.toml");
+    let manifest: toml::Table = text.parse().expect("the example's Cargo.toml is TOML");
+    let Some(toml::Value::Table(dependencies)) = manifest.get("dependencies") else {
+        return Vec::new();
+    };
+    dependencies
+        .values()
+        .filter_map(|dependency| dependency.get("path")?.as_str())
+        .filter_map(|path| path.strip_prefix("../"))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Removes from `parent` the directory of every other process that has

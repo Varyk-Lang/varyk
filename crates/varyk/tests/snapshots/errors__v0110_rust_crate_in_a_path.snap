@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0110]: `helper` is a library written in Rust, which Varyk code cannot use directly
+ --> src/main.vr:2:13
+  |
+2 |     let n = helper::one();
+  |             ^^^^^^ `helper` is a library written in Rust, which Varyk code cannot use directly
+  |
+  = note: Varyk code does not use crates directly; call it from a `.rs` module in this package

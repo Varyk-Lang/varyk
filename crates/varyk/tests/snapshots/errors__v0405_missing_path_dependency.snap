@@ -1,0 +1,17 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0405]: cargo could not work out which packages this build uses
+  --> Cargo.toml:10:2
+   |
+10 | [dependencies]
+   |  ^^^^^^^^^^^^ cargo could not work out which packages this build uses
+   |
+   = note: cargo said: error: failed to load manifest for dependency `missing`
+           
+           Caused by:
+             failed to read `[dir]/missing/Cargo.toml`
+           
+           Caused by:
+             No such file or directory (os error 2)

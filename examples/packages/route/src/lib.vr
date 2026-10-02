@@ -1,0 +1,55 @@
+// A library that uses another: each leg's length is a `Meters` of the
+// package `units`.
+
+pub struct Leg {
+    pub from: string,
+    pub to: string,
+    pub length: units::length::Meters,
+}
+
+pub struct Stop {
+    pub name: string,
+    pub minutes: u32,
+}
+
+pub fn leg(from: string, to: string, meters: i32) -> Leg {
+    Leg {
+        from: from.clone(),
+        to: to.clone(),
+        length: units::length::Meters { value: meters },
+    }
+}
+
+pub fn total(legs: Vec<Leg>) -> units::length::Meters {
+    let mut sum = units::length::Meters { value: 0 };
+    for leg in legs {
+        sum = units::length::add(sum, leg.length);
+    }
+    sum
+}
+
+// Returns one of the legs it is given, not a copy.
+pub fn longest(legs: Vec<Leg>) -> Leg {
+    let mut best: usize = 0;
+    let mut index: usize = 0;
+    for leg in legs {
+        if leg.length.value > legs[best].length.value {
+            best = index;
+        }
+        index = index + 1;
+    }
+    legs[best]
+}
+
+pub fn parse_stop(text: string) -> Result<Stop, Error> {
+    let parsed: Result<Stop, Error> = json::parse(text);
+    if let Err(problem) = parsed {
+        log::warn("cannot read a stop: {}", problem);
+    }
+    parsed
+}
+
+pub async fn walking_minutes(meters: i32) -> i32 {
+    time::sleep(5).await;
+    meters / 80
+}

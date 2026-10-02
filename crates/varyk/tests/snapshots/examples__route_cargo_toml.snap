@@ -1,0 +1,23 @@
+---
+source: crates/varyk/tests/examples.rs
+expression: "redacted(&read(\"target/varyk/packages/route-0.1.0/Cargo.toml\"), parent)"
+---
+[dependencies.units]
+path = "[examples]/trip/target/varyk/packages/units-0.1.0"
+
+[dependencies.varyk-std]
+path = "[varyk-std]"
+
+[lib]
+name = "route"
+path = "src/lib.rs"
+
+[package]
+build = false
+description = "A Varyk example library: the legs of a trip, in meters"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+name = "route"
+version = "0.1.0"
+
+[workspace]

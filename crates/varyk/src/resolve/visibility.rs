@@ -10,6 +10,12 @@ use crate::types::Ty;
 
 use super::{FnId, LookupError, ModuleId, StructId, Symbols, UserType};
 
+/// The note of V0105 for a library's item that names a type other
+/// packages cannot (M5b2 spec 2.3).
+const LIBRARY_NOTE: &str = "this package is a library: the packages that use it can use its `pub` \
+     items in `pub` modules, and the Rust Varyk writes for them names such an item's types by \
+     their full path";
+
 /// Whether an item declared in `decl_module` is visible from `from`
 /// (spec 3.2): it is `pub`, or `decl_module` is `from` or one of its
 /// ancestors. Modules on the way to it are [`path_visible`]'s concern.
@@ -82,6 +88,9 @@ impl Symbols {
             match scope.parent {
                 Some(parent) if scope.is_pub => current = parent,
                 Some(parent) => return parent,
+                // An item of another package, `pub` all the way up,
+                // reaches this whole package.
+                None if scope.package.is_some() => return ModuleId(0),
                 None => return current,
             }
         }
@@ -112,6 +121,24 @@ impl Symbols {
         }
     }
 
+    /// Whether function `id` is one other packages can use (see
+    /// [`Self::exported`]): for a method, its type must be too.
+    pub(super) fn fn_exported(&self, id: FnId) -> bool {
+        let sig = &self.fns[id.0 as usize];
+        let owner = match sig.owner {
+            Some(UserType::Struct(id)) => {
+                let def = &self.structs[id.0 as usize];
+                self.exported(def.module, def.is_pub)
+            }
+            Some(UserType::Enum(id)) => {
+                let def = &self.enums[id.0 as usize];
+                self.exported(def.module, def.is_pub)
+            }
+            None => true,
+        };
+        owner && self.exported(sig.module, sig.is_pub)
+    }
+
     /// Whether `outer` is `inner` or one of its ancestors: every module
     /// that can see into `inner`'s subtree is in `outer`'s.
     fn contains(&self, outer: ModuleId, inner: ModuleId) -> bool {
@@ -125,34 +152,53 @@ impl Symbols {
     /// and the generated Rust names it in full. The message asks for
     /// `pub` on the type when it has none, else on the module that stops
     /// its reach.
+    ///
+    /// In a library, `outside` says the item is one other packages can
+    /// use ([`Self::exported`]); then the type must be one they can name
+    /// too (M5b2 spec 2.3).
     pub(super) fn private_in_public(
         &self,
         ty: &Ty,
         span: Span,
         item: &str,
         item_reach: ModuleId,
+        outside: bool,
     ) -> Option<Diagnostic> {
-        let (name, module, is_pub, decl, keyword) = match ty {
+        let (name, module, is_pub, decl, keyword, other_package) = match ty {
             Ty::Option(inner) | Ty::Vec(inner) | Ty::Shared(inner) => {
-                return self.private_in_public(inner, span, item, item_reach);
+                return self.private_in_public(inner, span, item, item_reach, outside);
             }
             Ty::Result(ok, err) | Ty::HashMap(ok, err) => {
                 return self
-                    .private_in_public(ok, span, item, item_reach)
-                    .or_else(|| self.private_in_public(err, span, item, item_reach));
+                    .private_in_public(ok, span, item, item_reach, outside)
+                    .or_else(|| self.private_in_public(err, span, item, item_reach, outside));
             }
             Ty::Struct(id) => {
                 let def = &self.structs[id.0 as usize];
-                (&def.name, def.module, def.is_pub, def.span, "struct")
+                let other = def.package.is_some();
+                (&def.name, def.module, def.is_pub, def.span, "struct", other)
             }
             Ty::Enum(id) => {
                 let def = &self.enums[id.0 as usize];
-                (&def.name, def.module, def.is_pub, def.span, "enum")
+                let other = def.package.is_some();
+                (&def.name, def.module, def.is_pub, def.span, "enum", other)
             }
             _ => return None,
         };
         if self.contains(self.reach(module, is_pub), item_reach) {
-            return None;
+            // A type of another package is named through that package,
+            // which V0115 is about.
+            if !outside || other_package || self.exported(module, is_pub) {
+                return None;
+            }
+            return Some(self.hidden_from_outside(
+                name,
+                module,
+                is_pub,
+                (decl, keyword),
+                span,
+                item,
+            ));
         }
         if !is_pub {
             let diagnostic = Diagnostic::new(
@@ -187,6 +233,134 @@ impl Symbols {
              generates names the type by its full path",
         );
         Some(declared_without_pub(diagnostic, decl, "mod"))
+    }
+
+    /// Whether an item declared in `module`, `pub` or not, can be used by
+    /// the other packages that use this one: the package is a library,
+    /// and the item and every module from it up to the root are `pub`
+    /// (M5b2 spec 2.3).
+    pub(super) fn exported(&self, module: ModuleId, is_pub: bool) -> bool {
+        self.library
+            && is_pub
+            && self.ancestors(module).all(|module| {
+                let scope = &self.scopes[module.0 as usize];
+                scope.parent.is_none() || scope.is_pub
+            })
+    }
+
+    /// Whether a type of this package `ty` names, itself or inside
+    /// `Option`, `Result`, `Vec`, or `HashMap`, is one other packages
+    /// cannot name: its name and the module that keeps them out, for an
+    /// item of a `.rs` module they can use (M5b2 spec 2.3).
+    pub(super) fn hidden_from_other_packages(&self, ty: &Ty) -> Option<(String, ModuleId)> {
+        let (name, module, is_pub, other_package) = match ty {
+            Ty::Option(inner) | Ty::Vec(inner) | Ty::Shared(inner) => {
+                return self.hidden_from_other_packages(inner);
+            }
+            Ty::Result(ok, err) | Ty::HashMap(ok, err) => {
+                return self
+                    .hidden_from_other_packages(ok)
+                    .or_else(|| self.hidden_from_other_packages(err));
+            }
+            Ty::Struct(id) => {
+                let def = &self.structs[id.0 as usize];
+                (&def.name, def.module, def.is_pub, def.package.is_some())
+            }
+            Ty::Enum(id) => {
+                let def = &self.enums[id.0 as usize];
+                (&def.name, def.module, def.is_pub, def.package.is_some())
+            }
+            _ => return None,
+        };
+        if other_package || self.exported(module, is_pub) {
+            return None;
+        }
+        Some((name.clone(), self.outside_blocker(module)?))
+    }
+
+    /// V0105 at `span` for the `.rs` item `item` of a library, which other
+    /// packages can use, naming the type `name`, which the module
+    /// `blocker` keeps from them (see [`Self::hidden_from_other_packages`]).
+    pub(super) fn rust_item_hidden_from_outside(
+        &self,
+        name: &str,
+        blocker: ModuleId,
+        span: Span,
+        item: &str,
+    ) -> Diagnostic {
+        let (short, decl) = self.mod_name_and_decl(blocker);
+        declared_without_pub(
+            Diagnostic::new(
+                codes::V0105,
+                span,
+                format!(
+                    "`{name}` is in module `{short}`, which other packages cannot see, but \
+                     `{item}` can be used from other packages; write `pub mod {short};`"
+                ),
+            )
+            .with_note(LIBRARY_NOTE),
+            decl,
+            "mod",
+        )
+    }
+
+    /// The highest module on `module`'s chain, itself included, declared
+    /// without `pub`: the one that keeps other packages out.
+    fn outside_blocker(&self, module: ModuleId) -> Option<ModuleId> {
+        self.ancestors(module)
+            .filter(|&m| {
+                let scope = &self.scopes[m.0 as usize];
+                scope.parent.is_some() && !scope.is_pub
+            })
+            .last()
+    }
+
+    /// V0105 at `span`, for a type `name` declared in `module` (its
+    /// declaration and keyword in `declared`), which `item` of a library
+    /// names and other packages cannot (M5b2 spec 2.3).
+    fn hidden_from_outside(
+        &self,
+        name: &str,
+        module: ModuleId,
+        is_pub: bool,
+        declared: (Span, &str),
+        span: Span,
+        item: &str,
+    ) -> Diagnostic {
+        let note = LIBRARY_NOTE;
+        let (decl, keyword) = declared;
+        match self.outside_blocker(module).filter(|_| is_pub) {
+            None => declared_without_pub(
+                Diagnostic::new(
+                    codes::V0105,
+                    span,
+                    format!(
+                        "`{name}` is used by `{item}`, which other packages can use, but is not \
+                         public; add `pub` to the {keyword}"
+                    ),
+                )
+                .with_note(note),
+                decl,
+                keyword,
+            ),
+            Some(blocker) => {
+                let (short, decl) = self.mod_name_and_decl(blocker);
+                declared_without_pub(
+                    Diagnostic::new(
+                        codes::V0105,
+                        span,
+                        format!(
+                            "`{name}` is in module `{short}`, which other packages cannot see, \
+                             but `{item}` can be used from other packages; write `pub mod \
+                             {short};` (or make `{item}` private)"
+                        ),
+                    )
+                    .with_note(note),
+                    decl,
+                    "mod",
+                )
+            }
+        }
     }
 
     /// For an item imported from a `.rs` module whose reach is

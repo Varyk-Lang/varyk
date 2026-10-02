@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0210]: `Plan` cannot be read from JSON
+ --> src/main.vr:7:37
+  |
+3 |     stop: route::Stop,
+  |     ----------------- `Stop` is declared in the package `route`
+...
+7 |     let plan: Result<Plan, Error> = json::parse("{}");
+  |                                     ^^^^^^^^^^^^^^^^^ `Plan` cannot be read from JSON
+  |
+  = note: a package is built without knowing who uses it, so only `route` can convert its own types through JSON; do it there instead, or give this field a type of this package in place of `Stop`

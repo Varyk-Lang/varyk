@@ -53,7 +53,7 @@ impl<'a> Mapper<'a> {
         ImportedSig {
             name: imported.name,
             module: self.module,
-            owner,
+            owner: owner.map(UserType::Struct),
             self_mode: match imported.receiver {
                 Some(SelfMode::Shared) => Some(ParamMode::SharedBorrow),
                 Some(SelfMode::Mutable) => Some(ParamMode::MutableBorrow),
@@ -68,6 +68,8 @@ impl<'a> Mapper<'a> {
             within: None,
             redefined_in,
             is_async: imported.is_async,
+            private: None,
+            package: None,
         }
     }
 

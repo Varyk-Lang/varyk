@@ -6,6 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::PackageCrate;
 use super::messages::{self, Message};
 use crate::backend::SourceMap;
 
@@ -57,6 +58,9 @@ pub(super) enum Goal {
 /// `rendered` field this can classify and print itself, instead of cargo
 /// rendering it straight to stderr.
 ///
+/// A message from the crate of a Varyk package of the build, one of
+/// `packages`, is classified as that package's (M5b2 spec 4.3).
+///
 /// Cargo's output is captured; on failure its stderr and the classified
 /// messages are returned in [`DriverError::Cargo`].
 pub(super) fn run_cargo(
@@ -65,6 +69,7 @@ pub(super) fn run_cargo(
     goal: Goal,
     map: &SourceMap<'_>,
     copied: &[(String, PathBuf)],
+    packages: &[PackageCrate],
 ) -> Result<(String, String, Vec<Message>), DriverError> {
     let manifest = std::path::absolute(build_dir.join("Cargo.toml"))?;
     let target_dir = std::path::absolute(target_dir)?;
@@ -95,7 +100,7 @@ pub(super) fn run_cargo(
         .map_err(DriverError::Spawn)?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let classified = classify_messages(stdout.lines(), map, copied, &crate_src);
+    let classified = classify_messages(stdout.lines(), map, copied, &crate_src, packages);
 
     if !output.status.success() {
         return Err(DriverError::Cargo {
@@ -107,21 +112,43 @@ pub(super) fn run_cargo(
 }
 
 /// Reads every `compiler-message` line of cargo's `--message-format=json`
-/// output and classifies it (spec 5); other reasons (`compiler-artifact`,
-/// `build-finished`, ...) are ignored. A V0900 that may follow from an
-/// error in a user's `.rs` file says so (see
+/// output and classifies it (spec 5), as one of `packages`' when its
+/// `manifest_path` is that package crate's (M5b2 spec 4.3); other reasons
+/// (`compiler-artifact`, `build-finished`, ...) are ignored. A V0900 that
+/// may follow from an error in a user's `.rs` file says so (see
 /// [`messages::after_user_errors`]).
 fn classify_messages<'a>(
     lines: impl Iterator<Item = &'a str>,
     map: &SourceMap<'_>,
     copied: &[(String, PathBuf)],
     crate_src: &Path,
+    packages: &[PackageCrate],
 ) -> Vec<Message> {
+    let canonical = crate::packages::canonical;
+    let manifests: Vec<PathBuf> = packages
+        .iter()
+        .map(|package| canonical(&package.dir.join("Cargo.toml")))
+        .collect();
     let classified = lines
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|value| value.get("reason").and_then(|r| r.as_str()) == Some("compiler-message"))
-        .filter_map(|value| value.get("message").cloned())
-        .filter_map(|message| messages::classify(&message, map, copied, crate_src))
+        .flat_map(|value| {
+            let package = value
+                .get("manifest_path")
+                .and_then(|path| path.as_str())
+                .map(|path| canonical(Path::new(path)))
+                .and_then(|path| manifests.iter().position(|manifest| *manifest == path))
+                .and_then(|index| packages.get(index));
+            let Some(message) = value.get("message") else {
+                return Vec::new();
+            };
+            match package {
+                Some(package) => messages::classify_package(message, package),
+                None => messages::classify(message, map, copied, crate_src)
+                    .into_iter()
+                    .collect(),
+            }
+        })
         .collect();
     messages::after_user_errors(classified)
 }

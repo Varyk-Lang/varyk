@@ -3,5 +3,9 @@ name = "users"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "users"
+path = "src/main.vr"
+
 [dependencies]
 varyk-std = "0.4.0"

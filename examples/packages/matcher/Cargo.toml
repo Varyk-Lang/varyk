@@ -3,5 +3,9 @@ name = "matcher"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "matcher"
+path = "src/main.vr"
+
 [dependencies]
 regex-lite = "0.1"

@@ -1,0 +1,3 @@
+fn main() {
+    let settings: Result<route::Settings, Error> = env::parse();
+}

@@ -67,7 +67,7 @@ a crate; a dependency is used from a `.rs` facade in the same package.
 - [x] Field-level `pub`
 - [x] Import of Rust structs, their inherent methods, and enums from `.rs` modules
 - [x] Rust-layer errors mapped to Varyk source through a line-level source map (V0900); the user's `.rs` errors and warnings shown at their file; item-level lint allows on generated code
-- [x] `varyk init` with a `build.rs` so plain `cargo build` works, and `varyk emit`
+- [x] `varyk init` with a `build.rs` so plain `cargo build` works, and `varyk emit` (superseded in 5b2: no `build.rs`, no stub, and `varyk emit` is removed; `Cargo.toml` names the `.vr` root)
 - [x] `varyk publish`: a plain Rust crate with the generated `.rs` and the `.vr` sources included
 - [x] Three example packages building and running with expected output; soundness templates for every new construct
 - [x] `docs/language.md`, `docs/design.md`, `docs/open-questions.md`, and `docs/roadmap.md` updated
@@ -103,11 +103,11 @@ section 7 of the spec.
 
 ## Milestone 5: batteries for services
 
-Milestone 5 is three milestones. The bar for the whole of it is one golden
-path: a users API on a database is `varyk init`, one file, and `varyk run`
-away, within fifteen minutes of `cargo install varyk`, and
+Milestone 5 is five milestones. The bar for the whole of it is one golden
+path: a users API on a database is `varyk init`, `varyk add http sql`, one file,
+and `varyk run` away, within fifteen minutes of `cargo install varyk`, and
 `varyk build --release` leaves an ordinary native executable. It is met at
-the end of 5b2, and promotion waits for it.
+the end of 5b4, and promotion waits for it.
 
 ### Milestone 5a: data, configuration, logging, and tests
 
@@ -134,14 +134,36 @@ Design: [specs/2026-10-01-milestone-5b1-design.md](specs/2026-10-01-milestone-5b
 - [x] `time::sleep`, and `pub async fn` imported from `.rs` modules
 - [x] Examples `tasks`, `fanout`, and `shared`; `docs/language.md`, `docs/design.md`, `docs/open-questions.md`, and `docs/roadmap.md` updated
 
-### Milestone 5b2: HTTP and the database
+### Milestone 5b2: packages
 
-- [ ] HTTP server on a proven Rust crate, chosen at that time; application state shared by every handler is a `Shared<T>`
-- [ ] HTTP client on the same stack
-- [ ] Databases through one API; sqlx is the candidate crate
-- [ ] `.rs` signatures naming Varyk-declared types and `varyk_std::Error`, so the `varyk-std` facades can take and return Varyk structs (moved from milestone 4)
-- [ ] The examples' Rust stops calling `expect`: `Matcher::new` in `examples/packages/matcher/src/text.rs` returns a `Result` the Varyk code handles, and the `build.rs` that `varyk init` writes (copied into the example packages) reports a missing `OUT_DIR` without panicking, so the examples follow the rule that nothing stops a program because a value is absent
+Design: [specs/2026-10-02-milestone-5b2-design.md](specs/2026-10-02-milestone-5b2-design.md).
+HTTP and the database move to packages in 5b3 and 5b4 below: `varyk-std`
+stays small, and anything heavy is a package the writer adds.
+
+- [x] A Varyk package named from Varyk code by its `Cargo.toml` key, to any depth
+- [x] Varyk packages compiled by `varyk` from their `.vr` sources, never from shipped Rust or a build script
+- [x] Packages built only by `varyk`: `Cargo.toml` names the `.vr` root, no `build.rs` or stub from `varyk init`, `varyk emit` removed
+- [x] The examples' Rust stops calling `expect`: `Matcher::new` in `examples/packages/matcher/src/text.rs` returns a `Result` the Varyk code handles, and no example package carries the `build.rs` that `varyk init` used to write, so the examples follow the rule that nothing stops a program because a value is absent
+- [x] Examples `route` and `trip`; `docs/language.md`, `docs/design.md`, `docs/open-questions.md`, and `docs/roadmap.md` updated
+
+### Milestone 5b3: facades and `varyk-sql`
+
+- [ ] A `.rs` function with one type parameter standing for any Varyk data type (serde's `Serialize` or `DeserializeOwned`), chosen from the argument or from where the result goes
+- [ ] A `.rs` function whose last parameter takes any number of data values
+- [ ] A `.rs` parameter of type `&'static str` taking only text written in the program
+- [ ] `varyk_std::Error` in a `.rs` signature
+- [ ] `pub use` in a `.vr` file, and `varyk add` shorthands for official packages
+- [ ] `varyk-sql` on sqlx: SQLite, Postgres, and MySQL, each a cargo feature; `sql::connect(url)`, and on a pool `one`, `first`, `all`, and `run`, each taking the query and its values; rows read into structs by column name; each database's own placeholders, passed through; the query text a literal, so a query built from input is a compile error; no secret in an error message
+
+### Milestone 5b4: `varyk-http` and the golden path
+
+- [ ] An HTTP server with an explicit route table (`app.get("/users/{id}", get_user)`); a handler's parameters bound by name to the route, by type to the JSON body and to shared state (a `Shared<T>`); the route checked against the handler by `varyk check`; the return value as the response, `None` as 404
+- [ ] `Error` carrying an optional status set by constructors (`http::bad_request(..)`); an error without one is a 500 whose message is logged and not sent
+- [ ] An HTTP client in the same package
+- [ ] The `users` API on a database, and the fifteen-minute path: `varyk init`, `varyk add http sql`, one file, and `varyk run`
 - [ ] An agent evaluation: the examples written by a model from `docs/language.md` alone, pass rates published, before any page claims that agents write Varyk well
+
+After 5b4, `varyk-mongo` and `varyk-redis` are the next packages.
 
 ## Milestone 6: tooling and beyond
 
@@ -150,15 +172,17 @@ Design: [specs/2026-10-01-milestone-5b1-design.md](specs/2026-10-01-milestone-5b
 - [ ] Nested modules in `.rs` files
 - [ ] Import of Rust tuple and unit structs
 - [ ] `Debug` on imported Rust structs, with a `{:?}` placeholder
-- [ ] Direct import of a published Varyk library from Varyk
 - [ ] Decision on a native backend behind the `Backend` trait
 
 ## Unscheduled
 
+`.rs` signatures naming Varyk-declared types, which the type parameter of
+milestone 5b3 makes unnecessary for what a facade needs (moved from 5b2).
+
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
 
-TOML, beside the rest of the cuts listed under "Not in milestone 5b1" in
+TOML, beside the rest of the cuts listed under "Not in milestone 5b2" in
 [language.md](language.md): nothing on the golden path needs it, and the
 same machinery adds it later.
 

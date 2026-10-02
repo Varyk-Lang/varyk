@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0210]: `Config` cannot be read from the environment
+ --> src/main.vr:7:41
+  |
+3 |     mode: route::Mode,
+  |     ----------------- `Mode` is declared in the package `route`
+...
+7 |     let config: Result<Config, Error> = env::parse();
+  |                                         ^^^^^^^^^^^^ `Config` cannot be read from the environment
+  |
+  = note: a package is built without knowing who uses it, so only `route` can convert its own types through the environment; do it there instead, or give this field a type of this package in place of `Mode`

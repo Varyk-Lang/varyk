@@ -34,6 +34,7 @@ use std::path::{Path, PathBuf};
 
 use varyk_syntax::Span;
 
+use super::PackageCrate;
 use crate::backend::SourceMap;
 use crate::diagnostics::Diagnostic;
 use crate::diagnostics::codes::{V0900, V0901};
@@ -50,6 +51,9 @@ pub enum Message {
     /// The primary span was in a file this crate generated: V0900 at the
     /// mapped Varyk span.
     Generated(Diagnostic),
+    /// An error in the crate of a Varyk package of the build: V0900 at
+    /// the package's `Cargo.toml` (M5b2 spec 4.3).
+    Package(Diagnostic),
     /// The primary span was in a copied `.rs` module: the user's own
     /// Rust, rustc's rendered text as is but with every copied file's
     /// internal path rewritten to its own user file. `file`, `line`,
@@ -172,6 +176,76 @@ pub fn classify(
         Some(_) => None,
         None => Some(other(&raw_rendered, level, text, copied, crate_src)),
     }
+}
+
+/// Classifies one rustc compiler message from the crate written for
+/// `package`, a Varyk package of the build (M5b2 spec 4.3). Its warnings
+/// are dropped. An error is V0900 naming the package, at its `Cargo.toml`,
+/// since the source map covers only the program's own crate, followed by
+/// rustc's own text as a note: when the error is in one of the package's
+/// own `.rs` modules, it is that package's Rust, and no Varyk bug is
+/// reported; anywhere else in the crate, Varyk generated it, so it is.
+/// An error with no place in a file (rustc's "aborting" line, say) is
+/// shown as for the program's own crate.
+pub fn classify_package(msg: &serde_json::Value, package: &PackageCrate) -> Vec<Message> {
+    let (Some(level), Some(raw_rendered)) = (
+        msg.get("level").and_then(|l| l.as_str()),
+        msg.get("rendered").and_then(|r| r.as_str()),
+    ) else {
+        return Vec::new();
+    };
+    if level != "error" {
+        return Vec::new();
+    }
+    let copied = &package.generated.copied;
+    let text = msg
+        .get("message")
+        .and_then(|m| m.as_str())
+        .unwrap_or(raw_rendered)
+        .to_string();
+    let file_name = primary_span(msg)
+        .and_then(|primary| primary.get("file_name"))
+        .and_then(|f| f.as_str());
+    let Some(file_name) = file_name else {
+        let level = level.to_string();
+        return vec![other(raw_rendered, level, text, copied, &package.dir)];
+    };
+    let tree_path = tree_relative(file_name, &package.dir);
+    let headline = match msg
+        .get("code")
+        .and_then(|c| c.get("code"))
+        .and_then(|c| c.as_str())
+    {
+        Some(code) => format!("{text} ({code})"),
+        None => text.clone(),
+    };
+    let mut diagnostic = Diagnostic::new(
+        V0900,
+        Span::new(package.manifest_file, 0, 0),
+        format!(
+            "the package `{}` {} did not compile: {headline}",
+            package.name, package.version
+        ),
+    );
+    diagnostic = match copied.iter().find(|(path, _)| path == tree_path.as_ref()) {
+        Some((_, source)) => diagnostic.with_note(format!(
+            "the error is in the package's own Rust, `{}`, which Varyk builds as it is; \
+             the package's author can fix it",
+            source.display()
+        )),
+        None => diagnostic.with_note(format!(
+            "{BUG_NOTE}: its own checks should have caught this before rustc ran; \
+             please report it at {ISSUES_URL}"
+        )),
+    };
+    vec![
+        Message::Package(diagnostic),
+        Message::Other {
+            rendered: rewrite_copied_paths(raw_rendered, copied, &package.dir),
+            level: "note".to_string(),
+            message: text,
+        },
+    ]
 }
 
 /// V0901 at `span` when rustc's error `text` (`msg`'s headline) says a
@@ -865,5 +939,102 @@ mod tests {
 
         let json_out = render_json(std::slice::from_ref(&diagnostic), &sources);
         assert!(json_out.contains("\"V0900\""), "{json_out}");
+    }
+
+    /// The crate of the package `route` 0.1.0, whose `Cargo.toml` is file
+    /// 3, with its `.rs` module `src/helper.rs` copied from
+    /// `../route/src/helper.rs`.
+    fn route_crate() -> PackageCrate {
+        PackageCrate {
+            name: "route".to_string(),
+            version: "0.1.0".to_string(),
+            manifest_file: FileId(3),
+            dir: PathBuf::from("/app/target/varyk/packages/route-0.1.0"),
+            generated: crate_with(
+                Vec::new(),
+                vec![(
+                    "src/helper.rs".to_string(),
+                    PathBuf::from("../route/src/helper.rs"),
+                )],
+            ),
+        }
+    }
+
+    fn package_message(level: &str, file: &str) -> serde_json::Value {
+        json!({
+            "message": "mismatched types",
+            "level": level,
+            "code": {"code": "E0308"},
+            "spans": [{"file_name": file, "line_start": 2, "is_primary": true}],
+            "rendered": format!("{level}[E0308]: mismatched types\n --> {file}:2:5\n"),
+        })
+    }
+
+    #[test]
+    fn a_warning_in_a_package_crate_is_dropped() {
+        let crate_ = route_crate();
+        assert_eq!(
+            classify_package(&package_message("warning", "src/lib.rs"), &crate_),
+            []
+        );
+        assert_eq!(
+            classify_package(&package_message("warning", "src/helper.rs"), &crate_),
+            []
+        );
+    }
+
+    #[test]
+    fn an_error_in_a_package_s_generated_rust_is_v0900_naming_it_and_a_varyk_bug() {
+        let messages = classify_package(&package_message("error", "src/lib.rs"), &route_crate());
+        let [
+            Message::Package(diagnostic),
+            Message::Other { rendered, .. },
+        ] = &messages[..]
+        else {
+            panic!("expected a V0900 and rustc's text, got {messages:?}");
+        };
+        assert_eq!(diagnostic.code, V0900);
+        assert_eq!(diagnostic.span, Span::new(FileId(3), 0, 0));
+        assert_eq!(
+            diagnostic.message,
+            "the package `route` 0.1.0 did not compile: mismatched types (E0308)"
+        );
+        assert!(
+            diagnostic
+                .notes
+                .iter()
+                .any(|note| note.starts_with(BUG_NOTE)),
+            "{:?}",
+            diagnostic.notes
+        );
+        assert!(rendered.contains("src/lib.rs:2:5"), "{rendered}");
+    }
+
+    #[test]
+    fn an_error_in_a_package_s_rs_module_is_its_rust_and_no_varyk_bug() {
+        let messages = classify_package(&package_message("error", "src/helper.rs"), &route_crate());
+        let [
+            Message::Package(diagnostic),
+            Message::Other { rendered, .. },
+        ] = &messages[..]
+        else {
+            panic!("expected a V0900 and rustc's text, got {messages:?}");
+        };
+        assert!(
+            diagnostic.message.contains("the package `route` 0.1.0"),
+            "{}",
+            diagnostic.message
+        );
+        assert_eq!(
+            diagnostic.notes,
+            [
+                "the error is in the package's own Rust, `../route/src/helper.rs`, which Varyk \
+              builds as it is; the package's author can fix it"
+            ]
+        );
+        assert!(
+            rendered.contains("../route/src/helper.rs:2:5"),
+            "{rendered}"
+        );
     }
 }

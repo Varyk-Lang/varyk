@@ -238,7 +238,7 @@ pub enum ParamMode {
 }
 
 mod check;
-mod derives;
+pub(crate) mod derives;
 
 pub use check::typecheck;
 pub use derives::{Derives, Serde};

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0401]: this package lists the Varyk package `units` under `[dev-dependencies]`, which is not supported yet
+ --> Cargo.toml:1:2
+  |
+1 | [package]
+  |  ^^^^^^^ this package lists the Varyk package `units` under `[dev-dependencies]`, which is not supported yet
+  |
+  = note: only `varyk` may build a Varyk package, and cargo would build this one on its own; a Varyk package can be used only from the `[dependencies]` of a Varyk program or package

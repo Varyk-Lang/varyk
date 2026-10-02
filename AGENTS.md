@@ -55,12 +55,21 @@ output; `crates/varyk/tests/examples.rs` checks that.
   targets, ...), and checks the shape of what it accepts; the syntax of
   values it does not interpret is cargo's to check. Every crate Varyk
   builds uses the package's own manifest (`Package::isolated_manifest`), so
-  cargo's verdict is the same under `varyk build`, `varyk publish`, and
-  plain `cargo build`, and a manifest cargo rejects is a bug in that
-  manifest. Do not chase further ways cargo can reject a manifest.
+  cargo's verdict is the same under `varyk build` and `varyk publish`, and
+  a manifest cargo rejects is a bug in that manifest. Do not chase further
+  ways cargo can reject a manifest.
 - **No hidden allocation.** The compiler inserts exactly one allocation, a
   string literal placed into an owned slot. Never solve an ownership
   problem by emitting `.clone()` or `.to_string()` on anything else.
+- **Safe by default.** Varyk is for services that face the network, so
+  security is a design constraint, not a later pass. What runs is what a
+  reader can review: do not design a path where Rust that nobody reads,
+  such as generated Rust shipped by someone else or a build script of a
+  dependency's own, runs in a user's build. A battery keeps data apart
+  from code (a value travels beside a SQL query, never pasted into its
+  text) and keeps the message of an internal failure away from the client.
+  Where the easy way and the safe way differ, the safe way is the default
+  and the other is asked for by name.
 - **Diagnostics have stable codes** (`crates/varyk/src/diagnostics/codes.rs`).
   A code is never reused for another meaning. A new diagnostic needs a
   fixture under `crates/varyk/tests/fixtures/errors/<code>_<slug>/`, a
@@ -99,8 +108,10 @@ table are in `CONTRIBUTING.md`.
 
 - `crates/varyk/src/` `package.rs` reads `Cargo.toml`; `resolve/` loads
   the module tree and resolves names, `use`, and visibility; `interop/`
-  imports `.rs` modules with `syn`; `driver/` writes the generated tree and
-  runs cargo, `init`, `emit`, and `publish`
+  imports `.rs` modules with `syn`; `packages.rs` asks cargo for the
+  package graph and finds the Varyk packages of a build; `driver/` writes
+  the generated tree, one crate per Varyk package, and runs cargo, `init`,
+  and `publish`
 - `docs/specs/` the design the compiler is built from, with its decisions log
 - `docs/language.md` the one-page reference, including every diagnostic code
 - `docs/roadmap.md` what comes next; `docs/plans/` implementation plans and

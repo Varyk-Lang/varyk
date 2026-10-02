@@ -45,7 +45,9 @@ pub(super) fn import_items(items: Vec<Item>, names: &Names, text: &str) -> Impor
                 }
                 match why_not_imported(&item_fn.sig) {
                     Some(why) => module.skipped_fns.push((name, "function", why)),
-                    None => module.fns.extend(import_fn(&item_fn.sig, None, names)),
+                    None => module
+                        .fns
+                        .extend(import_fn(&item_fn.sig, None, names, text)),
                 }
             }
             Item::Use(item) if is_plain_pub(&item.vis) => {
@@ -277,7 +279,7 @@ pub(super) fn import_items(items: Vec<Item>, names: &Names, text: &str) -> Impor
             } else {
                 target
                     .methods
-                    .extend(import_fn(&method.sig, Some(&owner), &names));
+                    .extend(import_fn(&method.sig, Some(&owner), &names, text));
             }
         }
     }
@@ -404,8 +406,14 @@ fn inherent_owner(item: &ItemImpl) -> Option<String> {
 
 /// The [`ImportedFn`] of signature `sig`, a method or associated function
 /// when `owner` is its struct; `None` for an `unsafe`, `const`, or
-/// `extern` fn, which is not imported at all.
-fn import_fn(sig: &Signature, owner: Option<&str>, names: &Names) -> Option<ImportedFn> {
+/// `extern` fn, which is not imported at all. `text` is the file's
+/// source, for the byte range of its name.
+fn import_fn(
+    sig: &Signature,
+    owner: Option<&str>,
+    names: &Names,
+    text: &str,
+) -> Option<ImportedFn> {
     if why_not_imported(sig).is_some() {
         return None;
     }
@@ -461,6 +469,7 @@ fn import_fn(sig: &Signature, owner: Option<&str>, names: &Names) -> Option<Impo
         signature,
         ret_root,
         is_async,
+        span: name_range(&sig.ident, text),
     })
 }
 
