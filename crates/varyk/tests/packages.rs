@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{empty_dir, package_dir, varyk_in, varyk_run_with};
+use common::{empty_dir, package_dir, std_config, varyk_in, varyk_run_with};
 
 use varyk::backend::{Backend, CrateInfo, RustBackend};
 use varyk::driver::publish;
@@ -720,8 +720,19 @@ fn add_of_a_path_dependency_works_in_an_inited_package() {
     assert_success(&varyk_in(&parent, &["init", "app"]));
     assert_success(&varyk_in(&parent, &["init", "--lib", "lib"]));
 
+    // `init` pins `varyk-std` to the compiler's version, which a release
+    // pull request names before crates.io has it: use the local one.
+    let std = std_config();
     let output = varyk_run_with(
-        &["add", "lib", "--path", "../lib", "--offline"],
+        &[
+            "add",
+            "lib",
+            "--path",
+            "../lib",
+            "--offline",
+            "--config",
+            &std,
+        ],
         &parent.join("app"),
         &[("CARGO_TERM_COLOR", "never")],
         &[],

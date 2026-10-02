@@ -89,9 +89,7 @@ pub fn std_config() -> String {
 pub fn empty_dir(label: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("packages")
-        .join(format!("{label}-{}-{n}", std::process::id()));
+    let dir = run_dir("packages").join(format!("{label}-{n}"));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create the empty dir");
     dir
@@ -115,9 +113,7 @@ pub fn fixture_dir(kind: &str, case: &str) -> PathBuf {
         .join("tests/fixtures")
         .join(kind)
         .join(case);
-    let dest = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(kind)
-        .join(format!("{case}-{}-{n}", std::process::id()));
+    let dest = run_dir(kind).join(format!("{case}-{n}"));
     let _ = fs::remove_dir_all(&dest);
     copy_dir(&source, &dest);
     dest
@@ -134,12 +130,7 @@ pub fn fixture_dir(kind: &str, case: &str) -> PathBuf {
 /// anything else there once it is a day old, as the soundness harness
 /// does with its scratch directories.
 pub fn example_dir(name: &str) -> PathBuf {
-    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    let root = ROOT.get_or_init(|| {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("examples");
-        sweep(&parent);
-        parent.join(std::process::id().to_string())
-    });
+    let root = run_dir("examples");
     // A fresh directory per call: two tests of one process copying the
     // same example must not clear each other's copy.
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -174,6 +165,22 @@ fn sibling_dependencies(dir: &Path) -> Vec<String> {
         .filter_map(|path| path.strip_prefix("../"))
         .map(str::to_string)
         .collect()
+}
+
+/// This process's own directory under `CARGO_TARGET_TMPDIR/<kind>/`,
+/// named by its id. The first call for a `kind` in a process sweeps
+/// `<kind>/` (see [`sweep`]), so the copies earlier test runs built,
+/// each with its own build cache, do not pile up.
+fn run_dir(kind: &str) -> PathBuf {
+    static SWEPT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join(kind);
+    if let Ok(mut swept) = SWEPT.lock() {
+        if !swept.iter().any(|done| done == kind) {
+            sweep(&parent);
+            swept.push(kind.to_string());
+        }
+    }
+    parent.join(std::process::id().to_string())
 }
 
 /// Removes from `parent` the directory of every other process that has

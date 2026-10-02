@@ -40,6 +40,16 @@
           "type": "toml",
           "path": "/crates/varyk/tests/fixtures/errors/v0404_std_stale_lock/Cargo.toml",
           "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
+          "path": "/crates/varyk/tests/fixtures/errors/v0404_program_without_std_for_a_logging_package/units/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
+          "path": "/crates/varyk/tests/fixtures/errors/v0404_wrong_std_for_a_logging_package/units/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
         }
       ]
     }

@@ -3,7 +3,7 @@ source: crates/varyk/tests/examples.rs
 expression: manifest
 ---
 [dependencies]
-varyk-std = "0.4.0"
+varyk-std = "[version]"
 
 [dependencies.units]
 path = "<UNITS>"
