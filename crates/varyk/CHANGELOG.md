@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.4.0...varyk-v0.5.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* a package's Cargo.toml must name its .vr root ([[bin]] with path src/main.vr, or [lib] with path src/lib.vr), or varyk check reports V0406; varyk emit is removed; varyk init no longer writes build.rs or a stub, and a source package is built with varyk build, not plain cargo build; build may only be left out or false.
+
+### Features
+
+* milestone 5b2, packages ([6c6df21](https://github.com/Varyk-Lang/varyk/commit/6c6df21fe1289ba3e45ae7c6e64d3a20e9f5beb4))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * varyk-syntax bumped from 0.4.0 to 0.5.0
+
 ## [0.4.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.3.0...varyk-v0.4.0) (2026-10-01)
 
 
