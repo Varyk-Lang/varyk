@@ -2,8 +2,8 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0104]: `crates/varyk/tests/fixtures/errors/v0104_rust_crate_dev_dependency/src/js.rs` uses the crate `serde`, which is only in `[dev-dependencies]`: cargo's tests may use it, but a `.rs` module cannot; move it to `[dependencies]` in Cargo.toml
- --> crates/varyk/tests/fixtures/errors/v0104_rust_crate_dev_dependency/src/js.rs:1:5
+error[V0104]: `src/js.rs` uses the crate `serde`, which is only in `[dev-dependencies]`: cargo's tests may use it, but a `.rs` module cannot; move it to `[dependencies]` in Cargo.toml
+ --> src/js.rs:1:5
   |
 1 | use serde::Serialize;
-  |     ^^^^^ `crates/varyk/tests/fixtures/errors/v0104_rust_crate_dev_dependency/src/js.rs` uses the crate `serde`, which is only in `[dev-dependencies]`: cargo's tests may use it, but a `.rs` module cannot; move it to `[dependencies]` in Cargo.toml
+  |     ^^^^^ `src/js.rs` uses the crate `serde`, which is only in `[dev-dependencies]`: cargo's tests may use it, but a `.rs` module cannot; move it to `[dependencies]` in Cargo.toml

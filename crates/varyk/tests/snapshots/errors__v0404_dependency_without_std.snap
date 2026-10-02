@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0404]: this package needs `varyk-std`, which `Cargo.toml` does not list
+  --> units/Cargo.toml:11:2
+   |
+11 | [dependencies]
+   |  ^^^^^^^^^^^^ this package needs `varyk-std`, which `Cargo.toml` does not list
+   |
+   = note: write `varyk-std = "[version]"` under `[dependencies]` in `Cargo.toml`
+   = note: in the package `units` 0.1.0, which this build uses

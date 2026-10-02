@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use toml::Spanned;
 use toml::de::{DeString, DeTable, DeValue};
-use varyk_syntax::{FileId, SourceFile, Span};
+use varyk_syntax::{FileId, FixIt, SourceFile, Span};
 
 use crate::diagnostics::{Diagnostic, codes};
 
@@ -49,7 +49,34 @@ pub struct Package {
     pub lock: Option<PathBuf>,
     /// Where V0404 points in the manifest.
     pub std_spans: StdSpans,
+    /// The root the manifest's target table names (V0406 when it has none).
+    pub(crate) target: RootTarget,
 }
+
+/// The root a manifest's target table names (M5b2 spec 4.6): `[[bin]]` for
+/// a program, `[lib]` for a library.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RootTarget {
+    pub kind: Kind,
+    /// The target's `path`, as written: `src/main.vr` or `src/lib.vr`, or
+    /// in a published dependency `src/lib.rs`.
+    pub path: String,
+}
+
+/// What the manifest being read is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// The package being built: the manifest is the author's.
+    Program,
+    /// A package another one depends on: its manifest may be a published
+    /// one (M5b2 spec 4.4), and its `Cargo.lock` is not read.
+    Dependency,
+}
+
+/// The note on a key that a dependency's manifest has and Varyk does not
+/// know.
+const NEWER_CARGO: &str = "the package may have been published with a newer cargo than this \
+                           Varyk knows; the language reference lists the keys Varyk reads";
 
 /// Places in `Cargo.toml` that [`check_std_dependency`] points at.
 #[derive(Clone, Copy, Debug)]
@@ -86,6 +113,30 @@ pub fn root_of(root: &Path) -> Option<(Kind, PathBuf)> {
 /// in `sources` with the next `FileId` so its diagnostics render like any
 /// other. Never runs cargo.
 pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, Vec<Diagnostic>> {
+    load_as(manifest, sources, Mode::Program, false)
+}
+
+/// Like [`load`], for a package another one depends on: a published
+/// manifest (M5b2 spec 4.4) is accepted, and the `Cargo.lock` beside it is
+/// ignored, so its `lock` is `None`. `local` is whether it is a `path`
+/// package the user may be editing, not one that came from a registry or
+/// git: a key Varyk does not know then is not blamed on a newer cargo.
+pub fn load_dependency(
+    manifest: &Path,
+    sources: &mut Vec<SourceFile>,
+    local: bool,
+) -> Result<Package, Vec<Diagnostic>> {
+    load_as(manifest, sources, Mode::Dependency, !local)
+}
+
+fn load_as(
+    manifest: &Path,
+    sources: &mut Vec<SourceFile>,
+    mode: Mode,
+    published: bool,
+) -> Result<Package, Vec<Diagnostic>> {
+    // Whether an unknown key is blamed on a newer cargo (`NEWER_CARGO`).
+    let newer_cargo = mode == Mode::Dependency && published;
     let file = FileId(sources.len() as u32);
     let (text, unreadable) = match fs::read_to_string(manifest) {
         Ok(text) => (text, None),
@@ -127,6 +178,10 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
         .filter(|(key, _)| !TOP_LEVEL_KEYS.contains(&key.get_ref().as_ref()))
     {
         let name: &str = key.get_ref().as_ref();
+        // `[lib]` and `[[bin]]` are read with the package's root, below.
+        if matches!(name, "lib" | "bin") {
+            continue;
+        }
         let diagnostic = if TARGET_TABLES.contains(&name) {
             let header = if name == "lib" {
                 "`[lib]`".to_string()
@@ -138,19 +193,18 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
                 at(key.span()),
                 format!("{header} is not supported yet"),
             )
-            .with_note(
-                "a Varyk package is one program from `src/main.vr` or one library from \
-                 `src/lib.vr`, which cargo finds by its defaults; target tables are not read",
-            )
+            .with_note(TARGET_NOTE)
         } else {
             Diagnostic::new(
                 codes::V0401,
                 at(key.span()),
                 format!("`{name}` is not supported in `Cargo.toml` yet"),
             )
-            .with_note(
-                "Varyk reads a fixed set of Cargo.toml tables; the language reference lists them",
-            )
+            .with_note(if newer_cargo {
+                NEWER_CARGO
+            } else {
+                "Varyk reads a fixed set of Cargo.toml tables; the language reference lists them"
+            })
         };
         diagnostics.push(diagnostic);
     }
@@ -161,15 +215,21 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
         let inherited = matches!(value.get_ref(), DeValue::Table(table) if entry(table, "workspace").is_some())
             || matches!(name, "name" | "version" | "edition");
         match PACKAGE_KEYS.iter().find(|(known, _)| *known == name) {
+            // A published manifest says `false` for each of these (spec 4.4).
+            None if mode == Mode::Dependency
+                && AUTO_KEYS.contains(&name)
+                && matches!(value.get_ref(), DeValue::Boolean(false)) => {}
             None => diagnostics.push(
                 Diagnostic::new(
                     codes::V0401,
                     at(key.span()),
                     format!("`{name}` is not supported under `[package]` yet"),
                 )
-                .with_note(
-                    "Varyk reads a fixed set of `[package]` keys; the language reference lists them",
-                ),
+                .with_note(if newer_cargo && !AUTO_KEYS.contains(&name) {
+                    NEWER_CARGO
+                } else {
+                    "Varyk reads a fixed set of `[package]` keys; the language reference lists them"
+                }),
             ),
             Some((_, shape)) if !inherited && !shape.accepts(value.get_ref()) => diagnostics.push(
                 Diagnostic::new(
@@ -225,8 +285,8 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
         diagnostics.push(
             Diagnostic::new(codes::V0401, at(links.span()), "`links` cannot be used yet")
                 .with_note(
-                    "a package that `links` a native library needs a build script, and the crate \
-                 `varyk publish` assembles has none",
+                    "a package that `links` a native library needs a build script, and the \
+                     crates Varyk builds run none",
                 ),
         );
     }
@@ -333,6 +393,24 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
         if let Some((_, dependencies)) = table(&doc, kind) {
             for (key, value) in dependencies {
                 check_not_inherited(key.get_ref(), value, &at, &mut diagnostics);
+                // Only a dependency that is linked into the crate can hide
+                // the standard library.
+                if kind != "build-dependencies"
+                    && matches!(key.get_ref().as_ref(), "std" | "core" | "alloc")
+                {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            codes::V0401,
+                            at(key.span()),
+                            format!("a dependency cannot be called `{}`", key.get_ref()),
+                        )
+                        .with_note(
+                            "the name would hide Rust's standard library, which the generated \
+                             Rust uses; call it something else and name the real package with \
+                             `package = \"..\"`",
+                        ),
+                    );
+                }
             }
         }
     }
@@ -349,28 +427,21 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
                 ),
         );
     }
-    // `build` may only be left out or name the `build.rs` that `init`
-    // writes: another script would not run in the crates Varyk builds, and
-    // `false` would keep plain `cargo build` from running the include stub.
+    // `build` may only be left out or `false`: no crate Varyk builds runs a
+    // build script (M5b2 spec 4.6).
     if let Some((key, value)) = entry(package, "build") {
-        let (message, note) = match value.get_ref() {
-            DeValue::String(script) if script == "build.rs" => (None, ""),
-            DeValue::String(_) => (
-                Some("a custom build script cannot be used yet"),
-                "the crate `varyk build` makes and the one `varyk publish` assembles run no \
-                 build script; the `build.rs` that `varyk init` writes only includes the \
-                 generated Rust",
-            ),
-            DeValue::Boolean(false) => (
-                Some("`build` cannot be turned off"),
-                "plain `cargo build` needs the `build.rs` that `varyk init` writes to include \
-                 the generated Rust; leave `build` out",
-            ),
-            _ => (None, ""),
-        };
-        if let Some(message) = message {
-            diagnostics
-                .push(Diagnostic::new(codes::V0401, at(key.span()), message).with_note(note));
+        if matches!(value.get_ref(), DeValue::String(_) | DeValue::Boolean(true)) {
+            diagnostics.push(
+                Diagnostic::new(
+                    codes::V0401,
+                    at(key.span()),
+                    "a build script cannot be used",
+                )
+                .with_note(
+                    "the crates `varyk build` makes and `varyk publish` assembles run no build \
+                     script; leave `build` out, or write `build = false`",
+                ),
+            );
         }
     }
     if let Some((_, targets)) = table(&doc, "target") {
@@ -557,6 +628,16 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
             Kind::Binary
         }
     };
+    let kind_known = has_main != has_lib;
+    let target = check_target(
+        &doc,
+        kind_known.then_some(kind),
+        &name,
+        mode,
+        newer_cargo,
+        &at,
+        &mut diagnostics,
+    );
     if has_main && !has_lib {
         if let Some(reserved) = program_name_problem(&name) {
             diagnostics.push(
@@ -578,6 +659,33 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
+    // Reported only when nothing else is wrong with the manifest, so each
+    // error stays one diagnostic.
+    let Some(target) = target else {
+        let (header, path, name_line) = match kind {
+            Kind::Binary => ("[[bin]]", "src/main.vr", format!("name = \"{name}\"\n")),
+            Kind::Library => ("[lib]", "src/lib.vr", String::new()),
+        };
+        let lines = format!("{header}\n{name_line}path = \"{path}\"\n");
+        let end = text.len();
+        let separator = if text.ends_with('\n') { "\n" } else { "\n\n" };
+        return Err(vec![
+            Diagnostic::new(
+                codes::V0406,
+                package_span,
+                "this `Cargo.toml` does not say where the package's code starts",
+            )
+            .with_note(format!(
+                "a Varyk package names its root in `Cargo.toml`, so that only `varyk` builds it; \
+                 add these lines:\n{}",
+                lines.trim_end()
+            ))
+            .with_fix_it(FixIt {
+                span: at(end..end),
+                replacement: format!("{separator}{lines}"),
+            }),
+        ]);
+    };
 
     let manifest = match text.parse::<toml::Table>() {
         Ok(table) => table,
@@ -601,7 +709,8 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
     let lock_dir = workspace
         .as_ref()
         .map_or(root.as_path(), |(dir, _)| dir.as_path());
-    let lock = Some(lock_dir.join("Cargo.lock")).filter(|lock| lock.is_file());
+    let lock =
+        Some(lock_dir.join("Cargo.lock")).filter(|lock| mode == Mode::Program && lock.is_file());
     Ok(Package {
         entry: root.join(match kind {
             Kind::Binary => "src/main.vr",
@@ -617,7 +726,143 @@ pub fn load(manifest: &Path, sources: &mut Vec<SourceFile>) -> Result<Package, V
         workspace,
         lock,
         std_spans,
+        target,
     })
+}
+
+/// The note on a target table that is not allowed.
+const TARGET_NOTE: &str = "a Varyk package is one program from `src/main.vr` or one library from \
+                           `src/lib.vr`; the only target table it may have is the one that names \
+                           that root";
+
+/// The `[[bin]]` or `[lib]` that names the package's own root (M5b2 spec
+/// 4.6, and for a dependency 4.4); every other target table is V0402,
+/// here or in the caller. `kind` is `None` when the package has no single
+/// root, which is reported elsewhere, so no target table is accepted.
+fn check_target(
+    doc: &DeTable<'_>,
+    kind: Option<Kind>,
+    name: &str,
+    mode: Mode,
+    newer_cargo: bool,
+    at: &impl Fn(Range<usize>) -> Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<RootTarget> {
+    let (wanted, header, paths): (&str, &str, &[&str]) = match (kind, mode) {
+        (Some(Kind::Binary), Mode::Program) => ("bin", "[[bin]]", &["src/main.vr"]),
+        (Some(Kind::Binary), Mode::Dependency) => {
+            ("bin", "[[bin]]", &["src/main.vr", "src/main.rs"])
+        }
+        (Some(Kind::Library), Mode::Program) => ("lib", "[lib]", &["src/lib.vr"]),
+        (Some(Kind::Library), Mode::Dependency) => ("lib", "[lib]", &["src/lib.vr", "src/lib.rs"]),
+        (None, _) => ("", "", &[]),
+    };
+    let first_path = paths.first().copied().unwrap_or_default();
+    let mut found = None;
+    for key_name in ["lib", "bin"] {
+        let Some((key, value)) = entry(doc, key_name) else {
+            continue;
+        };
+        let header_of = if key_name == "lib" {
+            "[lib]"
+        } else {
+            "[[bin]]"
+        };
+        let refuse = |span: Range<usize>, message: String| {
+            let note = match kind {
+                _ if newer_cargo && key_name == wanted => NEWER_CARGO.to_string(),
+                Some(Kind::Binary) => format!(
+                    "{TARGET_NOTE}: `[[bin]]` with `name = \"{name}\"` and `path = \"src/main.vr\"`"
+                ),
+                Some(Kind::Library) => {
+                    format!("{TARGET_NOTE}: `[lib]` with `path = \"src/lib.vr\"`")
+                }
+                None => TARGET_NOTE.to_string(),
+            };
+            Diagnostic::new(codes::V0402, at(span), message).with_note(note)
+        };
+        if key_name != wanted {
+            diagnostics.push(refuse(
+                key.span(),
+                format!("`{header_of}` is not supported yet"),
+            ));
+            continue;
+        }
+        // `[lib]` is one table; `[[bin]]` is a list of exactly one.
+        let table = match value.get_ref() {
+            DeValue::Table(table) if key_name == "lib" => Some(table),
+            DeValue::Array(items) if key_name == "bin" => match (items.first(), items.len()) {
+                (Some(only), 1) => match only.get_ref() {
+                    DeValue::Table(table) => Some(table),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(table) = table else {
+            diagnostics.push(refuse(
+                key.span(),
+                format!("`{header}` is not supported here: a package has one"),
+            ));
+            continue;
+        };
+        let expected_name = if kind == Some(Kind::Library) {
+            name.replace('-', "_")
+        } else {
+            name.to_string()
+        };
+        let mut path = None;
+        let mut problems = false;
+        for (field, field_value) in table.iter() {
+            let field_name: &str = field.get_ref().as_ref();
+            match (field_name, field_value.get_ref()) {
+                ("name", DeValue::String(value)) if *value == expected_name => {}
+                ("name", _) => {
+                    problems = true;
+                    diagnostics.push(refuse(
+                        field_value.span(),
+                        format!("the `name` of `{header}` must be `{expected_name}`"),
+                    ));
+                }
+                ("path", DeValue::String(value)) if paths.contains(&value.as_ref()) => {
+                    path = Some(value.to_string());
+                }
+                ("path", _) => {
+                    problems = true;
+                    diagnostics.push(refuse(
+                        field_value.span(),
+                        format!("the `path` of `{header}` must be `{}`", first_path),
+                    ));
+                }
+                _ => {
+                    problems = true;
+                    diagnostics.push(refuse(
+                        field.span(),
+                        format!("`{field_name}` is not supported under `{header}` yet"),
+                    ));
+                }
+            }
+        }
+        if path.is_none() && !problems {
+            problems = true;
+            diagnostics.push(refuse(
+                key.span(),
+                format!("`{header}` needs a `path`, `{}`", first_path),
+            ));
+        }
+        if key_name == "bin" && entry(table, "name").is_none() && !problems {
+            problems = true;
+            diagnostics.push(refuse(
+                key.span(),
+                format!("`{header}` needs a `name`, `{expected_name}`"),
+            ));
+        }
+        if !problems {
+            found = kind.zip(path).map(|(kind, path)| RootTarget { kind, path });
+        }
+    }
+    found
 }
 
 /// The span of the key `name` in `doc`, when there is one.
@@ -647,7 +892,15 @@ pub fn check_std_dependency(
     let refuse =
         |message: &str| vec![Diagnostic::new(codes::V0404, at, message).with_note(line.clone())];
     match package.dependencies.get("varyk-std") {
-        None => return refuse("this program needs `varyk-std`, which `Cargo.toml` does not list"),
+        None => {
+            let what = match package.kind {
+                Kind::Binary => "program",
+                Kind::Library => "package",
+            };
+            return refuse(&format!(
+                "this {what} needs `varyk-std`, which `Cargo.toml` does not list"
+            ));
+        }
         Some(toml::Value::String(requirement)) => {
             if !requirement_matches(requirement, compiler) {
                 return refuse(&format!(
@@ -700,8 +953,48 @@ pub fn check_std_dependency(
     Vec::new()
 }
 
+/// The `varyk-std` checks of a program's build (M5b2 spec 4.2): first
+/// [`check_std_dependency`] for the program, which `uses_std`; then, when
+/// that finds nothing and any package of the build uses `varyk-std`
+/// (`build_uses_std`), the `varyk-std` cargo resolved for the build
+/// (`resolved`, from the package graph) must be no older than the
+/// compiler. That is V0404 at the program's `varyk-std` line, or at its
+/// `Cargo.toml` when it has none, so a stale lock is reported once.
+pub fn check_build_std(
+    package: &Package,
+    uses_std: bool,
+    build_uses_std: bool,
+    resolved: Option<&str>,
+    compiler_version: &str,
+) -> Vec<Diagnostic> {
+    let problems = check_std_dependency(package, uses_std, compiler_version);
+    if !problems.is_empty() || !build_uses_std {
+        return problems;
+    }
+    let (Some(compiler), Some(resolved)) = (version_triple(compiler_version), resolved) else {
+        return problems;
+    };
+    if version_triple(resolved).is_none_or(|version| version >= compiler) {
+        return problems;
+    }
+    let spans = package.std_spans;
+    vec![
+        Diagnostic::new(
+            codes::V0404,
+            spans.entry.unwrap_or(spans.anchor),
+            format!(
+                "this build would use `varyk-std` {resolved}, which is older than this compiler"
+            ),
+        )
+        .with_note(
+            "the program and the Varyk packages it uses share one `varyk-std`, and cargo picked \
+             an older one than this compiler needs; run `cargo update -p varyk-std`",
+        ),
+    ]
+}
+
 /// `MAJOR.MINOR.PATCH`, ignoring any pre-release or build part.
-fn version_triple(text: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn version_triple(text: &str) -> Option<(u64, u64, u64)> {
     let core = text.split(['-', '+']).next()?;
     let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
     let triple = (parts.next()??, parts.next()??, parts.next()??);
@@ -766,7 +1059,8 @@ fn malformed(err: &toml::de::Error, at: &impl Fn(Range<usize>) -> Span) -> Diagn
 /// letters, digits, `-`, `_`, not starting with a digit), which also keeps
 /// it a single directory name for [`Package::hidden_crate_dir`]; and
 /// `cache`, which is the shared target directory beside the hidden crate,
-/// and `package`, where `varyk publish` assembles its crate.
+/// `package`, where `varyk publish` assembles its crate, and `packages`,
+/// where the packages a build uses are written.
 pub(crate) fn name_problem(name: &str) -> Option<&'static str> {
     if name.is_empty() {
         Some("a name cannot be empty")
@@ -783,6 +1077,11 @@ pub(crate) fn name_problem(name: &str) -> Option<&'static str> {
         Some(
             "Varyk builds a package in `target/varyk/<name>` and assembles `varyk publish`'s \
              crate in `target/varyk/package`, so the two would share a directory",
+        )
+    } else if name.eq_ignore_ascii_case("packages") {
+        Some(
+            "Varyk builds a package in `target/varyk/<name>` and the packages it uses in \
+             `target/varyk/packages`, so the two would share a directory",
         )
     } else {
         None
@@ -818,8 +1117,17 @@ const TOP_LEVEL_KEYS: [&str; 12] = [
     "badges",
 ];
 
-/// Cargo's target tables: none is supported, since a Varyk package has
-/// exactly the one root cargo finds by its defaults.
+/// The `[package]` keys a published manifest sets to `false` (M5b2 spec 4.4).
+const AUTO_KEYS: [&str; 5] = [
+    "autolib",
+    "autobins",
+    "autoexamples",
+    "autotests",
+    "autobenches",
+];
+
+/// Cargo's target tables; `[lib]` and `[[bin]]` are accepted for the
+/// package's own root (see [`check_target`]), the rest are not.
 const TARGET_TABLES: [&str; 5] = ["lib", "bin", "example", "test", "bench"];
 
 /// Every `[package]` key `check` accepts, with the shape of its value;
@@ -1097,11 +1405,14 @@ impl Package {
         }))
     }
 
-    /// The manifest of every crate Varyk builds from this package, the
-    /// hidden one under `target/varyk/<name>` and the one `varyk publish`
-    /// assembles alike, so the two cannot disagree: the package's own
-    /// `Cargo.toml` with `[package] build = false` (neither crate runs a
-    /// build script), the keys that describe the source layout dropped
+    /// The manifest of every crate Varyk builds from this package, before
+    /// the target is made the generated root ([`Self::generated_manifest`],
+    /// which the hidden crate and the assembled one both use, so the two
+    /// cannot disagree; a dependency's crate is made from this one): the
+    /// package's own
+    /// `Cargo.toml` with `[package] build = false` (no crate Varyk builds
+    /// runs a build script, the crates written for Varyk packages
+    /// included), the keys that describe the source layout dropped
     /// (`include`, `exclude`: the tree is a different layout, and a
     /// filter written for `.vr` sources would hide the generated
     /// `src/main.rs` or `src/lib.rs`; `workspace`, which points at a root
@@ -1167,6 +1478,39 @@ impl Package {
         manifest
     }
 
+    /// The root the manifest's target table names.
+    pub fn root_target(&self) -> RootTarget {
+        self.target.clone()
+    }
+
+    /// [`Self::isolated_manifest`] for a crate Varyk writes, the hidden one
+    /// and the assembled one: a target that names a `.vr` root names the
+    /// generated root, `src/main.rs` or `src/lib.rs`, instead.
+    pub fn generated_manifest(&self) -> toml::Table {
+        let mut manifest = self.isolated_manifest();
+        let target = self.root_target();
+        if target.path.ends_with(".vr") {
+            let generated = match target.kind {
+                Kind::Binary => "src/main.rs",
+                Kind::Library => "src/lib.rs",
+            };
+            let path = toml::Value::String(generated.to_string());
+            let table = match target.kind {
+                Kind::Binary => match manifest.get_mut("bin") {
+                    Some(toml::Value::Array(items)) => {
+                        items.first_mut().and_then(toml::Value::as_table_mut)
+                    }
+                    _ => None,
+                },
+                Kind::Library => manifest.get_mut("lib").and_then(toml::Value::as_table_mut),
+            };
+            if let Some(table) = table {
+                table.insert("path".to_string(), path);
+            }
+        }
+        manifest
+    }
+
     /// `<root>/target/varyk/<name>`: the hidden crate (spec 2.4).
     pub fn hidden_crate_dir(&self) -> PathBuf {
         self.root.join("target/varyk").join(&self.name)
@@ -1179,17 +1523,17 @@ impl Package {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::diagnostics::codes;
     use std::fs;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     /// A scratch directory removed when it goes out of scope.
-    struct TempDir(PathBuf);
+    pub(crate) struct TempDir(pub(crate) PathBuf);
 
     impl TempDir {
-        fn new(label: &str) -> Self {
+        pub(crate) fn new(label: &str) -> Self {
             static COUNTER: AtomicU32 = AtomicU32::new(0);
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
             let dir = std::env::temp_dir().join(format!(
@@ -1200,7 +1544,7 @@ mod tests {
             TempDir(dir)
         }
 
-        fn write(&self, path: &str, text: &str) -> PathBuf {
+        pub(crate) fn write(&self, path: &str, text: &str) -> PathBuf {
             let path = self.0.join(path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, text).unwrap();
@@ -1214,10 +1558,46 @@ mod tests {
         }
     }
 
-    const MANIFEST: &str = "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+    pub(crate) const MANIFEST: &str =
+        "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
 
-    /// A package in a fresh directory with `manifest` and the given root.
-    fn package(label: &str, manifest: &str, root: &str) -> TempDir {
+    /// `manifest` with the target table that names `root`, unless it has a
+    /// target table already.
+    fn with_target(manifest: &str, root: &str) -> String {
+        if manifest.contains("[lib]") || manifest.contains("[[bin]]") {
+            return manifest.to_string();
+        }
+        let table = if root == "src/lib.vr" {
+            "\n[lib]\npath = \"src/lib.vr\"\n".to_string()
+        } else {
+            let Some(name) = manifest
+                .lines()
+                .find_map(|line| line.strip_prefix("name = \""))
+                .and_then(|rest| rest.split('"').next())
+            else {
+                return manifest.to_string();
+            };
+            format!("\n[[bin]]\nname = \"{name}\"\npath = \"src/main.vr\"\n")
+        };
+        format!("{manifest}{table}")
+    }
+
+    /// `MANIFEST` with its target table.
+    fn shop() -> String {
+        with_target(MANIFEST, "src/main.vr")
+    }
+
+    /// A package in a fresh directory with `manifest` (and the target table
+    /// for `root`, unless it has one) and the given root.
+    pub(crate) fn package(label: &str, manifest: &str, root: &str) -> TempDir {
+        let dir = TempDir::new(label);
+        dir.write("Cargo.toml", &with_target(manifest, root));
+        dir.write(root, "fn main() {}\n");
+        dir
+    }
+
+    /// A package like [`package`] but with the manifest as given.
+    fn package_as_is(label: &str, manifest: &str, root: &str) -> TempDir {
         let dir = TempDir::new(label);
         dir.write("Cargo.toml", manifest);
         dir.write(root, "fn main() {}\n");
@@ -1492,7 +1872,7 @@ mod tests {
             "Cargo.toml",
             "[workspace]\nmembers = [\"app\"]\n\n[patch.crates-io]\nhelper = { path = \"vendor/helper\" }\n",
         );
-        dir.write("app/Cargo.toml", MANIFEST);
+        dir.write("app/Cargo.toml", &shop());
         dir.write("app/src/main.vr", "fn main() {}\n");
         let diagnostics = load(&dir.0.join("app/Cargo.toml"), &mut Vec::new()).unwrap_err();
         assert_eq!(
@@ -1514,7 +1894,7 @@ mod tests {
         dir.write("Cargo.toml", "[workspace]\nmembers = [\"app\"]\n");
         dir.write(
             "app/Cargo.toml",
-            &MANIFEST.replace("[package]\n", "[package]\nworkspace = \"../ws\"\n"),
+            &shop().replace("[package]\n", "[package]\nworkspace = \"../ws\"\n"),
         );
         let diagnostics = load(&dir.0.join("app/Cargo.toml"), &mut Vec::new()).unwrap_err();
         assert_eq!(
@@ -1530,7 +1910,7 @@ mod tests {
         dir.write("ws/Cargo.toml", "workspace = \"bad\"\n");
         dir.write(
             "app/Cargo.toml",
-            &MANIFEST.replace("[package]\n", "[package]\nworkspace = \"../ws\"\n"),
+            &shop().replace("[package]\n", "[package]\nworkspace = \"../ws\"\n"),
         );
         let diagnostics = load(&dir.0.join("app/Cargo.toml"), &mut Vec::new()).unwrap_err();
         assert_eq!(
@@ -1541,7 +1921,7 @@ mod tests {
         // An ancestor whose `workspace` is not a table is a manifest cargo
         // refuses on the way up; so does `check`.
         dir.write("Cargo.toml", "workspace = \"bad\"\n");
-        dir.write("app/Cargo.toml", MANIFEST);
+        dir.write("app/Cargo.toml", &shop());
         let diagnostics = load(&dir.0.join("app/Cargo.toml"), &mut Vec::new()).unwrap_err();
         assert_eq!(
             diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(),
@@ -1552,19 +1932,19 @@ mod tests {
         // A named root that is not a workspace is refused, as cargo refuses it.
         dir.write(
             "app/Cargo.toml",
-            &MANIFEST.replace("[package]\n", "[package]\nworkspace = \"../nowhere\"\n"),
+            &shop().replace("[package]\n", "[package]\nworkspace = \"../nowhere\"\n"),
         );
         let diagnostics = load(&dir.0.join("app/Cargo.toml"), &mut Vec::new()).unwrap_err();
         assert_eq!(
             diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(),
             vec![codes::V0403]
         );
-        dir.write("app/Cargo.toml", MANIFEST);
+        dir.write("app/Cargo.toml", &shop());
 
         // A package that is its own workspace root looks no further up.
-        dir.write("app/Cargo.toml", &format!("{MANIFEST}\n[workspace]\n"));
+        dir.write("app/Cargo.toml", &format!("{}\n[workspace]\n", shop()));
         assert!(load(&dir.0.join("app/Cargo.toml"), &mut Vec::new()).is_ok());
-        dir.write("app/Cargo.toml", MANIFEST);
+        dir.write("app/Cargo.toml", &shop());
 
         // A workspace that excludes the package leaves it standalone, patch or not.
         dir.write(
@@ -1596,14 +1976,25 @@ mod tests {
         let manifest = "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
                         build = \"custom.rs\"\n";
         assert_eq!(load_codes(manifest), vec![codes::V0401]);
-        // The script `init` writes may be named explicitly; turning the
-        // script off would break plain `cargo build` of that package.
-        let manifest = "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
-                        build = \"build.rs\"\n";
-        assert_eq!(load_codes(manifest), Vec::<&str>::new());
-        let manifest = "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
-                        build = false\n";
-        assert_eq!(load_codes(manifest), vec![codes::V0401]);
+    }
+
+    #[test]
+    fn the_build_key_may_only_be_left_out_or_false() {
+        let with = |build: &str| {
+            format!(
+                "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{build}\n"
+            )
+        };
+        for good in ["", "build = false"] {
+            assert_eq!(load_codes(&with(good)), Vec::<&str>::new(), "{good}");
+        }
+        for bad in [
+            "build = true",
+            "build = \"build.rs\"",
+            "build = \"custom.rs\"",
+        ] {
+            assert_eq!(load_codes(&with(bad)), vec![codes::V0401], "{bad}");
+        }
     }
 
     #[test]
@@ -1612,6 +2003,7 @@ mod tests {
                         rust-version = \"1.85\"\ninclude = [\"src/**\"]\n\
                         exclude = [\"notes/\"]\nworkspace = \"..\"\n\n\
                         [workspace]\nresolver = \"2\"\n\n\
+                        [[bin]]\nname = \"shop\"\npath = \"src/main.vr\"\n\n\
                         [dependencies]\nhelper = { path = \"../helper\" }\n\n\
                         [build-dependencies]\ngen = { path = \"../gen\" }\n\n\
                         [target.'cfg(unix)'.dev-dependencies]\nprobe = { path = \"../probe\" }\n\n\
@@ -1660,7 +2052,7 @@ mod tests {
         dir.write("Cargo.lock", "# root lock\n");
         dir.write(
             "app/Cargo.toml",
-            &format!("{MANIFEST}\n[profile.release]\nlto = false\n"),
+            &format!("{}\n[profile.release]\nlto = false\n", shop()),
         );
         dir.write("app/Cargo.lock", "# stray member lock\n");
         dir.write("app/src/main.vr", "fn main() {}\n");
@@ -1746,7 +2138,7 @@ mod tests {
         for good in [
             "readme = false",
             "publish = [\"crates-io\"]",
-            "build = \"build.rs\"",
+            "build = false",
         ] {
             let manifest = format!(
                 "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{good}\n"
@@ -1832,11 +2224,18 @@ mod tests {
         let manifest = "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
                         links = \"foo\"\n";
         assert_eq!(load_codes(manifest), vec![codes::V0401]);
+        let dir = package("links", manifest, "src/main.vr");
+        let found = load(&dir.0.join("Cargo.toml"), &mut Vec::new()).unwrap_err();
+        assert!(
+            found[0].notes[0].contains("run none"),
+            "{:?}",
+            found[0].notes
+        );
     }
 
     #[test]
     fn a_package_with_both_roots_is_v0403_at_the_name() {
-        let dir = package("both", MANIFEST, "src/main.vr");
+        let dir = package_as_is("both", MANIFEST, "src/main.vr");
         dir.write("src/lib.vr", "pub fn f() {}\n");
 
         let diagnostics = load(&dir.0.join("Cargo.toml"), &mut Vec::new()).unwrap_err();
@@ -1876,6 +2275,13 @@ mod tests {
     #[test]
     fn the_name_package_is_v0403() {
         assert_eq!(load_codes(&named("package")), vec![codes::V0403]);
+    }
+
+    #[test]
+    fn the_name_packages_is_v0403() {
+        assert_eq!(load_codes(&named("packages")), vec![codes::V0403]);
+        assert_eq!(load_codes(&named("Packages")), vec![codes::V0403]);
+        assert!(name_problem("packages").is_some());
     }
 
     #[test]
@@ -2076,5 +2482,263 @@ mod tests {
 
         assert_eq!(package.hidden_crate_dir(), dir.0.join("target/varyk/shop"));
         assert_eq!(package.cache_dir(), dir.0.join("target/varyk/cache"));
+    }
+
+    /// The codes for `manifest` over a package whose root file is `root`,
+    /// loaded as the package being built or as a dependency.
+    fn codes_of(manifest: &str, root: &str, dependency: bool) -> Vec<&'static str> {
+        let dir = package("target", manifest, root);
+        let path = dir.0.join("Cargo.toml");
+        let result = if dependency {
+            load_dependency(&path, &mut Vec::new(), false)
+        } else {
+            load(&path, &mut Vec::new())
+        };
+        match result {
+            Ok(_) => Vec::new(),
+            Err(found) => found.iter().map(|d| d.code).collect(),
+        }
+    }
+
+    const BIN: &str = "\n[[bin]]\nname = \"shop\"\npath = \"src/main.vr\"\n";
+
+    #[test]
+    fn the_target_that_names_the_vr_root_is_accepted() {
+        let dir = package("bin_target", &format!("{MANIFEST}{BIN}"), "src/main.vr");
+        let loaded = load(&dir.0.join("Cargo.toml"), &mut Vec::new()).expect("loads");
+        assert_eq!(
+            loaded.root_target(),
+            RootTarget {
+                kind: Kind::Binary,
+                path: "src/main.vr".to_string()
+            }
+        );
+        for lib in [
+            "\n[lib]\npath = \"src/lib.vr\"\n",
+            "\n[lib]\nname = \"shop\"\npath = \"src/lib.vr\"\n",
+        ] {
+            let dir = package("lib_target", &format!("{MANIFEST}{lib}"), "src/lib.vr");
+            let loaded = load(&dir.0.join("Cargo.toml"), &mut Vec::new()).expect("loads");
+            assert_eq!(loaded.root_target().kind, Kind::Library);
+        }
+        let hyphen = "[package]\nname = \"my-shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+                      [lib]\nname = \"my_shop\"\npath = \"src/lib.vr\"\n";
+        assert_eq!(codes_of(hyphen, "src/lib.vr", false), Vec::<&str>::new());
+        let hyphen = hyphen.replace("my_shop", "my-shop");
+        assert_eq!(codes_of(&hyphen, "src/lib.vr", false), vec![codes::V0402]);
+    }
+
+    #[test]
+    fn without_a_target_table_the_package_is_v0406_with_the_lines_to_add() {
+        for (root, lines) in [
+            (
+                "src/main.vr",
+                "[[bin]]\nname = \"shop\"\npath = \"src/main.vr\"",
+            ),
+            ("src/lib.vr", "[lib]\npath = \"src/lib.vr\""),
+        ] {
+            let dir = package_as_is("no_target", MANIFEST, root);
+            let found = load(&dir.0.join("Cargo.toml"), &mut Vec::new()).expect_err("refused");
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].code, codes::V0406);
+            assert!(found[0].notes[0].ends_with(lines), "{:?}", found[0].notes);
+            let fix = found[0].fix_it.as_ref().expect("a fix-it");
+            assert!(fix.replacement.contains(lines), "{}", fix.replacement);
+            // Another problem with the manifest is reported alone.
+            let manifest =
+                format!("{MANIFEST}[dependencies]\nvaryk-std = {{ workspace = true }}\n");
+            assert_eq!(codes_of(&manifest, root, false), vec![codes::V0401]);
+            // A dependency needs it too.
+            let found = load_dependency(&dir.0.join("Cargo.toml"), &mut Vec::new(), false)
+                .expect_err("refused");
+            assert_eq!(found[0].code, codes::V0406);
+        }
+    }
+
+    #[test]
+    fn any_other_target_shape_is_v0402() {
+        for (manifest, root) in [
+            (
+                "\n[[bin]]\nname = \"other\"\npath = \"src/main.vr\"\n",
+                "src/main.vr",
+            ),
+            (
+                "\n[[bin]]\nname = \"shop\"\npath = \"src/app.vr\"\n",
+                "src/main.vr",
+            ),
+            (
+                "\n[[bin]]\nname = \"shop\"\npath = \"src/main.rs\"\n",
+                "src/main.vr",
+            ),
+            ("\n[[bin]]\nname = \"shop\"\n", "src/main.vr"),
+            ("\n[[bin]]\npath = \"src/main.vr\"\n", "src/main.vr"),
+            (
+                "\n[[bin]]\nname = \"shop\"\npath = \"src/main.vr\"\ntest = false\n",
+                "src/main.vr",
+            ),
+            (BIN.trim_end_matches('\n').repeat(2).as_str(), "src/main.vr"),
+            ("\n[lib]\npath = \"src/lib.vr\"\n", "src/main.vr"),
+            (
+                "\n[[bin]]\nname = \"shop\"\npath = \"src/main.vr\"\n",
+                "src/lib.vr",
+            ),
+            ("\n[lib]\npath = \"src/lib.rs\"\n", "src/lib.vr"),
+            ("\n[lib]\nname = \"shop\"\n", "src/lib.vr"),
+            (
+                "\n[lib]\npath = \"src/lib.vr\"\ncrate-type = [\"cdylib\"]\n",
+                "src/lib.vr",
+            ),
+            (
+                "\n[lib]\npath = \"src/lib.vr\"\nname = \"x\"\n",
+                "src/lib.vr",
+            ),
+            (
+                "\n[[test]]\nname = \"it\"\npath = \"src/lib.vr\"\n",
+                "src/lib.vr",
+            ),
+        ] {
+            let manifest = format!("{MANIFEST}{manifest}");
+            let found = codes_of(&manifest, root, false);
+            assert!(!found.is_empty(), "{manifest}");
+            assert!(
+                found.iter().all(|c| *c == codes::V0402),
+                "{manifest}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dependency_key_called_std_core_or_alloc_is_v0401() {
+        for key in ["std", "core", "alloc"] {
+            for table in ["dependencies", "dev-dependencies"] {
+                let manifest = format!("{MANIFEST}\n[{table}]\n{key} = \"1\"\n");
+                assert_eq!(load_codes(&manifest), vec![codes::V0401], "{table} {key}");
+            }
+        }
+        let manifest = format!(
+            "{MANIFEST}\n[dependencies]\nsource = {{ package = \"std\", version = \"1\" }}\n"
+        );
+        assert_eq!(load_codes(&manifest), Vec::<&str>::new());
+    }
+
+    /// A manifest as `cargo package` writes it, for `name` and a library.
+    fn published(extra_package: &str, lib: &str) -> String {
+        format!(
+            "[package]\nedition = \"2024\"\nname = \"shop\"\nversion = \"0.1.0\"\n\
+             build = false\nautolib = false\nautobins = false\nautoexamples = false\n\
+             autotests = false\nautobenches = false\n{extra_package}\n{lib}\n"
+        )
+    }
+
+    #[test]
+    fn a_dependency_may_have_a_published_manifest() {
+        let lib = "[lib]\nname = \"shop\"\npath = \"src/lib.rs\"\n";
+        let text = published("", lib);
+        assert_eq!(codes_of(&text, "src/lib.vr", true), Vec::<&str>::new());
+        // The same manifest is not one the package being built may have.
+        assert!(!codes_of(&text, "src/lib.vr", false).is_empty());
+        let hyphen = text
+            .replace("shop", "my-shop")
+            .replace("my-shop\"\npath", "my_shop\"\npath");
+        assert_eq!(codes_of(&hyphen, "src/lib.vr", true), Vec::<&str>::new());
+        let wrong = text.replace("name = \"shop\"\npath", "name = \"other\"\npath");
+        assert_eq!(codes_of(&wrong, "src/lib.vr", true), vec![codes::V0402]);
+    }
+
+    #[test]
+    fn a_dependency_still_refuses_what_a_published_manifest_never_says() {
+        let lib = "[lib]\nname = \"shop\"\npath = \"src/lib.rs\"\n";
+        for (from, to) in [
+            ("autolib = false", "autolib = true"),
+            ("build = false", "build = true"),
+            ("build = false", "build = \"build.rs\""),
+            ("autobins = false", "autobins = \"no\""),
+        ] {
+            let text = published("", lib).replace(from, to);
+            assert_eq!(
+                codes_of(&text, "src/lib.vr", true),
+                vec![codes::V0401],
+                "{to}"
+            );
+        }
+        // An `auto*` key set `true` gets today's note, not the one about
+        // a newer cargo.
+        let dir = package(
+            "auto_true",
+            &published("", lib).replace("autolib = false", "autolib = true"),
+            "src/lib.vr",
+        );
+        let found = load_dependency(&dir.0.join("Cargo.toml"), &mut Vec::new(), false).unwrap_err();
+        assert!(
+            !found[0].notes[0].contains("newer cargo"),
+            "{:?}",
+            found[0].notes
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_dependency_points_at_a_newer_cargo() {
+        let lib = "[lib]\nname = \"shop\"\npath = \"src/lib.rs\"\n";
+        for text in [
+            published("future-key = 1", lib),
+            published("", &format!("{lib}future-key = 1\n")),
+        ] {
+            let dir = package("future", &text, "src/lib.vr");
+            let found =
+                load_dependency(&dir.0.join("Cargo.toml"), &mut Vec::new(), false).unwrap_err();
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert!(
+                found[0].notes[0].contains("newer cargo"),
+                "{:?}",
+                found[0].notes
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_local_dependency_is_not_blamed_on_a_newer_cargo() {
+        let lib = "[lib]\nname = \"shop\"\npath = \"src/lib.rs\"\n";
+        let dir = package(
+            "future_local",
+            &published("future-key = 1", lib),
+            "src/lib.vr",
+        );
+        let found = load_dependency(&dir.0.join("Cargo.toml"), &mut Vec::new(), true).unwrap_err();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            !found[0].notes[0].contains("newer cargo"),
+            "{:?}",
+            found[0].notes
+        );
+    }
+
+    #[test]
+    fn a_dependency_ignores_the_lock_beside_it() {
+        let dir = package("dep_lock", MANIFEST, "src/lib.vr");
+        dir.write("Cargo.lock", "version = 4\n");
+        let found =
+            load_dependency(&dir.0.join("Cargo.toml"), &mut Vec::new(), false).expect("loads");
+        assert_eq!(found.lock, None);
+    }
+
+    #[test]
+    fn the_generated_manifest_names_the_generated_root() {
+        let dir = package("generated_bin", &format!("{MANIFEST}{BIN}"), "src/main.vr");
+        let loaded = load(&dir.0.join("Cargo.toml"), &mut Vec::new()).expect("loads");
+        let manifest = loaded.generated_manifest();
+        assert_eq!(manifest["bin"][0]["path"].as_str(), Some("src/main.rs"));
+        assert_eq!(manifest["bin"][0]["name"].as_str(), Some("shop"));
+        assert_eq!(
+            loaded.isolated_manifest()["bin"][0]["path"].as_str(),
+            Some("src/main.vr")
+        );
+
+        let lib = "\n[lib]\nname = \"shop\"\npath = \"src/lib.vr\"\n";
+        let dir = package("generated_lib", &format!("{MANIFEST}{lib}"), "src/lib.vr");
+        let loaded = load(&dir.0.join("Cargo.toml"), &mut Vec::new()).expect("loads");
+        assert_eq!(
+            loaded.generated_manifest()["lib"]["path"].as_str(),
+            Some("src/lib.rs")
+        );
     }
 }

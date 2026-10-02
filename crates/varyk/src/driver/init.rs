@@ -1,6 +1,5 @@
-//! `varyk init` (spec 2.5): writes a package that both `varyk` and plain
-//! `cargo build` compile, the latter through `build.rs` calling `varyk
-//! emit` (or `$VARYK emit`) into `OUT_DIR`.
+//! `varyk init` (spec 2.5): writes a package only `varyk` builds: its
+//! `Cargo.toml` names the `.vr` root, and there is no `build.rs` or stub.
 
 use std::fs;
 use std::io;
@@ -8,20 +7,9 @@ use std::path::{Path, PathBuf};
 
 use super::sanitize_name;
 
-const BUILD_RS: &str = include_str!("templates/build.rs.txt");
 const GITIGNORE: &str = include_str!("templates/gitignore.txt");
 const MAIN_VR: &str = include_str!("templates/main.vr.txt");
 const LIB_VR: &str = include_str!("templates/lib.vr.txt");
-
-/// The stub crate root: one line, no inner attribute, so it compiles
-/// equally as a crate root or `include!`d into one (M3 spec 2.3).
-/// `write_tree` (spec 2.3) always nests the tree it writes a directory
-/// deeper, under that directory's own `src/`, so the path matching
-/// `build.rs`'s `emit --out-dir $OUT_DIR/varyk` is
-/// `$OUT_DIR/varyk/src/<target>`, not `$OUT_DIR/varyk/<target>`.
-fn stub(target: &str) -> String {
-    format!("::std::include!(::std::concat!(::std::env!(\"OUT_DIR\"), \"/varyk/src/{target}\"));\n")
-}
 
 /// Why [`write`] did not write anything.
 #[derive(Debug)]
@@ -37,36 +25,41 @@ pub enum InitError {
     Io(io::Error),
 }
 
-/// The five files `init` writes (spec 2.5), as tree-relative paths and
+/// The three files `init` writes (spec 2.5), as tree-relative paths and
 /// their content: `name` is the package's (from the target directory) and
-/// `lib` selects `src/lib.{rs,vr}` over `src/main.{rs,vr}`. Pure, so a
+/// `lib` selects `src/lib.vr` over `src/main.vr`. Pure, so a
 /// fixture example can be checked against a fresh `init` for equality.
 pub fn files(name: &str, lib: bool) -> Vec<(PathBuf, String)> {
     let mut files = vec![
-        (PathBuf::from("Cargo.toml"), cargo_toml(name)),
+        (PathBuf::from("Cargo.toml"), cargo_toml(name, lib)),
         (PathBuf::from(".gitignore"), GITIGNORE.to_string()),
-        (PathBuf::from("build.rs"), BUILD_RS.to_string()),
     ];
     if lib {
-        files.push((PathBuf::from("src/lib.rs"), stub("lib.rs")));
         files.push((PathBuf::from("src/lib.vr"), LIB_VR.to_string()));
     } else {
-        files.push((PathBuf::from("src/main.rs"), stub("main.rs")));
         files.push((PathBuf::from("src/main.vr"), MAIN_VR.to_string()));
     }
     files
 }
 
-/// `Cargo.toml`: `name`, version `0.1.0`, edition 2024, `[dependencies]`
-/// with `varyk-std` at the compiler's full version (M5a spec 5.2), and no
-/// `[workspace]` table (spec 2.5, so plain `cargo build` never treats the
-/// package as its own workspace root).
-fn cargo_toml(name: &str) -> String {
+/// `Cargo.toml`: `name`, version `0.1.0`, edition 2024, the target table
+/// that names the `.vr` root (before `[dependencies]`, so a line appended
+/// to the file lands in it), and `[dependencies]` with `varyk-std` at the
+/// compiler's full version (M5a spec 5.2). No `[workspace]` table (spec
+/// 2.5), so the package is never its own workspace root.
+fn cargo_toml(name: &str, lib: bool) -> String {
+    let target = if lib {
+        "[lib]\npath = \"src/lib.vr\"\n".to_string()
+    } else {
+        format!("[[bin]]\nname = \"{name}\"\npath = \"src/main.vr\"\n")
+    };
     format!(
         "[package]\n\
          name = \"{name}\"\n\
          version = \"0.1.0\"\n\
          edition = \"2024\"\n\
+         \n\
+         {target}\
          \n\
          [dependencies]\n\
          varyk-std = \"{}\"\n",
@@ -87,7 +80,7 @@ pub fn package_name(dir: &Path) -> String {
     sanitize_name(&name)
 }
 
-/// Writes the five files of spec 2.5 under `dir` (created if it does not
+/// Writes the three files of spec 2.5 under `dir` (created if it does not
 /// exist), refusing if anything is already at any of their paths, a
 /// file, a directory, or a link: nothing is written, and every path that
 /// is taken is reported (spec 2.5's "there is no merge"). It refuses too when the root file of the other kind of
@@ -169,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn files_of_a_binary_are_the_five_of_spec_2_5() {
+    fn files_of_a_binary_are_the_three_of_spec_2_5() {
         let entries = files("greeting", false);
 
         let paths: Vec<&Path> = entries.iter().map(|(path, _)| path.as_path()).collect();
@@ -178,14 +171,13 @@ mod tests {
             vec![
                 Path::new("Cargo.toml"),
                 Path::new(".gitignore"),
-                Path::new("build.rs"),
-                Path::new("src/main.rs"),
                 Path::new("src/main.vr"),
             ]
         );
-        assert_eq!(
-            entries[3].1,
-            "::std::include!(::std::concat!(::std::env!(\"OUT_DIR\"), \"/varyk/src/main.rs\"));\n"
+        assert!(
+            entries[0]
+                .1
+                .contains("[[bin]]\nname = \"greeting\"\npath = \"src/main.vr\"")
         );
     }
 
@@ -199,25 +191,20 @@ mod tests {
             vec![
                 Path::new("Cargo.toml"),
                 Path::new(".gitignore"),
-                Path::new("build.rs"),
-                Path::new("src/lib.rs"),
                 Path::new("src/lib.vr"),
             ]
         );
-        assert_eq!(
-            entries[3].1,
-            "::std::include!(::std::concat!(::std::env!(\"OUT_DIR\"), \"/varyk/src/lib.rs\"));\n"
-        );
+        assert!(entries[0].1.contains("[lib]\npath = \"src/lib.vr\""));
     }
 
     #[test]
-    fn write_creates_a_fresh_directory_with_the_five_files() {
+    fn write_creates_a_fresh_directory_with_the_three_files() {
         let dir = TempDir::new("fresh");
         let target = dir.0.join("greeting");
 
         let written = write(&target, false).expect("writes");
 
-        assert_eq!(written.len(), 5);
+        assert_eq!(written.len(), 3);
         for path in &written {
             assert!(path.is_file(), "{path:?}");
         }
@@ -240,7 +227,7 @@ mod tests {
             other => panic!("expected Exists, got {other:?}"),
         }
         assert!(
-            !dir.0.join("build.rs").exists(),
+            !dir.0.join(".gitignore").exists(),
             "init wrote past the conflict"
         );
         assert_eq!(
@@ -289,12 +276,12 @@ mod tests {
     #[test]
     fn write_refuses_when_a_directory_sits_at_an_output_path_and_writes_nothing() {
         let dir = TempDir::new("dir_in_the_way");
-        fs::create_dir_all(dir.0.join("build.rs")).unwrap();
+        fs::create_dir_all(dir.0.join(".gitignore")).unwrap();
 
-        let err = write(&dir.0, false).expect_err("a directory at build.rs is a conflict");
+        let err = write(&dir.0, false).expect_err("a directory at .gitignore is a conflict");
 
         match err {
-            InitError::Exists(paths) => assert_eq!(paths, vec![PathBuf::from("build.rs")]),
+            InitError::Exists(paths) => assert_eq!(paths, vec![PathBuf::from(".gitignore")]),
             other => panic!("unexpected error: {other:?}"),
         }
         assert!(!dir.0.join("Cargo.toml").exists(), "Cargo.toml was written");

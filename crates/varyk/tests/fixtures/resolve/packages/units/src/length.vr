@@ -1,0 +1,25 @@
+pub struct Meters {
+    pub value: i32,
+}
+
+pub fn add(a: Meters, b: Meters) -> Meters {
+    Meters { value: a.value + b.value }
+}
+
+pub fn zero() -> Meters {
+    Meters { value: 0 }
+}
+
+pub fn grow(mut m: Meters) {
+    m.value = m.value + 1;
+}
+
+impl Meters {
+    pub fn doubled(self) -> Meters {
+        Meters { value: self.value * 2 }
+    }
+}
+
+pub struct Secret {
+    hidden: i32,
+}

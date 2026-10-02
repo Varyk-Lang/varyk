@@ -88,7 +88,7 @@ pub fn assemble(package: &Package, crate_: &GeneratedCrate) -> io::Result<PathBu
 fn write_manifest(package: &Package, dest: &Path) -> io::Result<()> {
     fs::write(
         dest.join("Cargo.toml"),
-        package.isolated_manifest().to_string(),
+        package.generated_manifest().to_string(),
     )
 }
 
@@ -117,7 +117,7 @@ fn copy_vr_sources(src_dir: &Path, dest_src_dir: &Path) -> io::Result<()> {
         let path = entry.path();
         // `file_type` does not follow links. A link under `src/` could
         // reach files outside the package, or itself, so it is refused
-        // rather than followed, like `emit` refuses a linked directory.
+        // rather than followed, like `write_tree` refuses a linked directory.
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
             return Err(io::Error::new(
@@ -333,6 +333,10 @@ mod tests {
                 anchor: varyk_syntax::Span::new(varyk_syntax::FileId(0), 0, 0),
                 entry: None,
             },
+            target: crate::package::RootTarget {
+                kind: Kind::Library,
+                path: "src/lib.vr".to_string(),
+            },
         }
     }
 
@@ -371,6 +375,32 @@ mod tests {
         assert_eq!(manifest["dependencies"]["regex"].as_str(), Some("1"));
         assert!(manifest["workspace"].as_table().unwrap().is_empty());
         assert!(!dest.join("build.rs").exists());
+    }
+
+    #[test]
+    fn assemble_names_the_generated_root_in_place_of_the_vr_root() {
+        let dir = TempDir::new("target_root");
+        dir.write(
+            "Cargo.toml",
+            "[package]\nname = \"my-shapes\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [lib]\nname = \"my_shapes\"\npath = \"src/lib.vr\"\n",
+        );
+        dir.write("src/lib.vr", "pub fn area() {}\n");
+        let package = crate::package::load(&dir.0.join("Cargo.toml"), &mut Vec::new())
+            .expect("a package with a target table loads");
+        let crate_ = crate_with(
+            vec![generated_file("src/lib.rs", "pub fn area() {}")],
+            vec![],
+        );
+
+        let dest = assemble(&package, &crate_).expect("assembles");
+
+        let manifest: toml::Table = fs::read_to_string(dest.join("Cargo.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(manifest["lib"]["path"].as_str(), Some("src/lib.rs"));
+        assert_eq!(manifest["lib"]["name"].as_str(), Some("my_shapes"));
     }
 
     #[test]

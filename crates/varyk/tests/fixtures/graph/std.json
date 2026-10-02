@@ -1,0 +1,100 @@
+{
+  "packages": [
+    {
+      "id": "path+file:///work/app#0.1.0",
+      "name": "app",
+      "version": "0.1.0",
+      "source": null,
+      "manifest_path": "/work/app/target/varyk/packages/graph/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "route",
+          "rename": null,
+          "kind": null,
+          "target": null,
+          "optional": false
+        },
+        {
+          "name": "varyk-std",
+          "rename": null,
+          "kind": null,
+          "target": null,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "path+file:///work/route#0.1.0",
+      "name": "route",
+      "version": "0.1.0",
+      "source": null,
+      "manifest_path": "/work/route/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "varyk-std",
+          "rename": null,
+          "kind": null,
+          "target": null,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "registry+https://github.com/rust-lang/crates.io-index#varyk-std@0.4.0",
+      "name": "varyk-std",
+      "version": "0.4.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest_path": "/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/varyk-std-0.4.0/Cargo.toml",
+      "dependencies": []
+    }
+  ],
+  "resolve": {
+    "root": "path+file:///work/app#0.1.0",
+    "nodes": [
+      {
+        "id": "path+file:///work/app#0.1.0",
+        "deps": [
+          {
+            "name": "route",
+            "pkg": "path+file:///work/route#0.1.0",
+            "dep_kinds": [
+              {
+                "kind": null,
+                "target": null
+              }
+            ]
+          },
+          {
+            "name": "varyk_std",
+            "pkg": "registry+https://github.com/rust-lang/crates.io-index#varyk-std@0.4.0",
+            "dep_kinds": [
+              {
+                "kind": null,
+                "target": null
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "path+file:///work/route#0.1.0",
+        "deps": [
+          {
+            "name": "varyk_std",
+            "pkg": "registry+https://github.com/rust-lang/crates.io-index#varyk-std@0.4.0",
+            "dep_kinds": [
+              {
+                "kind": null,
+                "target": null
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "registry+https://github.com/rust-lang/crates.io-index#varyk-std@0.4.0",
+        "deps": []
+      }
+    ]
+  }
+}

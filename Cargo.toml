@@ -1,10 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/varyk-syntax", "crates/varyk", "crates/varyk-std"]
-# So plain `cargo build` on a package `varyk init` wrote under either
-# directory (test fixture copies land in `target/`; `examples/packages`
-# holds committed example packages) never "believes it's in a workspace":
-# these directory prefixes are outside the compiler's own workspace.
+# So cargo, when `varyk add` or the hidden crate reads a package under
+# either directory (test fixture copies land in `target/`;
+# `examples/packages` holds committed example packages), never "believes
+# it's in a workspace": these prefixes are outside the compiler's own
+# workspace.
 exclude = ["target", "examples/packages"]
 
 [workspace.package]

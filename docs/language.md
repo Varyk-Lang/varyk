@@ -1,6 +1,6 @@
 # The Varyk language
 
-This page describes everything Varyk accepts today, in milestone 5b1 of an
+This page describes everything Varyk accepts today, in milestone 5b2 of an
 experimental, pre-1.0 language (see [roadmap.md](roadmap.md) for what comes
 next). Anything not described here is rejected with an error that names
 what is not supported. For the reasons behind the design, see
@@ -42,13 +42,19 @@ edition = "2024"
 regex = "1"
 ```
 
-`[dependencies]` names Rust crates the package uses, and its `.rs` modules
-can call them (Varyk code cannot, see `use` below). A `path` to a crate on
-disk may be relative to `Cargo.toml`. Taking a setting from a Cargo
+`[dependencies]` names the Rust crates the package uses, which its `.rs`
+modules can call (Varyk code cannot, see `use` below), and the Varyk
+packages it uses, which Varyk code names (see [Packages](#packages)). A
+`path` to a crate on disk may be relative to `Cargo.toml`. Taking a setting from a Cargo
 workspace (`workspace = true`), dependencies for only some platforms
-(`[target.'cfg(..)'.dependencies]`), and any Cargo target table (`[lib]`,
-`[[bin]]`, `[[test]]`, ...) are errors: a package has the one root cargo
-finds by its defaults. `check` reads a fixed set of `Cargo.toml` keys, the ones a
+(`[target.'cfg(..)'.dependencies]`), and any Cargo target table but one
+(`[[test]]`, `[[example]]`, ...) are errors. The one a package may have
+names its own root: `[[bin]]` with `name` the package's name and
+`path = "src/main.vr"`, or `[lib]` with `path = "src/lib.vr"` and, if
+present, `name` the package's name with `-` as `_`, and no other key (a
+package without one is V0406). A dependency key `std`, `core`,
+or `alloc` is an error too, since it would hide Rust's standard library;
+`package = ".."` renames it. `check` reads a fixed set of `Cargo.toml` keys, the ones a
 small service needs (the tables `package`, `workspace`, `dependencies`,
 `dev-dependencies`, `build-dependencies`, `target`, `features`, `profile`,
 `patch`, `replace`, `lints`, and `badges`, and under `[package]` the
@@ -56,7 +62,8 @@ standard keys cargo documents, apart from the target-layout ones, `auto*`
 and `default-run`); any other key is V0401,
 "not supported yet", so nothing unknown can pass `check` and surprise
 `build` or `publish`. Also errors are `links`, which needs a build script
-the published crate does not carry, a `build` script other than the `build.rs` that `varyk init` writes (which only includes the generated Rust; a `build.rs` with more in it is not noticed, and the crates Varyk builds do not run it) or `build = false`, which would keep plain `cargo build` from running that script, `[lints]`, which would apply
+that no crate Varyk builds runs, a `build` key other than `build = false`
+(the crates Varyk builds run no build script), `[lints]`, which would apply
 to the generated Rust too (put `#[deny(..)]` or `#[warn(..)]` attributes in
 the `.rs` file instead), and `[patch]` or `[replace]`, in the package or in
 the root manifest of an enclosing workspace, which would not apply to the
@@ -149,8 +156,10 @@ for `Circle` alone) or at a function of a type (call `Cart::new()`). Nor
 can it start with the name of a crate: Varyk code does not use crates
 directly, so `use std::collections::HashMap;` is an error even though
 `std` is built into Rust, and so is `use regex::Regex;` in a package whose
-`[dependencies]` names `regex`; call the crate from a `.rs` module in the
-package instead (see "Calling Rust" below). A leading name this compiler
+`[dependencies]` names `regex`, and so is a path starting at it; call the
+crate from a `.rs` module in the package instead (see "Calling Rust"
+below). A Varyk package in `[dependencies]` is different: its key names it, as
+"Packages" below describes. A leading name this compiler
 does not recognize as a crate is reported as an unknown module instead, with
 a note in case it was meant to be one. A `use` name that is already taken by
 something of the same kind (a type or module, or a function) declared in
@@ -169,7 +178,10 @@ used from where it is written, so a `pub fn` inside `mod cart;` (not
 to open it. A `pub` function, struct field, or enum variant cannot name a
 type that some of its users could not name themselves, such as a type of
 `shop`'s private module `cart` in a `pub fn` of `shop`; make the module
-`pub mod`, or the function private. From outside a module, use its `pub`
+`pub mod`, or the function private. In a library the packages that use it
+are users too: a `pub` item whose modules are `pub` all the way up cannot
+name a type in a private module, and neither can a `pub` function, method,
+or field of a `.rs` module those packages can reach. From outside a module, use its `pub`
 items through the module name:
 
 ```varyk
@@ -1040,8 +1052,9 @@ the level, and the message: `2026-09-30T12:00:00.000Z INFO listening on port
 8080`. With `LOG_FORMAT=json` each line is one JSON object with the keys
 `time`, `level`, and `message`; any other value gives text.
 
-A program that makes a `log` call starts logging first thing in its
-`main`; a program without one writes nothing to stderr. Setup never stops
+A program that makes a `log` call, or uses a Varyk package that makes one,
+starts logging first thing in its `main`, and so needs `varyk-std`; a
+program without one writes nothing to stderr. Setup never stops
 the program: a bad `LOG` value or a `.env` that cannot be read gives one
 warning line, and logging goes on at `info` in text. In the generated Rust
 a call is `::varyk_std::tracing::info!(..)`, and `main` begins with
@@ -1661,8 +1674,10 @@ and `Vec` of such a type; `HashMap<string, V>` of one; a struct whose
 fields, apart from skipped ones, are such types; and an enum whose
 variants carry no data. Anything else is an error at the call that names
 the part in the way (V0210): an enum with a variant that carries data, a
-`HashMap` whose key is not `string`, `Error`, or a Rust type from a `.rs`
-module. For data that varies by kind, use a struct with a field of a
+`HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs`
+module, or a type declared in another Varyk package (a package is built
+without knowing who uses it, so convert its types there, with a `pub fn`
+such as `pub fn stop_json(stop: Stop) -> string`). For data that varies by kind, use a struct with a field of a
 plain enum marked `#[rename("type")]` and an `Option` field for each
 kind's data. The check follows the fields all the way down, and a type
 that holds itself through a `Vec` is fine.
@@ -1722,8 +1737,8 @@ put in a typed `let` first.
 `T` must be a struct whose fields, apart from skipped ones, are numbers,
 `bool`, `string`, enums whose variants carry no data, or an `Option` of
 one of those. A nested struct, a `Vec`, or a `HashMap` field, or a `T` that
-is not a struct, is an error at the call naming the part in the way
-(V0210); mark a field the program fills itself `#[skip]` and make it an
+is not a struct, or a type declared in another Varyk package, is an error
+at the call naming the part in the way (V0210); mark a field the program fills itself `#[skip]` and make it an
 `Option`.
 
 Each field reads the variable named by its key, the field's name or its
@@ -1778,7 +1793,7 @@ and in the generated Rust it is `.clone()`, or `.to_string()` when `s` is a
 copies a string's text behind your back. A string that is already owned
 moves instead, with no copy.
 
-## Not in milestone 5b1
+## Not in milestone 5b2
 
 These do not exist yet; where one can be written, it is an error that names
 what is not supported. They are left out because no program has needed
@@ -1801,14 +1816,11 @@ elision would not settle; and `Debug` with `{:?}`.
 
 Also not yet, from the Rust side and the package side: modules declared
 inside a `.rs` file; importing Rust tuple and unit structs; a `.rs`
-signature naming a type declared in Varyk; importing a published Varyk
-library straight into Varyk code (reach it through a `.rs` module, like any
-crate); `pub(crate)` and `pub(super)`; `use` with braces or globs;
+signature naming a type declared in Varyk; `pub(crate)` and `pub(super)`; `use` with braces or globs;
 re-exports (`pub use`) in either direction; settings taken from a Cargo
 workspace; custom target paths; reading `[features]`; sharing cargo's
 `target/` between `varyk build` and `cargo build`; `varyk init` into an
-existing project; and a `varyk` command for `cargo doc`, which works
-unchanged through cargo once `init` has run.
+existing project; and a `varyk` command for `cargo doc`.
 
 Also not yet, from the batteries: TOML; pretty-printed JSON; JSON for
 enums that carry data (write a `type` field); `flatten`, aliases, and
@@ -1818,7 +1830,7 @@ files; a kind or a cause on `Error`, and automatic conversion into `Error`
 from other error types at `?`; attributes on structs, methods, and
 variants with data; `#[default]` on an `Option`, enum, or struct field;
 `varyk_std::Error` in a `.rs` signature; and HTTP and the database, which
-are milestone 5b2.
+are to come as packages (milestones 5b3 and 5b4).
 
 Also not yet, from async code: `race` and `any`; timeouts; channels;
 changing a value shared between tasks (a `Mutex`); a task anywhere but where
@@ -2151,16 +2163,226 @@ only there (V0108 elsewhere), and a variant holding one makes its enum
 opaque. The message
 names the module and says which `pub mod` fixes it.
 
+## Packages
+
+A Varyk package can use another Varyk package, and so can that package, to
+any depth. Until milestone 5b2 the only way in was a `.rs` file; now the
+other package is named in Varyk code like a module. With
+`units = { path = "../units" }` in `[dependencies]`:
+
+```varyk
+use units::length::Meters;
+
+fn total(a: Meters, b: Meters) -> Meters {
+    units::length::add(a, b)
+}
+```
+
+There is no new syntax. The one new kind of name is the name of a package.
+
+### Naming a package
+
+A package is named by its key in `[dependencies]`, with each `-` read as
+`_` (the name the Rust crate has). `route-planner = "1"` is
+`route_planner::`, and `sql = { package = "varyk-sql", version = "0.5" }`
+is `sql::`. You choose the key, and two packages cannot share one.
+
+The first name of a path, in an expression, a type, a pattern, or a `use`,
+is looked up in this order:
+
+1. a module declared in the current module, or a `use` alias;
+2. a standard module or type (`json`, `Vec`, ...);
+3. a package the code's own package depends on.
+
+So a local module wins over a package of the same name. A package whose
+key is a standard name, a keyword, or begins with `varyk_` cannot be
+named; rename it in `Cargo.toml` with `package = ".."`, and the help of
+the error shows the line. After the package's name the path goes on as a
+`crate::` path would inside that package, so `units::length::add` is
+`crate::length::add` there. `use units;` alone is an error (V0111), as a
+lone module name is, since the name is already in scope. A single name is
+never a package.
+
+A dependency is a Varyk package when its folder has `src/lib.vr`; it may
+come from a `path`, a registry, or `git`. Any other dependency is a Rust
+crate, and naming one in a path or a `use` is V0110, whose help is the
+facade rule of "Calling Rust". A program (`src/main.vr`, no `src/lib.vr`)
+is not a package in this sense. Only `[dependencies]` is read: a package
+under `[dev-dependencies]` or a platform table cannot be named, and
+naming a dependency marked `optional` is V0401, because cargo may leave it
+out of the build.
+
+### What a package gives you
+
+Everything the package marks `pub` that Rust's visibility rule lets its
+users reach: `pub` functions, structs with their `pub` fields, enums,
+methods, and associated functions, in `src/lib.vr` and its `pub mod`s, and
+the `pub` items of its `.rs` modules. They behave as items of your own
+program do: parameters borrow, `mut` parameters and `mut self` change the
+caller's value, a function returning part of a parameter gives an alias, an
+async function is awaited or started, an enum is matched with every
+pattern and checked for exhaustiveness, and `.clone()` and `==` work where
+the type's fields allow.
+
+A `pub` item of a library cannot name a type its users in other packages
+could not name, so a `pub fn` in `src/lib.vr` that returns a type of a
+private module is V0105 in the library itself, and so is a `pub` function,
+method, or field of one of its `.rs` modules that does.
+
+What a package cannot be given from outside: an `impl` block (an `impl`
+names a type declared in the same file, V0001), and JSON or environment
+conversion (below). The `#[test]` functions of a package are not visible,
+and `varyk test` runs only the tests of the package it is run in.
+
+### Packages that use packages
+
+Each package sees only the packages its own `Cargo.toml` lists. A value
+whose type is declared in a package the code's package does not list is
+V0115, and its help is the line to add:
+
+```varyk
+let legs = route::legs();
+let total = route::total(legs);
+```
+
+If `route` returns a `Meters` of `units` and your package lists `route` but
+not `units`, the second line is V0115. The rule is stricter than Rust needs
+and sound: the Rust Varyk writes sometimes spells out a type, and one rule
+is easier to learn than a list of places. When cargo picks two versions of
+one package, they are two packages: a `Meters` of `units` 0.1 from `route`
+is not the `Meters` of the `units` 0.2 your package lists, which is V0115
+too, and its note names both versions.
+
+JSON and configuration do not cross packages. A type is made readable from
+JSON where it is declared, and a package is compiled without knowing who
+will use it, so a `json` or `env` call on a type declared in another
+package, or holding one, is V0210. Convert it in its own package instead
+(`pub fn stop_json(stop: Stop) -> string`).
+
+### What runs when you build
+
+When `varyk` builds your program, the Rust of every Varyk package in the
+build is exactly that package's own `.rs` modules plus what your compiler
+generates from its `.vr` files. Nothing else in the package is compiled or
+run: not its `build.rs`, and not generated Rust that its publisher shipped.
+`varyk` builds each package itself, from its `.vr` files, into a crate it
+writes, with the package's own `Cargo.toml` except that `build = false`
+and the library target is the generated root. If a module exists as both
+`.vr` and `.rs` in a package you depend on, the `.vr` file is used and the
+`.rs` file (which is what a publisher's assembly puts there) is ignored,
+and so is a `src/lib.rs` beside `src/lib.vr`. In the package you are
+building, having both is V0104, except for the root: a `src/main.rs` or
+`src/lib.rs` left by an earlier `varyk init` is ignored.
+
+What this does not cover, on purpose: the package's own `.rs` modules, the
+crates it depends on, and their build scripts. They are Rust, visible as
+files or lines of `Cargo.toml`, and rustc's to judge, as for your own code.
+A Rust project that depends on a published Varyk crate with plain `cargo`
+trusts its shipped Rust as it trusts any crate.
+
+This guarantee covers `build`, `run`, and `test`. It does not cover
+`varyk publish`: that runs cargo's own verification, which builds the crate
+the way a plain cargo user would, against the published versions of its
+dependencies, so a Varyk dependency's shipped Rust, and any `build.rs` it
+was published with, is compiled on the publisher's machine.
+
+### Packages and the build
+
+When a package lists a dependency besides `varyk-std`, in `[dependencies]`
+or `[dev-dependencies]`, every command that checks it (`check`, `build`,
+`run`, `test`, `publish`) first asks cargo which packages the build uses.
+It writes the package's manifest to `target/varyk/packages/graph/`, copies
+the package's `Cargo.lock` beside it (and removes an earlier copy when the
+package has none), and runs `cargo metadata` there, which may download what
+is not on the computer yet. The package's own folder is not written to. If
+cargo fails, that is V0405, with cargo's own message. A package with no
+other dependency never runs cargo in `varyk check`, and a single file has
+no packages.
+
+The Varyk packages of the build are the ones reached through
+`[dependencies]` from the program, and from the Varyk packages so reached.
+Two things are refused, each V0401 at the program's `Cargo.toml`, naming the
+package: a Varyk package reached any other way (through
+`[dev-dependencies]`, as an `optional` dependency a feature turned on, or
+through a Rust crate, even when it is also used the supported way), since
+cargo would compile it on its own, outside what "What runs when you build"
+promises; and two packages of the build with one name and version when one
+is a Varyk package and the other comes from a `path` or is a Varyk package
+too.
+
+Each Varyk package of the build is checked as a program of its own, the
+packages it depends on first, with its own `Cargo.toml`, and only then the
+code that uses it, once per package cargo resolved, however many paths reach
+it. Its `pub` items then enter your program as items from another package.
+If it does not pass, its errors are shown at its own files with the note
+"in the package `units` 0.1.0, which this build uses", and checking stops;
+the usual cause is a package written for another version of Varyk, and one
+of the errors is then V0404 on its `varyk-std` line. The `Cargo.lock` of a
+package you depend on is ignored: only the lock of the package being built
+decides versions. When the build uses `varyk-std`, the version cargo picks
+must be no older than the compiler's (V0404 at the program's `varyk-std`
+line, or its `Cargo.toml` when it has none, with `cargo update -p
+varyk-std` as help). A program counts as logging, and so as using
+`varyk-std`, when any Varyk package of the build calls `log`, so a
+package's log lines are not lost in a program that writes none.
+
+`varyk build`, `varyk run`, and `varyk test` then write a crate for each
+Varyk package of the build under `target/varyk/packages/<name>-<version>/`:
+the package's isolated manifest and the Rust generated from its `.vr` files
+plus its own `.rs` modules, and nothing else from its folder. In every
+manifest written for the build, a dependency on a Varyk package becomes a
+`path` to that crate, under the same key, keeping `package`, `features`, and
+`default-features`. The build uses the lock cargo left when it read the
+graph. Files are written only when they change, so a second build with no
+change compiles nothing, and a change to a package reaches every package
+that uses it. A rustc error inside a package's crate is V0900 naming the
+package, with rustc's own message and no Varyk line; when it is in one of
+the package's own `.rs` modules, the note says it is that package's Rust,
+not a bug in Varyk. Warnings from a package's crate are not shown.
+
+A package published with `varyk publish` has a different `Cargo.toml` from
+a source package: it sets `build = false` and its target is the generated
+`src/lib.rs`, and `cargo publish` adds keys of its own (`autolib`,
+`autobins`, `readme = false`, and others). In a dependency, those are
+accepted when each says what `varyk publish` and cargo write; anything else
+is the error it is elsewhere, with a note, for a package that does not come
+by `path`, that it may have been published with a newer cargo. Varyk reads these keys and never follows
+them.
+In a published crate a dependency on a Varyk package keeps its `version`
+(with its path made absolute), so that dependency needs a `version`
+(`varyk add --path` writes one), and that package is published first, as
+with any Rust crate.
+
+### In the generated Rust
+
+For Rust readers: `units::length::add(a, b)` is written
+`::units::length::add(&a, &b)`, and a type as `::units::length::Meters`. The
+crate name is the dependency key with `-` as `_`, and the leading `::` keeps
+a local module of the same name out of the way. Inside a package its own
+items are `crate::` paths, since the package is its own crate. In your
+crate a type of a package is written with the key under which your package
+lists the package that declares it, not the key of a package it came
+through: `::u::length::Meters` when you list `u = { package = "units" }`.
+
+### Not yet
+
+Re-exports (`pub use`), so a package's path is the path of its modules;
+shorthands in `varyk add` (`varyk add sql`); a Varyk package under
+`[dev-dependencies]`, marked `optional`, or reached through a Rust crate;
+reading a package's `[features]`; skipping the compile of a package you
+trust; a summary file so `check` need not read a package's sources; rustc
+errors in a package mapped back to its `.vr` lines; and using a Varyk
+package from source in a plain Rust project (a published one works, as an
+ordinary crate).
+
 ## The command line
 
 ```text
-varyk check [file.vr]                            check for errors; never runs cargo
+varyk check [file.vr]                            check for errors
 varyk build [file.vr] [--release] [--emit-rust]  generate and build; print the executable's path
 varyk run [file.vr] [--release] [-- args...]     build, then run with the given arguments
 varyk test [file.vr]                             build the tests and run them
-varyk emit [file.vr] --out-dir DIR               check, then write the generated tree to DIR;
-                                                  never runs cargo
-varyk init [dir] [--lib]                         write a package that plain cargo build compiles
+varyk init [dir] [--lib]                         write a new package
 varyk add [cargo add args]                       run cargo add in the package
 varyk publish [--assemble-only] [-- cargo args]  check, assemble a plain Rust crate, and run
                                                   cargo publish there
@@ -2212,74 +2434,44 @@ in a `.rs` module you wrote is shown at your file and line, unchanged; a
 rustc error in the code Varyk itself generated, which should not happen,
 is reported as V0900 at the Varyk line responsible (see "Calling Rust").
 
-### `varyk init` and plain `cargo build`
+### `varyk init` and the target table
 
 `varyk init [dir]` writes a new package in `dir` (the current directory
-if you leave it out), named after that directory: `Cargo.toml`,
-`.gitignore` (`/target` and `.env`, so a local secrets file is never
-committed), `build.rs`, `src/main.rs`, and `src/main.vr` (a hello-world
-program). The `Cargo.toml` lists `varyk-std = "X.Y.Z"` under
+if you leave it out), named after that directory: three files,
+`Cargo.toml`, `.gitignore` (`/target` and `.env`, so a local secrets file is
+never committed), and `src/main.vr` (a hello-world program). The
+`Cargo.toml` names the package's root, `[[bin]]` with `name` the package's
+name and `path = "src/main.vr"`, and lists `varyk-std = "X.Y.Z"` under
 `[dependencies]`, the compiler's own version, since a program that uses
 `Error` or another `varyk-std` feature needs it. `varyk init --lib` writes
-`src/lib.rs` and `src/lib.vr` (one `pub fn`) instead, and prints one line,
-"created the package `<name>` in `<dir>`; run `varyk run` or `cargo run`" (`build` for a library, and "`cd <dir>`, then"
-first when you gave a directory other than `.`, in single quotes if it has
-a space or another character a shell treats specially). The name is the directory's name made
-a valid crate name (`my app` becomes `my_app`). It refuses to run, and
-writes nothing, if the other kind's root file exists there (`src/main.vr`
-for `--lib`, `src/lib.vr` otherwise), since a package has only one, or else
-if any of these five files already exists there, listing them; when the
-directory is already a Varyk package, it says so instead. To add
-Varyk to an existing Rust project, run `varyk init` in an empty directory,
-move its `build.rs` (merging by hand if you already have one) and
-`src/main.vr` into your project, and replace your `src/main.rs` with the
-stub after moving its code into a `.rs` module: the stub brings in the
-generated program, which has its own `fn main`. The package needs
-`edition = "2024"`. A Rust project with nested modules cannot adopt Varyk
-yet, since a `.rs` module cannot declare modules of its own.
+`src/lib.vr` (one `pub fn`) and `[lib]` with `path = "src/lib.vr"`
+instead, and prints one line, "created the package `<name>` in `<dir>`; run
+`varyk run`" (`varyk build` for a library, and "`cd <dir>`, then" first when
+you gave a directory other than `.`, in single quotes if it has a space or
+another character a shell treats specially). The name is the directory's
+name made a valid crate name (`my app` becomes `my_app`). It refuses to
+run, and writes nothing, if the other kind's root file exists there
+(`src/main.vr` for `--lib`, `src/lib.vr` otherwise), since a package has
+only one, or else if any of these three files already exists there,
+listing them; when the directory is already a Varyk package, it says so
+instead.
 
-The package `init` writes builds two ways: `varyk build`/`varyk run`, as
-above, and plain `cargo build`, with `varyk` on the `PATH` (or the `VARYK`
-environment variable naming its path, e.g. `VARYK=/path/to/varyk cargo
-build`). The stub `src/main.rs` is one line,
-`::std::include!(::std::concat!(::std::env!("OUT_DIR"),
-"/varyk/src/main.rs"));`, naming the standard macros by full path so that
-no macro of the package's own can take their place (a stub an older
-`init` wrote, without the `::std::`, still works), with no
-attribute of its own, so the `#[allow(warnings, arithmetic_overflow,
-unconditional_panic)]` Varyk writes on every item it generates is the only
-lint setting in force either way,
-besides `#[allow(non_snake_case)]` on the `mod` line of a `.vr` module
-whose name is not in snake case, which Rust applies to that module and the
-modules inside it.
-`build.rs` runs `varyk emit --out-dir $OUT_DIR/varyk` to produce that
-tree before `src/main.rs` is compiled, and declares
-`cargo:rerun-if-changed=src` and `cargo:rerun-if-env-changed=VARYK`, so
-editing a `.vr` file and running `cargo build` again picks up the
-change. If the emit step fails on a Varyk error, `build.rs` exits
-non-zero and cargo shows its stderr, which is Varyk's normal
-diagnostic rendering followed by "run `varyk build` to see this without
-cargo's wrapping"; if `varyk` cannot be found at all, `build.rs` fails
-with one line, "varyk was not found (tried `varyk`); install it with
-`cargo install varyk` or set VARYK to its path", naming `$VARYK` instead when it is
-set. Rustc errors under plain `cargo build`
-show `OUT_DIR` paths and are not mapped back to Varyk source; run
-`varyk build` for that.
+A Varyk package is built by `varyk` and only by `varyk`: `varyk build`,
+`varyk run`, `varyk test`, and `varyk publish`. It has no `build.rs` and no
+stub `src/main.rs`; plain `cargo build` of a source package is not
+supported, since the `.vr` root is not Rust. The target table is required
+(V0406 without it): it is the one thing `cargo` needs to read the package
+(for `varyk add`, say), and it names the `.vr` root. A `build.rs` or a
+`src/main.rs` left from an earlier `varyk init` is never read by any crate
+Varyk builds. The Rust code Varyk generates carries
+`#[allow(warnings, arithmetic_overflow, unconditional_panic)]` on every
+item, the only lint setting in force, besides `#[allow(non_snake_case)]`
+on the `mod` line of a `.vr` module whose name is not in snake case, which
+Rust applies to that module and the modules inside it. A rustc error in
+the Rust Varyk generated is reported at the Varyk line (V0900).
 
-`varyk emit [file.vr] --out-dir DIR` checks the target (a package or a
-single file, exactly as `check` locates it) and writes its generated
-`src/` tree under `DIR` (so `DIR/src/main.rs`, not `DIR/main.rs`); it
-never writes a `Cargo.toml` and never runs cargo. `DIR/src/` is
-cleared of anything Varyk did not generate there, so `emit` only writes
-into a directory it owns: a new or empty one (it then leaves a
-`.varyk-generated` marker file in `DIR`), one it wrote before, or one
-under `target/varyk/` or cargo's `OUT_DIR`, judged after following
-symbolic links further up its path. It refuses, writing nothing, any
-other `DIR` that is not empty; a `DIR` whose `src/` holds any file of
-the program being emitted (so `--out-dir .` inside a package is an
-error); a `DIR` or `DIR/src` that is itself a symbolic link; and a
-`DIR` written with `..` in it. It is the command `build.rs` calls, and
-exists as its own command mainly for that use.
+A package that uses other Varyk packages is built as described under
+[Packages](#packages).
 
 ### `varyk add` and upgrading
 
@@ -2287,9 +2479,9 @@ exists as its own command mainly for that use.
 you give, in the package found upward from the current directory (so a
 relative `--path` is relative to the package), and passes cargo's output and
 exit code through; Varyk interprets none of the arguments. Outside a
-package it says "no Varyk package here". `cargo add` needs the
-`src/main.rs` (or `src/lib.rs`) stub that `varyk init` writes; in a package
-without one, add the line to `Cargo.toml` by hand.
+package it says "no Varyk package here". Cargo reads the package's
+`Cargo.toml`, which names the `.vr` root, so `varyk add --path ../lib` works
+in any package `varyk init` made.
 
 A program that uses `varyk-std` (it names `Error`, calls one of its
 features, such as `json`, `log`, `time::sleep`, or `Task::all`, starts a call, or has an
@@ -2298,7 +2490,10 @@ not count) needs `varyk-std` in `[dependencies]`, as `"X.Y"` or `"X.Y.Z"`
 (a leading `^` is fine) or a table with such a `version` and no `path`,
 `git`, `optional`, or `package`, where `X.Y` is the compiler's version
 (`~`, `=`, `>=`, `*` and lists are refused); and if `Cargo.lock` locks
-`varyk-std`, a version no older than the compiler's. `varyk check` says
+`varyk-std`, a version no older than the compiler's. When the program or
+a Varyk package it uses needs `varyk-std`, the one `varyk-std` cargo picks
+for the whole build must be no older than the compiler's either (V0404 at
+the program's `varyk-std` line, or its `Cargo.toml`). `varyk check` says
 which of these fails (V0404) and the line to write. To upgrade, run
 `cargo install varyk`, then whatever `varyk check` asks for: change the
 line, or run `cargo update -p varyk-std`. A single file has no
@@ -2316,18 +2511,25 @@ interprets none of them) along with cargo's exit code and its output.
 `varyk publish --assemble-only` stops after the assembly and prints the
 crate's directory, running no cargo and publishing nothing.
 
+`cargo publish` verifies the crate by building it as a plain cargo user
+would, against the published versions of its dependencies. That build
+compiles the shipped Rust of a Varyk dependency, and any `build.rs` it was
+published with, which `varyk build` never does (see [What runs when you
+build](#what-runs-when-you-build)). Use `--no-verify` after `--` to skip it.
+
 The assembled crate holds the generated tree of `varyk build` (so
-`src/main.rs`/`src/lib.rs` is the real generated root, not the `init`
-stub, and every module sits at its place), every `.vr` source alongside
+`src/main.rs`/`src/lib.rs` is the real generated root and every module sits
+at its place), every `.vr` source alongside
 the file it produced, for readers, the manifest with `[package] build =
-false` and the same `[dependencies]` path rewrite `varyk build` uses, and
-the files the manifest's `readme` and `license-file` name, plus any
+false`, its target the generated root, and its `path`s made absolute (a
+dependency on a Varyk package keeps its `version`, which `varyk build`
+drops, since cargo keeps the `version` and drops the `path` when it
+publishes), and the files the manifest's `readme` and `license-file` name, plus any
 `README*`/`LICENSE*` at the package root. It has no `build.rs`, so it
 needs no `varyk`: a consumer adds it to `[dependencies]` like any crate
 and builds it with plain `cargo build`, and `cargo install` of a
-published Varyk binary works the same way. A Varyk package consuming a
-published Varyk library reaches it through a facade like any crate;
-direct import is an open question.
+published Varyk binary works the same way. A Varyk package that depends on a
+published Varyk library names it directly (see [Packages](#packages)).
 
 ## Error codes
 
@@ -2345,17 +2547,18 @@ Every error has a code. A code is never reused for a different meaning.
 | V0101 | unknown type, or `Option`, `Result`, `Vec`, or `HashMap` with the wrong number of types, a `HashMap` key type that is not an integer type, `bool`, or `string`, or a Rust struct or enum Varyk does not import (a tuple or unit struct, one with type or lifetime parameters, a `#[repr(packed)]` struct or one with no fixed size, one behind `#[cfg]`, or one marked `pub(crate)` or another `pub(..)`), or a type a `pub use` of the `.rs` file brings in, saying why |
 | V0102 | unknown field, of a struct or of a variant with named fields, in a value or a pattern |
 | V0103 | a name defined more than once (a method included, a field of a variant, a field named twice in a value or a pattern, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
-| V0104 | a module file that is missing, present as both `.vr` and `.rs` or as both `shop.vr` and `shop/mod.vr`, unreadable, a `.rs` file that cannot be parsed as Rust, or named `main` or `lib` (or `bin` in the entry file), in any capitalization; a `.rs` file that uses a crate not in `[dependencies]` (or only in `[dev-dependencies]`, or any crate in a single file) in a `use` or `extern crate` item (a crate named only in a path, `other::f()`, is rustc's to report, at build), declares a module of its own, or uses `include!`, shown at that line of the `.rs` file |
-| V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see; a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub` |
+| V0104 | a module file that is missing, present as both `.vr` and `.rs` (in a Varyk package this build uses, the `.vr` is loaded and the `.rs` ignored instead) or as both `shop.vr` and `shop/mod.vr`, unreadable, a `.rs` file that cannot be parsed as Rust, or named `main` or `lib` (or `bin` in the entry file), in any capitalization; a `.rs` file that uses a crate not in `[dependencies]` (or only in `[dev-dependencies]`, or any crate in a single file) in a `use` or `extern crate` item (a crate named only in a path, `other::f()`, is rustc's to report, at build), declares a module of its own, or uses `include!`, shown at that line of the `.rs` file |
+| V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see (in a library, the packages that use it included: a `pub` item in `pub` modules, or a `pub` function, method, or field of a `.rs` module they can reach, naming a type in a private module); a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub` |
 | V0106 | a missing or malformed `fn main()`, `main` defined in a library's `src/lib.vr`, or a call to an async `main` |
 | V0107 | `String` or `str` written where `string` is meant |
 | V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change. Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path, and a type in a `.rs` file with a glob `use` or a macro that could define names |
 | V0109 | a struct or enum that contains itself, directly or through other structs, enums, `Option`, or `Result`; a `Vec` or `HashMap` breaks the cycle |
-| V0110 | a `use` naming a crate this compiler recognizes by name (`std`, `core`, `alloc`, and in a package every crate in `[dependencies]`); call a crate from a `.rs` module in the package instead |
-| V0111 | a path Varyk cannot follow: `super` in the entry file, a `use` ending at an enum variant or at a type's method or associated function, a `use` whose leading name, or whose only name (`use shop;`), is a module declared elsewhere in the package (write it from `crate::` or `super::`), or a `use` whose leading name another `use` made |
+| V0110 | a `use` naming a crate this compiler recognizes by name (`std`, `core`, `alloc`), or a path or a `use` starting at a dependency in `[dependencies]` that is a Rust crate and not a Varyk package; call a crate from a `.rs` module in the package instead |
+| V0111 | a path Varyk cannot follow: `super` in the entry file, a `use` ending at an enum variant or at a type's method or associated function, a `use` whose leading name, or whose only name (`use shop;`), is a module declared elsewhere in the package (write it from `crate::` or `super::`), or a `use` whose leading name another `use` made; a `use` of a package's name alone (`use units;`), which can already be used; when its leading name is also a dependency that a module or a standard name hides, a note gives the `Cargo.toml` line that renames the dependency (as V0100 and V0113 do) |
 | V0112 | an attribute Varyk does not have (the message lists the four; `derive` gets a note that `.clone()`, `==`, and JSON need none), one in a place it cannot go (the note says where it goes), the same attribute twice on one item, or a value missing (`#[rename]`, `#[default]`) or not expected (`#[skip(1)]`, `#[test(1)]`) |
 | V0113 | the name `Error`, the standard error type, or `Task` or `Shared`, the standard types of async code, given to a struct, an enum, a module, or a `use`, or to a `pub` struct or enum of a `.rs` module; `json`, `env`, `log`, or `time`, the standard modules, given to a module, a struct, an enum, or a `use`, or a `use` of one (`use json;`, `use json::parse;`); `assert` or `assert_eq` given to a function or a `use`; a function, method, struct, enum, module, or `use` name starting with `varyk_`, kept for what Varyk adds to the Rust it writes |
 | V0114 | a `#[test]` function with parameters or a return type, a call to or `use` of one, or `main` of the entry file marked `#[test]`; `assert` or `assert_eq` outside a `#[test]` function |
+| V0115 | a value whose type is, or holds, a struct or enum declared in a Varyk package this package does not list in `[dependencies]`, or in another version of one it does (two versions are two packages; the note names both); the note gives the line for `Cargo.toml` |
 | V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool`; `Task::all` or `Task::all_settled` given anything but a `Vec` of tasks, and `Task::all_settled` on tasks that do not give a `Result`; a `Shared` given where the struct it holds is expected |
 | V0201 | wrong number of arguments, or of values in an enum value; a variant value with named fields that leaves one out, or with the wrong kind of brackets; a closure with more or fewer than one parameter |
 | V0202 | `println!`, `format!`, or a `log` call with the wrong number of `{}`, or something other than `{}` in braces; a `log` call whose text is not a string literal written in quotes |
@@ -2366,7 +2569,7 @@ Every error has a code. A code is never reused for a different meaning.
 | V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, `parse()`, `json::parse(..)`, or `env::parse()` whose type cannot be worked out where it is written, `Err(e)?;`, `text.parse().ok()`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
 | V0208 | a value that must be used where it is made: an `Option` from `get`, or from `find` on a chain of borrowed items, holding part of a stored value, stored in a `let`, passed, returned, used with `?`, given any method, or named whole by a pattern (look inside it with `match` or `if let`); an unfinished chain anywhere but as the value the next call of the chain is made on or the head of a `for` (finish the chain there) |
 | V0209 | a `#[rename]` value that is not a string in quotes, or is empty; a `#[default]` value that does not fit its field's type (`"x"` on an `i32`, `300` on a `u8`, `1` on an `f64`); `#[default]` on an `Option` field or on a field that is not a number, `string`, or `bool`; on a type a `json` call reaches, a skipped field with no `#[default]` that is not an `Option` when the type is read, or two fields that are not skipped, or two variants, with the same key once renamed, and, on a type `env::parse` reaches, two fields whose upper-cased keys are the same variable |
-| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
+| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, a type declared in another Varyk package (convert it in that package), a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
 | V0211 | a call to an async function, or `.await`, in a function that is not `async`; `.await` inside a closure |
 | V0212 | `.await` after something that is not a call to an async function, `Task::all`, `Task::all_settled`, or a name holding a task; `Task::all` or `Task::all_settled` without `.await` |
 | V0213 | a started call anywhere but a `let` with a name, the value `.detach()` is called on, a `vec!` element, or the value of a collected `map`'s closure, `let _ =` included; a name holding a task, or a `Vec` of tasks, that nothing awaits, detaches, or gives to `Task::all` or `Task::all_settled`: its task would be thrown away |
@@ -2386,9 +2589,11 @@ Every error has a code. A code is never reused for a different meaning.
 | V0310 | changing something reached through a `Shared`: assigning to it, passing it to a `mut` parameter, or calling a `mut self` method or a changing call such as `push` on it |
 | V0311 | an async function that returns part of a parameter; return a copy instead |
 | V0400 | a package whose `Cargo.toml` does not say `edition = "2024"` |
-| V0401 | something in `Cargo.toml` Varyk does not support yet: a key outside the fixed set `check` reads, a `src/bin/`, `examples/`, `tests/`, or `benches/` directory or the root file of the other kind (`src/lib.rs` beside `src/main.vr`), which cargo would build as further targets, a setting taken from a Cargo workspace (`workspace = true`), dependencies for only some platforms (`[target.'cfg(..)'.dependencies]`), `links`, which needs a build script the published crate does not carry, a custom `build` script, `[lints]`, or `[patch]` or `[replace]`, in the package or in the root manifest of an enclosing workspace |
-| V0402 | a Cargo target table (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`), not supported yet: a package is one program from `src/main.vr` or one library from `src/lib.vr`, found by cargo's defaults |
-| V0403 | a `Cargo.toml` that cannot be used: it cannot be read, is not valid TOML, has a top-level key cargo reads as a table (`workspace`, `dependencies`, `features`, ...) that is not one, has no `[package]` `name`, names with `workspace` a directory that has no workspace manifest or sits under a `Cargo.toml` whose `workspace` is not a table, or its `name` is not letters, digits, `-`, and `_` starting with a letter or `_`, or a `[package]` key has a value of the wrong shape (`license = 1`), or its `rust-version` is not `MAJOR.MINOR[.PATCH]`, or is `cache` or `package`, or a program (not a library) is called `deps`, `examples`, `build`, or `incremental` in any case, the names of Cargo's own build folders, or its `version` is present but not text of the form `MAJOR.MINOR.PATCH` that cargo accepts; or its package has both `src/main.vr` and `src/lib.vr` (from the command line, a `Cargo.toml` found but whose package has neither is reported before any check runs: "no Varyk package here" and why, in one line) |
-| V0404 | the `varyk-std` dependency of a program that uses it is missing, comes from a `path` or `git`, is `optional` or renamed, has a requirement that is not `X.Y` or `X.Y.Z` (optionally `^`) on the compiler's version, or `Cargo.lock` locks an older `varyk-std`; the note gives the line to write, or `cargo update -p varyk-std` |
-| V0900 | rustc rejected the Rust code Varyk generated, which should not happen, except for the known limits listed under "Calling Rust"; the message carries rustc's own message and code and asks you to report it, or, when rustc also rejected a `.rs` module you wrote, says it may follow from that error. An error or warning in a `.rs` module you wrote is not this code: it is shown at your file, unchanged |
+| V0401 | something in `Cargo.toml` Varyk does not support yet: a key outside the fixed set `check` reads, a `src/bin/`, `examples/`, `tests/`, or `benches/` directory or the root file of the other kind (`src/lib.rs` beside `src/main.vr`), which cargo would build as further targets, a setting taken from a Cargo workspace (`workspace = true`), dependencies for only some platforms (`[target.'cfg(..)'.dependencies]`), `links`, which needs a build script no crate Varyk builds runs, a `build` key other than `build = false`, a dependency keyed `std`, `core`, or `alloc`, `[lints]`, or `[patch]` or `[replace]`, in the package or in the root manifest of an enclosing workspace; or a Varyk package the build reaches other than through the `[dependencies]` of the program or of a Varyk package it uses (through `[dev-dependencies]`, as an `optional` dependency a feature turned on, or through a Rust crate), or a Varyk package of the build with the same name and version as another `path` package or Varyk package of the build; the message names the package and what reaches it; also a dependency marked `optional` named in Varyk code |
+| V0402 | a Cargo target table not supported yet: `[[example]]`, `[[test]]`, `[[bench]]`, or a `[[bin]]` or `[lib]` that is not the one naming the package's own root (`name` the package's name, `path` `src/main.vr` or `src/lib.vr`, no other key) |
+| V0403 | a `Cargo.toml` that cannot be used: it cannot be read, is not valid TOML, has a top-level key cargo reads as a table (`workspace`, `dependencies`, `features`, ...) that is not one, has no `[package]` `name`, names with `workspace` a directory that has no workspace manifest or sits under a `Cargo.toml` whose `workspace` is not a table, or its `name` is not letters, digits, `-`, and `_` starting with a letter or `_`, or a `[package]` key has a value of the wrong shape (`license = 1`), or its `rust-version` is not `MAJOR.MINOR[.PATCH]`, or is `cache`, `package`, or `packages`, or a program (not a library) is called `deps`, `examples`, `build`, or `incremental` in any case, the names of Cargo's own build folders, or its `version` is present but not text of the form `MAJOR.MINOR.PATCH` that cargo accepts; or its package has both `src/main.vr` and `src/lib.vr` (from the command line, a `Cargo.toml` found but whose package has neither is reported before any check runs: "no Varyk package here" and why, in one line) |
+| V0404 | the `varyk-std` dependency of a program that uses it (or of a Varyk package of the build that uses it, at that package's own `Cargo.toml`, whose lock is not read) is missing, comes from a `path` or `git`, is `optional` or renamed, has a requirement that is not `X.Y` or `X.Y.Z` (optionally `^`) on the compiler's version, or `Cargo.lock` locks an older `varyk-std`; or, when the program or a Varyk package it uses needs `varyk-std`, the `varyk-std` cargo resolves for the build is older than the compiler (at the program's `varyk-std` line, or its `Cargo.toml`, and not beside the `Cargo.lock` one); the note gives the line to write, or `cargo update -p varyk-std` |
+| V0405 | cargo could not work out which packages the build uses (`cargo metadata` failed, for example on a `path` dependency whose folder is missing, or offline with a package not yet downloaded); the note carries cargo's own message |
+| V0406 | a package whose `Cargo.toml` does not name its `.vr` root as its target: no `[[bin]]` (`name` the package's name, `path = "src/main.vr"`) or `[lib]` (`path = "src/lib.vr"`); the note and the help give the lines to add |
+| V0900 | rustc rejected the Rust code Varyk generated, which should not happen, except for the known limits listed under "Calling Rust"; the message carries rustc's own message and code and asks you to report it, or, when rustc also rejected a `.rs` module you wrote, says it may follow from that error. An error or warning in a `.rs` module you wrote is not this code: it is shown at your file, unchanged. An error in the crate of a Varyk package the build uses is this code too, naming the package, and is not a Varyk bug when it is in one of that package's own `.rs` modules |
 | V0901 | at `varyk build`: a started call whose task holds a value from Rust code that cannot be sent to, or shared with, another thread (an `Rc`, `Cell`, or `RefCell` inside it); the message names the Rust type |

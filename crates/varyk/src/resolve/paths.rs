@@ -29,7 +29,7 @@ impl Symbols {
     pub(crate) fn module_named(&self, name: &str) -> bool {
         self.scopes
             .iter()
-            .any(|scope| scope.children.contains_key(name))
+            .any(|scope| scope.package.is_none() && scope.children.contains_key(name))
     }
 
     /// The path from the crate root, without `crate::`, of every module
@@ -37,6 +37,7 @@ impl Symbols {
     pub(crate) fn modules_named(&self, name: &str) -> Vec<&str> {
         self.scopes
             .iter()
+            .filter(|scope| scope.package.is_none())
             .filter_map(|scope| scope.children.get(name))
             .map(|id| self.scopes[id.0 as usize].name.as_str())
             .collect()
@@ -51,7 +52,9 @@ impl Symbols {
     /// A path with no keyword also lets its first segment be a `use`
     /// alias of `from`'s own file (spec 3.3), consulted only there: an
     /// alias is never exported, so it never governs a later segment once
-    /// the walk has moved into another module.
+    /// the walk has moved into another module. Failing both, it may be a
+    /// dependency of the package (M5b2 spec 2.1): a Varyk package's root,
+    /// or `Dependency` for one Varyk code cannot name.
     pub(crate) fn module_at(&self, from: ModuleId, path: &Path) -> Result<ModuleId, LookupError> {
         let mut current = match path.leading {
             PathStart::Crate => ModuleId(0),
@@ -71,7 +74,7 @@ impl Symbols {
                     Some(module) => module,
                     None => match self.scopes[from.0 as usize].use_types.get(&first.name) {
                         Some(UseTarget::Module(module)) => *module,
-                        _ => return Err(LookupError::Unknown),
+                        _ => self.dependency_root(first)?,
                     },
                 };
             }
@@ -99,6 +102,7 @@ pub fn resolve_path(
 ) -> Result<ModuleId, Diagnostic> {
     symbols.module_at(from, path).map_err(|error| match error {
         LookupError::NoParent { span } => no_parent(span),
+        LookupError::Dependency { span, dep } => symbols.dependency_error(span, dep),
         _ => Diagnostic::new(
             codes::V0100,
             path.span,

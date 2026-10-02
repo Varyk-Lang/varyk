@@ -1,0 +1,8 @@
+struct Config {
+    port: i32,
+    mode: route::Mode,
+}
+
+fn main() {
+    let config: Result<Config, Error> = env::parse();
+}

@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::varyk;
+use common::{fixture_dir, varyk, varyk_in};
 
 /// Runs `varyk check` on the case's entry file and returns its stderr,
 /// after asserting the case failed with exactly one diagnostic, headed
@@ -19,8 +19,26 @@ fn check_case(case: &str, code: &str, has_fix_it: bool) -> String {
 /// Runs `varyk check` on the case's `entry` file; see [`check_case`].
 fn check_entry(case: &str, entry: &str, code: &str, has_fix_it: bool) -> String {
     let path = format!("crates/varyk/tests/fixtures/errors/{case}/{entry}");
-    let output = varyk(&["check", &path]);
+    checked(case, varyk(&["check", &path]), code, has_fix_it)
+}
 
+/// Runs `varyk check` on the case's `entry` file in a copy of the case,
+/// from the copy, so that the package graph cargo is asked for is written
+/// there and not in the source tree (M5b2 spec 9); the copy's directory
+/// is `[dir]` in what is returned. See [`check_case`].
+fn check_copied(case: &str, entry: &str, code: &str) -> String {
+    let dir = fixture_dir("errors", case);
+    let stderr = checked(case, varyk_in(&dir, &["check", entry]), code, false);
+    let mut stderr = stderr.replace(&dir.display().to_string(), "[dir]");
+    if let Ok(real) = dir.canonicalize() {
+        stderr = stderr.replace(&real.display().to_string(), "[dir]");
+    }
+    stderr
+}
+
+/// The stderr of `output`, a check of `case`, after asserting it failed
+/// with exactly one diagnostic; see [`check_case`].
+fn checked(case: &str, output: std::process::Output, code: &str, has_fix_it: bool) -> String {
     assert_eq!(output.status.code(), Some(1), "{case}: {:?}", output.status);
     assert!(
         output.stdout.is_empty(),
@@ -102,11 +120,28 @@ fn without_version(text: &str) -> String {
 /// 2.1, 2.2), checked through `$entry`, the root file.
 macro_rules! package_error_case {
     ($name:ident, $code:literal, $entry:literal) => {
+        package_error_case!($name, $code, $entry, fix_it: false);
+    };
+    ($name:ident, $code:literal, $entry:literal, fix_it: $fix_it:literal) => {
         #[test]
         fn $name() {
-            let stderr = check_entry(stringify!($name), $entry, $code, false);
+            let stderr = check_entry(stringify!($name), $entry, $code, $fix_it);
             // The compiler's version is in V0404's text; a release must not
             // change the snapshot.
+            insta::assert_snapshot!(without_version(&stderr));
+        }
+    };
+}
+
+/// One test per package case that lists a dependency besides
+/// `varyk-std`, checked from a copy (see [`check_copied`]) through
+/// `$entry`.
+macro_rules! copied_package_error_case {
+    ($name:ident, $code:literal, $entry:literal) => {
+        #[test]
+        fn $name() {
+            let stderr = check_copied(stringify!($name), $entry, $code);
+            // The compiler's version is in V0404's text.
             insta::assert_snapshot!(without_version(&stderr));
         }
     };
@@ -188,8 +223,20 @@ error_case!(v0105_private_field, "V0105", fix_it: true);
 error_case!(v0105_private_field_in_literal, "V0105", fix_it: true);
 error_case!(v0105_rust_struct_literal_hidden_field, "V0105", fix_it: false);
 error_case!(v0105_rust_fn_pub_crate, "V0105", fix_it: false);
+package_error_case!(
+    v0105_library_fn_naming_a_private_module_type,
+    "V0105",
+    "src/lib.vr",
+    fix_it: true
+);
+package_error_case!(
+    v0105_library_rust_fn_naming_a_private_module_type,
+    "V0105",
+    "src/lib.vr",
+    fix_it: true
+);
 package_error_case!(v0104_rust_crate_not_a_dependency, "V0104", "src/main.vr");
-package_error_case!(v0104_rust_crate_dev_dependency, "V0104", "src/main.vr");
+copied_package_error_case!(v0104_rust_crate_dev_dependency, "V0104", "src/main.vr");
 package_error_case!(v0106_main_in_library, "V0106", "src/lib.vr");
 error_case!(v0106_missing_main, "V0106", fix_it: false);
 error_case!(v0106_async_main_called, "V0106", fix_it: false);
@@ -205,6 +252,7 @@ error_case!(v0108_unit_inside_rust_type, "V0108", fix_it: false);
 error_case!(v0108_rust_alias_of_a_mapped_name, "V0108", fix_it: false);
 error_case!(v0109_recursive_struct, "V0109", fix_it: false);
 error_case!(v0110_use_crate_std, "V0110", fix_it: false);
+copied_package_error_case!(v0110_rust_crate_in_a_path, "V0110", "src/main.vr");
 error_case!(v0111_super_in_root, "V0111", fix_it: false);
 error_case!(v0111_use_variant, "V0111", fix_it: false);
 error_case!(v0111_use_variant_in_module, "V0111", fix_it: false);
@@ -251,6 +299,8 @@ error_case!(v0114_test_with_parameters, "V0114", fix_it: false);
 error_case!(v0114_test_with_return_type, "V0114", fix_it: false);
 error_case!(v0114_test_named_main, "V0114", fix_it: false);
 error_case!(v0114_assert_outside_test, "V0114", fix_it: false);
+copied_package_error_case!(v0115_value_of_an_unlisted_package, "V0115", "src/main.vr");
+copied_package_error_case!(v0115_another_version_of_a_package, "V0115", "src/main.vr");
 error_case!(v0103_use_name_clash, "V0103", fix_it: false);
 error_case!(v0103_hash_map_declared, "V0103", fix_it: false);
 error_case!(v0103_duplicate_variant_field, "V0103", fix_it: false);
@@ -259,6 +309,7 @@ error_case!(v0200_as_on_bool, "V0200", fix_it: false);
 error_case!(v0200_sort_floats, "V0200", fix_it: false);
 error_case!(v0200_all_settled_on_plain_tasks, "V0200", fix_it: false);
 error_case!(v0200_shared_for_struct, "V0200", fix_it: false);
+copied_package_error_case!(v0200_error_in_a_dependency, "V0200", "src/main.vr");
 error_case!(v0201_wrong_argument_count, "V0201", fix_it: false);
 error_case!(v0201_missing_variant_field, "V0201", fix_it: false);
 error_case!(v0201_closure_with_two_parameters, "V0201", fix_it: false);
@@ -317,6 +368,18 @@ error_case!(v0210_env_map, "V0210", fix_it: false);
 error_case!(v0210_rust_type, "V0210", fix_it: false);
 error_case!(v0210_shared_in_json, "V0210", fix_it: false);
 error_case!(v0210_shared_in_env, "V0210", fix_it: false);
+copied_package_error_case!(v0210_json_on_a_package_type, "V0210", "src/main.vr");
+copied_package_error_case!(
+    v0210_json_on_a_type_holding_a_package_type,
+    "V0210",
+    "src/main.vr"
+);
+copied_package_error_case!(v0210_env_on_a_package_type, "V0210", "src/main.vr");
+copied_package_error_case!(
+    v0210_env_on_a_type_holding_a_package_type,
+    "V0210",
+    "src/main.vr"
+);
 error_case!(v0211_async_call_in_plain_fn, "V0211", fix_it: true);
 error_case!(v0211_await_in_closure, "V0211", fix_it: false);
 error_case!(v0212_await_on_plain_call, "V0212", fix_it: true);
@@ -375,6 +438,14 @@ error_case!(v0311_async_returns_part, "V0311", fix_it: true);
 package_error_case!(v0400_edition_2021, "V0400", "src/main.vr");
 package_error_case!(v0401_workspace_true, "V0401", "src/main.vr");
 package_error_case!(v0401_target_dependencies, "V0401", "src/main.vr");
+copied_package_error_case!(v0401_dependency_named_std, "V0401", "src/main.vr");
+copied_package_error_case!(v0401_varyk_package_dev_dependency, "V0401", "src/main.vr");
+copied_package_error_case!(
+    v0401_varyk_package_through_rust_crate,
+    "V0401",
+    "src/main.vr"
+);
+copied_package_error_case!(v0401_optional_dependency_named, "V0401", "src/main.vr");
 package_error_case!(v0402_target_path, "V0402", "src/main.vr");
 package_error_case!(v0403_unreadable_manifest, "V0403", "src/main.vr");
 package_error_case!(v0403_invalid_toml, "V0403", "src/main.vr");
@@ -382,9 +453,50 @@ package_error_case!(v0403_missing_name, "V0403", "src/main.vr");
 package_error_case!(v0403_both_roots, "V0403", "src/main.vr");
 package_error_case!(v0403_invalid_name, "V0403", "src/main.vr");
 package_error_case!(v0403_program_name, "V0403", "src/main.vr");
+package_error_case!(v0406_no_target, "V0406", "src/main.vr", fix_it: true);
 package_error_case!(v0404_std_missing, "V0404", "src/main.vr");
 package_error_case!(v0404_std_wrong_minor, "V0404", "src/main.vr");
 package_error_case!(v0404_std_stale_lock, "V0404", "src/main.vr");
 package_error_case!(v0404_std_missing_async_main, "V0404", "src/main.vr");
+copied_package_error_case!(v0404_dependency_without_std, "V0404", "src/main.vr");
+copied_package_error_case!(
+    v0404_program_without_std_for_a_logging_package,
+    "V0404",
+    "src/main.vr"
+);
+copied_package_error_case!(
+    v0404_wrong_std_for_a_logging_package,
+    "V0404",
+    "src/main.vr"
+);
+
+/// A package that fails its check also gets the V0404 on its own
+/// `varyk-std` line when that line is wrong (M5b2 spec 4.2), without
+/// resolving the line: here a `path`, so cargo needs no network.
+#[test]
+fn v0404_failing_dependency_wrong_std() {
+    let case = "v0404_failing_dependency_wrong_std";
+    let dir = fixture_dir("errors", case);
+    let output = varyk_in(&dir, &["check", "src/main.vr"]);
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.status);
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be valid utf-8");
+    let mut stderr = stderr.replace(&dir.display().to_string(), "[dir]");
+    if let Ok(real) = dir.canonicalize() {
+        stderr = stderr.replace(&real.display().to_string(), "[dir]");
+    }
+    assert!(
+        stderr.contains("error[V0200]") && stderr.contains("error[V0404]"),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .matches("in the package `units` 0.1.0, which this build uses")
+            .count(),
+        2,
+        "{stderr}"
+    );
+    insta::assert_snapshot!(without_version(&stderr));
+}
+copied_package_error_case!(v0405_missing_path_dependency, "V0405", "src/main.vr");
 build_error_case!(v0901_rc_given_to_a_task, "V0901");
 build_error_case!(v0901_cell_shared_with_a_task, "V0901");

@@ -7,14 +7,13 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{varyk, varyk_with_env};
+use common::{example_dir, varyk, varyk_in, varyk_with_env};
 
 /// A fresh directory under this test binary's own `CARGO_TARGET_TMPDIR`,
-/// for an `emit --out-dir` target that must not collide with another
-/// test's.
+/// for a test that must not collide with another's.
 fn out_dir(name: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("emit")
+        .join("out")
         .join(name);
     let _ = fs::remove_dir_all(&dir);
     dir
@@ -150,7 +149,6 @@ fn check_passes_on_every_example_entry_file() {
         "examples/fanout.vr",
         "examples/shared.vr",
         "examples/packages/greeting/src/main.vr",
-        "examples/packages/matcher/src/main.vr",
         "examples/packages/units/src/lib.vr",
     ] {
         let output = varyk(&["check", entry]);
@@ -161,72 +159,16 @@ fn check_passes_on_every_example_entry_file() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-}
-
-#[test]
-fn emit_out_dir_writes_the_generated_tree_with_no_inner_attribute() {
-    let dir = out_dir("hello");
-
-    let output = varyk(&[
-        "emit",
-        "examples/hello.vr",
-        "--out-dir",
-        dir.to_str().expect("utf-8 path"),
-    ]);
-
+    // `matcher` depends on `regex-lite`, so `check` asks cargo for its
+    // graph, written under the package: a copy is checked, never the
+    // source tree.
+    let matcher = example_dir("matcher");
+    let output = varyk_in(&matcher, &["check", "src/main.vr"]);
     assert!(
         output.status.success(),
-        "status: {:?}, stderr: {}",
+        "matcher: status {:?}, stderr: {}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
-
-    let main_rs = fs::read_to_string(dir.join("src/main.rs")).expect("emit wrote src/main.rs");
-    assert!(
-        !main_rs.trim_start().starts_with("#!["),
-        "the root file must carry no inner attribute so it also works via `include!`: {main_rs}"
-    );
-    assert!(
-        main_rs.contains("#[allow(warnings, arithmetic_overflow, unconditional_panic)]"),
-        "{main_rs}"
-    );
-    assert!(
-        !dir.join("Cargo.toml").exists(),
-        "emit writes only the src/ tree of spec 2.3, not a manifest"
-    );
-}
-
-#[test]
-fn emit_on_a_varyk_error_reports_diagnostics_on_stderr_and_never_runs_cargo() {
-    let dir = out_dir("parse_error");
-    let empty_path = out_dir("parse_error_no_tools");
-    fs::create_dir_all(&empty_path).unwrap();
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap();
-
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_varyk"))
-        .args([
-            "emit",
-            "crates/varyk/tests/fixtures/parse_error/main.vr",
-            "--out-dir",
-        ])
-        .arg(&dir)
-        .current_dir(&workspace_root)
-        .env("PATH", &empty_path)
-        .output()
-        .expect("spawn varyk");
-
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
-    assert!(stderr.contains("V0002"), "{stderr}");
-    assert!(
-        !dir.exists(),
-        "emit must not write a partial tree on failure"
     );
 }
 

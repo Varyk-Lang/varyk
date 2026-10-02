@@ -1,0 +1,33 @@
+pub mod length;
+mod hidden;
+
+pub fn one() -> i32 {
+    1
+}
+
+fn secret() -> i32 {
+    2
+}
+
+#[test]
+fn one_is_one() {
+    assert_eq(one(), 1);
+}
+
+pub enum Shape {
+    Circle { radius: i32 },
+    Square(i32),
+    Point,
+}
+
+pub async fn ready() -> i32 {
+    1
+}
+
+pub fn zero_value() -> i32 {
+    crate::length::zero().value
+}
+
+pub struct Failure {
+    pub error: Error,
+}

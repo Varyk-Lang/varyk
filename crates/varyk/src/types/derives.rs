@@ -396,6 +396,12 @@ pub enum Part {
     Error,
     /// A struct or enum imported from a `.rs` module, named.
     Rust(String),
+    /// A struct or enum declared in another Varyk package (M5b2 spec
+    /// 2.5): its name and the package's.
+    Package {
+        name: String,
+        package: String,
+    },
     /// Any other type (`Result`, `()`), named.
     Other(String),
     /// A `Shared` (milestone 5b1 spec 2.6), named: a handle, not data.
@@ -445,6 +451,9 @@ impl NotConvertible {
             Part::MapKey(map) => format!("`{map}` has keys that are not `string`"),
             Part::Error => "`Error` holds a message, not data".to_string(),
             Part::Rust(name) => format!("`{name}` is a Rust type from a `.rs` module"),
+            Part::Package { name, package } => {
+                format!("`{name}` is declared in the package `{package}`")
+            }
             Part::Other(name) => {
                 format!("`{name}` is not a type that {} can hold", medium.name())
             }
@@ -487,6 +496,28 @@ impl NotConvertible {
                 "only Varyk's own types go through {through}; copy what is needed into a Varyk \
                  struct"
             ),
+            Part::Package { name, package } => {
+                let example = match medium {
+                    Medium::Json => format!(
+                        "`pub fn {}_json({}: {name}) -> string`",
+                        snake(name),
+                        snake(name)
+                    ),
+                    Medium::Env => format!("`pub fn {}() -> Result<{name}, Error>`", snake(name)),
+                };
+                let instead = if self.path.is_empty() {
+                    format!("do it there instead, with a `pub fn` such as {example}")
+                } else {
+                    format!(
+                        "do it there instead, or give this field a type of this package in \
+                         place of `{name}`"
+                    )
+                };
+                format!(
+                    "a package is built without knowing who uses it, so only `{package}` can \
+                     convert its own types through {through}; {instead}"
+                )
+            }
             Part::Other(_) => match medium {
                 Medium::Json => "JSON holds numbers, `bool`, `string`, `Option`, `Vec`, \
                      `HashMap<string, _>`, structs, and enums whose variants carry no data"
@@ -536,6 +567,9 @@ pub fn env_readable(
         return Err(whole(Part::NotStruct(ty_name(structs, enums, ty))));
     };
     let def = &structs[id.0 as usize];
+    if let Some(item) = &def.package {
+        return Err(whole(package_part(&def.name, &item.name)));
+    }
     if def.imported {
         return Err(whole(Part::Rust(def.name.clone())));
     }
@@ -563,6 +597,28 @@ pub fn env_readable(
         });
     }
     Ok(())
+}
+
+/// The part in the way for `name`, a struct or enum declared in the
+/// Varyk package `package` (M5b2 spec 2.5).
+fn package_part(name: &str, package: &str) -> Part {
+    Part::Package {
+        name: name.to_string(),
+        package: package.to_string(),
+    }
+}
+
+/// `name`, a type's name, in snake case: `stop` for `Stop`, `bus_stop`
+/// for `BusStop`.
+fn snake(name: &str) -> String {
+    let mut out = String::new();
+    for (index, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() && index > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
 }
 
 /// Whether a value of type `ty` can go through `json` (M5a spec 2.9): a
@@ -611,6 +667,9 @@ fn walk(
             }
             entered.push(named);
             let def = &structs[id.0 as usize];
+            if let Some(item) = &def.package {
+                return Err(package_part(&def.name, &item.name));
+            }
             if def.imported {
                 return Err(Part::Rust(def.name.clone()));
             }
@@ -624,6 +683,9 @@ fn walk(
         }
         Ty::Enum(id) => {
             let def = &enums[id.0 as usize];
+            if let Some(item) = &def.package {
+                return Err(package_part(&def.name, &item.name));
+            }
             if def.imported {
                 return Err(Part::Rust(def.name.clone()));
             }

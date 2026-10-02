@@ -1,0 +1,8 @@
+struct Plan {
+    name: string,
+    stop: route::Stop,
+}
+
+fn main() {
+    let plan: Result<Plan, Error> = json::parse("{}");
+}

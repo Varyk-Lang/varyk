@@ -106,7 +106,7 @@ impl FnChecker<'_> {
                         self.diagnostics.push(diagnostic);
                         return None;
                     }
-                    Err(LookupError::NoParent { .. }) => {
+                    Err(LookupError::NoParent { .. } | LookupError::Dependency { .. }) => {
                         unreachable!("a member lookup follows no path")
                     }
                 };

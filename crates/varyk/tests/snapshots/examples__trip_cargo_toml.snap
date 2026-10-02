@@ -1,0 +1,24 @@
+---
+source: crates/varyk/tests/examples.rs
+expression: "redacted(&read(\"target/varyk/trip/Cargo.toml\"), parent)"
+---
+[[bin]]
+name = "trip"
+path = "src/main.rs"
+
+[dependencies.route]
+path = "[examples]/trip/target/varyk/packages/route-0.1.0"
+
+[dependencies.units]
+path = "[examples]/trip/target/varyk/packages/units-0.1.0"
+
+[dependencies.varyk-std]
+path = "[varyk-std]"
+
+[package]
+build = false
+edition = "2024"
+name = "trip"
+version = "0.1.0"
+
+[workspace]

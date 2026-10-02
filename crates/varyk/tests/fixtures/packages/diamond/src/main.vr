@@ -1,0 +1,5 @@
+fn main() {
+    let legs = vec![route::leg(3), route::leg(4)];
+    let sum = units::add(route::total(legs), units::Meters { value: 1 });
+    println!("{}", sum.value);
+}

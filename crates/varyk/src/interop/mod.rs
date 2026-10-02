@@ -88,6 +88,8 @@ pub struct ImportedFn {
     /// `async fn` (milestone 5b1 spec 2.8): called awaited or started, as
     /// a Varyk async function is.
     pub is_async: bool,
+    /// Byte range of the function's name in the file.
+    pub span: Range<usize>,
 }
 
 /// Whether an [`ImportedField`] is `pub` (plain `pub`) or not visible

@@ -2936,13 +2936,64 @@ const MUST_RUN_TREES: &[(&str, Files, &str)] = &[
         )],
         "failed: no\ndone\n",
     ),
+    (
+        "a package's items used across the package boundary (M5b2 spec 5): a borrowed return, \
+         a `mut` parameter, a struct literal, a `match` on an enum with named fields, methods, \
+         and an async function awaited and started",
+        &[
+            (
+                "app/Cargo.toml",
+                concat!(
+                    "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n",
+                    "[[bin]]\nname = \"app\"\npath = \"src/main.vr\"\n\n",
+                    "[dependencies]\nkit = { path = \"../kit\" }\nvaryk-std = \"",
+                    env!("CARGO_PKG_VERSION"),
+                    "\"\n",
+                ),
+            ),
+            (
+                "app/src/main.vr",
+                "async fn main() {\n    let names = vec![\"ada\", \"grace\"];\n    \
+                 let first = kit::first(names);\n    println!(\"{}\", first);\n    \
+                 let mut p = kit::Point { x: 1, y: 2 };\n    kit::bump(p);\n    p.shift(5);\n    \
+                 println!(\"{} {} {}\", p.x, p.y, p.sum());\n    \
+                 for s in vec![kit::Shape::Rect { w: 2, h: 3 }, kit::Shape::Dot] {\n        \
+                 match s {\n            kit::Shape::Rect { w, h } => println!(\"rect {}\", w * h),\n            \
+                 kit::Shape::Dot => println!(\"dot\"),\n        }\n    }\n    \
+                 let started = kit::double(4);\n    let awaited = kit::double(5).await;\n    \
+                 println!(\"{} {}\", started.await, awaited);\n}\n",
+            ),
+            (
+                "kit/Cargo.toml",
+                "[package]\nname = \"kit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+                 [lib]\npath = \"src/lib.vr\"\n",
+            ),
+            (
+                "kit/src/lib.vr",
+                "pub struct Point {\n    pub x: i32,\n    pub y: i32,\n}\n\n\
+                 impl Point {\n    pub fn sum(self) -> i32 {\n        self.x + self.y\n    }\n\n    \
+                 pub fn shift(mut self, by: i32) {\n        self.x = self.x + by;\n    }\n}\n\n\
+                 pub enum Shape {\n    Dot,\n    Rect { w: i32, h: i32 },\n}\n\n\
+                 pub fn first(names: Vec<string>) -> string {\n    names[0]\n}\n\n\
+                 pub fn bump(mut p: Point) {\n    p.y = p.y + 10;\n}\n\n\
+                 pub async fn double(n: i32) -> i32 {\n    n * 2\n}\n",
+            ),
+        ],
+        "ada\n6 12 18\nrect 6\ndot\n8 10\n",
+    ),
 ];
 
 #[test]
 fn programs_run_as_written() {
     for (index, (label, files, expected)) in MUST_RUN_TREES.iter().enumerate() {
         let entry = write_program(&format!("run{index:02}"), files);
-        let output = varyk(&["run", entry.to_str().expect("utf-8 path")]);
+        // A tree of packages runs its `app` package, which uses the others.
+        let app = entry.with_file_name("app");
+        let output = if app.join("Cargo.toml").is_file() {
+            varyk_in(&app, &["run"])
+        } else {
+            varyk(&["run", entry.to_str().expect("utf-8 path")])
+        };
         assert_no_crash(&output, &format!("`varyk run` on {label}"));
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
@@ -3037,7 +3088,7 @@ fn a_library_with_a_pub_mod_chain_builds() {
         &[
             (
                 "Cargo.toml",
-                "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+                "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.vr\"\n",
             ),
             (
                 "src/lib.vr",

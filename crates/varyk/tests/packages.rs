@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{empty_dir, package_dir, std_config, varyk_in, varyk_run_with};
+use common::{empty_dir, package_dir, varyk_in, varyk_run_with};
 
 use varyk::backend::{Backend, CrateInfo, RustBackend};
 use varyk::driver::publish;
@@ -244,6 +244,7 @@ fn an_optional_dependency_turned_on_by_a_default_feature_builds_and_runs() {
     fs::write(
         dir.join("Cargo.toml"),
         "[package]\nname = \"with_dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [[bin]]\nname = \"with_dep\"\npath = \"src/main.vr\"\n\n\
          [dependencies]\ndep = { path = \"dep\", optional = true }\n\n\
          [features]\ndefault = [\"dep\"]\n",
     )
@@ -301,6 +302,69 @@ fn a_library_builds_into_a_lib_rs_and_prints_nothing() {
 }
 
 #[test]
+fn a_program_that_names_its_vr_root_in_a_bin_table_builds_and_runs() {
+    let dir = package_dir("basic");
+
+    let output = varyk_in(&dir, &["run"]);
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "hello from a package\n");
+    let hidden = fs::read_to_string(dir.join("target/varyk/basic/Cargo.toml")).expect("manifest");
+    assert!(hidden.contains("path = \"src/main.rs\""), "{hidden}");
+}
+
+#[test]
+fn a_library_that_names_its_vr_root_in_a_lib_table_builds() {
+    let dir = package_dir("lib");
+    let manifest = dir.join("Cargo.toml");
+    let text = fs::read_to_string(&manifest).expect("read Cargo.toml");
+    assert!(text.contains("[lib]\npath"), "{text}");
+    fs::write(
+        &manifest,
+        text.replace("[lib]\n", "[lib]\nname = \"shapes\"\n"),
+    )
+    .unwrap();
+
+    let output = varyk_in(&dir, &["build"]);
+
+    assert_success(&output);
+    assert!(dir.join("target/varyk/shapes/src/lib.rs").is_file());
+    let hidden = fs::read_to_string(dir.join("target/varyk/shapes/Cargo.toml")).expect("manifest");
+    assert!(hidden.contains("path = \"src/lib.rs\""), "{hidden}");
+}
+
+#[test]
+fn any_other_target_table_stays_v0402() {
+    let dir = package_dir("basic");
+    let manifest = dir.join("Cargo.toml");
+    let text = fs::read_to_string(&manifest).expect("read Cargo.toml");
+    fs::write(&manifest, text.replace("src/main.vr", "src/other.rs")).unwrap();
+
+    let output = varyk_in(&dir, &["check"]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("V0402"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_package_without_the_target_table_is_v0406_whatever_else_is_there() {
+    let dir = package_dir("basic");
+    let manifest = dir.join("Cargo.toml");
+    let text = fs::read_to_string(&manifest).expect("read Cargo.toml");
+    let (before, _) = text
+        .split_once("[[bin]]")
+        .expect("the fixture has a bin table");
+    fs::write(&manifest, before).unwrap();
+
+    let output = varyk_in(&dir, &["check"]);
+
+    assert!(!output.status.success());
+    let message = stderr(&output);
+    assert!(message.starts_with("error[V0406]"), "{message}");
+    assert!(message.contains("path = \"src/main.vr\""), "{message}");
+}
+
+#[test]
 fn run_on_a_library_is_an_error() {
     let dir = package_dir("lib");
 
@@ -313,21 +377,87 @@ fn run_on_a_library_is_an_error() {
     );
 }
 
+/// A package with no dependency besides `varyk-std` never runs cargo in
+/// `check` (M5b2 spec 4.1): with nothing on the `PATH`, it passes and
+/// writes no `target/`.
 #[test]
-fn check_in_a_package_never_runs_cargo() {
-    let dir = package_dir("with_dep");
-    let empty = dir.join("no-tools");
-    fs::create_dir_all(&empty).unwrap();
+fn check_without_a_dependency_besides_varyk_std_never_runs_cargo() {
+    let std_line = format!(
+        "\n[dependencies]\nvaryk-std = \"{}\"\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    for extra in ["", std_line.as_str()] {
+        let dir = package_dir("basic");
+        let manifest = dir.join("Cargo.toml");
+        let text = fs::read_to_string(&manifest).unwrap();
+        fs::write(&manifest, format!("{text}{extra}")).unwrap();
+        let empty = dir.join("no-tools");
+        fs::create_dir_all(&empty).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_varyk"))
-        .arg("check")
-        .current_dir(&dir)
-        .env("PATH", &empty)
-        .output()
-        .expect("spawn varyk");
+        let output = Command::new(env!("CARGO_BIN_EXE_varyk"))
+            .arg("check")
+            .current_dir(&dir)
+            .env("PATH", &empty)
+            .output()
+            .expect("spawn varyk");
+
+        assert_success(&output);
+        assert!(!dir.join("target").exists(), "check wrote a build tree");
+    }
+}
+
+/// A package with another dependency has its graph read in `check`, from
+/// the manifest written to `target/varyk/packages/graph/`: the package's
+/// own, its `.vr` target kept, `varyk-std` patched to the workspace's
+/// copy as the tests ask (M5b2 spec 4.7). The package's own directory
+/// gets no `Cargo.lock`.
+#[test]
+fn check_with_a_dependency_reads_the_graph_from_its_own_manifest() {
+    let dir = package_dir("with_dep");
+
+    let output = varyk_in(&dir, &["check"]);
 
     assert_success(&output);
-    assert!(!dir.join("target").exists(), "check wrote a build tree");
+    let graph = dir.join("target/varyk/packages/graph");
+    let manifest: toml::Table = fs::read_to_string(graph.join("Cargo.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(manifest["bin"][0]["path"].as_str(), Some("src/main.vr"));
+    let dep = manifest["dependencies"]["dep"]["path"].as_str().unwrap();
+    assert!(Path::new(dep).is_absolute(), "{dep}");
+    let patched = manifest["patch"]["crates-io"]["varyk-std"]["path"]
+        .as_str()
+        .unwrap();
+    assert_eq!(Path::new(patched), common::std_path());
+    assert!(graph.join("Cargo.lock").is_file(), "cargo left no lock");
+    assert!(
+        !dir.join("Cargo.lock").exists(),
+        "the package's lock was written"
+    );
+}
+
+/// The package's lock is copied beside the graph manifest, and the copy
+/// removed once the package has none (M5b2 spec 4.1).
+#[test]
+fn the_graph_reads_the_packages_lock_and_forgets_a_removed_one() {
+    let dir = package_dir("with_dep");
+    let lock = "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"dep\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"with_dep\"\nversion = \"0.1.0\"\ndependencies = [\n \"dep\",\n]\n";
+    fs::write(dir.join("Cargo.lock"), lock).unwrap();
+    let graph_lock = dir.join("target/varyk/packages/graph/Cargo.lock");
+
+    assert_success(&varyk_in(&dir, &["check"]));
+    let copied = fs::read_to_string(&graph_lock).unwrap();
+    assert!(copied.contains("name = \"dep\""), "{copied}");
+    assert_eq!(fs::read_to_string(dir.join("Cargo.lock")).unwrap(), lock);
+
+    // A stale copy is removed before cargo runs: what cargo then writes
+    // is its own fresh resolution, which `lock` would not be.
+    fs::remove_file(dir.join("Cargo.lock")).unwrap();
+    fs::write(&graph_lock, "not a lock").unwrap();
+    assert_success(&varyk_in(&dir, &["check"]));
+    let fresh = fs::read_to_string(&graph_lock).unwrap();
+    assert!(fresh.contains("name = \"dep\""), "{fresh}");
 }
 
 #[test]
@@ -387,35 +517,7 @@ fn with_no_package_the_advice_fits_the_command() {
 }
 
 #[test]
-fn emit_out_dir_writes_the_tree_and_copies_rs_files_without_running_cargo() {
-    let dir = package_dir("with_dep");
-    let out = dir.join("emitted");
-    let empty = dir.join("no-tools");
-    fs::create_dir_all(&empty).unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_varyk"))
-        .args(["emit", "--out-dir"])
-        .arg(&out)
-        .current_dir(&dir)
-        .env("PATH", &empty)
-        .output()
-        .expect("spawn varyk");
-
-    assert_success(&output);
-    assert!(!dir.join("target").exists(), "emit ran cargo");
-    assert!(out.join("src/main.rs").is_file());
-    assert!(
-        !out.join("Cargo.toml").exists(),
-        "emit writes only the tree"
-    );
-
-    let copied = fs::read(out.join("src/util.rs")).unwrap();
-    let original = fs::read(dir.join("src/util.rs")).unwrap();
-    assert_eq!(copied, original, "a copied .rs module is byte-for-byte");
-}
-
-#[test]
-fn init_in_an_empty_dir_writes_the_five_files_named_after_the_directory() {
+fn init_in_an_empty_dir_writes_the_three_files_named_after_the_directory() {
     let parent = empty_dir("init_basic");
     let dir = parent.join("greeting");
     fs::create_dir_all(&dir).unwrap();
@@ -425,24 +527,28 @@ fn init_in_an_empty_dir_writes_the_five_files_named_after_the_directory() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "created the package `greeting` in `.`; run `varyk run` or `cargo run`\n"
+        "created the package `greeting` in `.`; run `varyk run`\n"
     );
-    for path in [
-        "Cargo.toml",
-        ".gitignore",
-        "build.rs",
-        "src/main.rs",
-        "src/main.vr",
-    ] {
-        assert!(dir.join(path).is_file(), "missing {path}");
-    }
-    assert!(!dir.join("src/lib.rs").exists());
-    assert!(!dir.join("src/lib.vr").exists());
+    let mut files = Vec::new();
+    collect_files(&dir, &dir, &mut files);
+    files.sort();
+    assert_eq!(
+        files,
+        vec![
+            PathBuf::from(".gitignore"),
+            PathBuf::from("Cargo.toml"),
+            PathBuf::from("src/main.vr"),
+        ]
+    );
 
     let manifest = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
     assert!(manifest.contains("name = \"greeting\""), "{manifest}");
     assert!(manifest.contains("edition = \"2024\""), "{manifest}");
     assert!(!manifest.contains("[workspace]"), "{manifest}");
+    assert!(
+        manifest.contains("[[bin]]\nname = \"greeting\"\npath = \"src/main.vr\"\n"),
+        "{manifest}"
+    );
     assert!(
         manifest.ends_with(&format!(
             "[dependencies]\nvaryk-std = \"{}\"\n",
@@ -450,18 +556,24 @@ fn init_in_an_empty_dir_writes_the_five_files_named_after_the_directory() {
         )),
         "{manifest}"
     );
-
-    let stub = fs::read_to_string(dir.join("src/main.rs")).unwrap();
-    assert_eq!(
-        stub,
-        "::std::include!(::std::concat!(::std::env!(\"OUT_DIR\"), \"/varyk/src/main.rs\"));\n"
-    );
     let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
     assert_eq!(gitignore, "/target\n.env\n");
 }
 
+/// Every file under `dir`, relative to `root`, appended to `found`.
+fn collect_files(root: &Path, dir: &Path, found: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_files(root, &path, found);
+        } else {
+            found.push(path.strip_prefix(root).unwrap().to_path_buf());
+        }
+    }
+}
+
 #[test]
-fn init_lib_writes_lib_rs_and_lib_vr_instead_of_main() {
+fn init_lib_writes_lib_vr_and_a_lib_table_instead_of_main() {
     let parent = empty_dir("init_lib");
     let dir = parent.join("shapes");
     fs::create_dir_all(&dir).unwrap();
@@ -471,17 +583,17 @@ fn init_lib_writes_lib_rs_and_lib_vr_instead_of_main() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "created the package `shapes` in `shapes`; run `cd shapes`, then `varyk build` or `cargo build`\n"
+        "created the package `shapes` in `shapes`; run `cd shapes`, then `varyk build`\n"
     );
-    assert!(dir.join("src/lib.rs").is_file());
     assert!(dir.join("src/lib.vr").is_file());
+    assert!(!dir.join("src/lib.rs").exists());
     assert!(!dir.join("src/main.rs").exists());
     assert!(!dir.join("src/main.vr").exists());
-
-    let stub = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
-    assert_eq!(
-        stub,
-        "::std::include!(::std::concat!(::std::env!(\"OUT_DIR\"), \"/varyk/src/lib.rs\"));\n"
+    assert!(!dir.join("build.rs").exists());
+    let manifest = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains("[lib]\npath = \"src/lib.vr\"\n"),
+        "{manifest}"
     );
 }
 
@@ -518,15 +630,12 @@ fn init_refuses_when_cargo_toml_already_exists_and_writes_nothing() {
     let message = stderr(&output);
     assert_eq!(
         message,
-        "error: these files already exist: Cargo.toml; to add Varyk to an existing project, \
-         run `varyk init` in an empty directory, move its `build.rs` (merging by hand if you \
-         already have one) and `src/main.vr` into your project, and replace your \
-         `src/main.rs` with its `src/main.rs` after moving your code into a `.rs` module; the \
-         package needs `edition = \"2024\"`, and a Rust project with nested modules cannot \
-         adopt Varyk yet\n"
+        "error: these files already exist: Cargo.toml; to start a package in an existing \
+         project, run `varyk init` in an empty directory and move its `Cargo.toml` target \
+         table and `src/main.vr` into your project; the package needs `edition = \"2024\"`\n"
     );
     assert!(
-        !dir.join("build.rs").exists(),
+        !dir.join(".gitignore").exists(),
         "init wrote past the conflict"
     );
     assert!(!dir.join("src").exists(), "init wrote past the conflict");
@@ -536,65 +645,12 @@ fn init_refuses_when_cargo_toml_already_exists_and_writes_nothing() {
     );
 }
 
-/// A fresh `init`ed package's binary, built and run with plain `cargo`,
-/// `VARYK` pointing at the `varyk` under test.
-fn cargo_build_and_run(dir: &Path) -> Output {
-    let build = Command::new("cargo")
-        .arg("build")
-        .args(["--config", &std_config()])
-        .current_dir(dir)
-        .env("VARYK", env!("CARGO_BIN_EXE_varyk"))
-        .output()
-        .expect("spawn cargo build");
-    assert_success(&build);
-
-    let manifest: toml::Table = fs::read_to_string(dir.join("Cargo.toml"))
-        .unwrap()
-        .parse()
-        .unwrap();
-    let name = manifest["package"]["name"].as_str().unwrap().to_string();
-    // Cargo builds under `CARGO_TARGET_DIR` when it is set (relative to
-    // where cargo ran), else under the package's own `target`.
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map_or_else(|| dir.join("target"), |target| dir.join(target));
-    let exe = target.join("debug").join(&name);
-    assert!(exe.is_file(), "{exe:?}");
-
-    Command::new(&exe).output().expect("spawn the built binary")
-}
-
 #[test]
-fn cargo_build_of_an_inited_package_compiles_and_runs_with_varyk_on_the_path() {
-    let dir = empty_dir("cargo_build");
-    assert_success(&varyk_in(&dir, &["init"]));
-
-    let output = cargo_build_and_run(&dir);
-    assert_success(&output);
-    assert_eq!(stdout(&output), "Hello, world!\n");
-
-    // Editing `main.vr` and rebuilding picks up the change: `build.rs`
-    // reruns because it declares `rerun-if-changed=src`.
-    fs::write(
-        dir.join("src/main.vr"),
-        "fn main() {\n    println!(\"updated\");\n}\n",
-    )
-    .unwrap();
-
-    let output = cargo_build_and_run(&dir);
-    assert_success(&output);
-    assert_eq!(stdout(&output), "updated\n");
-}
-
-#[test]
-fn an_inited_package_with_an_in_tree_path_dependency_builds_with_varyk_and_cargo() {
-    // The task-10 carry-forward: a `path` dependency living inside the
-    // package used to fail `varyk build` unless the dependency had its
-    // own `[workspace]` table, because cargo parsed the enclosing
-    // package's target-less manifest while walking up from it. Once
-    // `init` has written the stub `src/main.rs`, the enclosing manifest
-    // has a target, and the root workspace's `exclude` (this task) keeps
-    // cargo from treating either package as a member of the *compiler's*
-    // workspace; neither manifest below declares `[workspace]`.
+fn an_inited_package_with_an_in_tree_path_dependency_builds_with_varyk() {
+    // A `path` dependency living inside the package builds without a
+    // `[workspace]` table of its own in either manifest; the root
+    // workspace's `exclude` keeps cargo from treating either package as a
+    // member of the *compiler's* workspace.
     let dir = empty_dir("with_in_tree_dep");
     assert_success(&varyk_in(&dir, &["init"]));
 
@@ -625,11 +681,58 @@ fn an_inited_package_with_an_in_tree_path_dependency_builds_with_varyk_and_cargo
     )
     .unwrap();
 
-    assert_success(&varyk_in(&dir, &["build"]));
-
-    let output = cargo_build_and_run(&dir);
+    let output = varyk_in(&dir, &["run"]);
     assert_success(&output);
     assert_eq!(stdout(&output), "the answer is 42\n");
+}
+
+/// A `build.rs` that would panic and a stub `src/main.rs` that would not
+/// compile, left from an earlier `varyk init`, are never read: no crate
+/// Varyk builds names them (M5b2 Review Focus 4).
+#[test]
+fn a_leftover_build_script_and_stub_beside_the_vr_root_are_ignored() {
+    let dir = empty_dir("leftover_stub");
+    assert_success(&varyk_in(&dir, &["init"]));
+    fs::write(
+        dir.join("build.rs"),
+        "fn main() {\n    std::fs::write(\"build_script_ran\", \"\").unwrap();\n    panic!(\"the build script ran\");\n}\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/main.rs"), "this is not Rust at all\n").unwrap();
+
+    assert_success(&varyk_in(&dir, &["check"]));
+    let output = varyk_in(&dir, &["run"]);
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "Hello, world!\n");
+    assert!(
+        !dir.join("build_script_ran").exists()
+            && !dir.join("target/varyk").join("build_script_ran").exists(),
+        "the leftover build script ran"
+    );
+}
+
+/// `varyk add --path ../lib` works in a package `init` made: cargo can
+/// read its manifest, which names the `.vr` root, without a stub.
+#[test]
+fn add_of_a_path_dependency_works_in_an_inited_package() {
+    let parent = empty_dir("add_to_inited");
+    assert_success(&varyk_in(&parent, &["init", "app"]));
+    assert_success(&varyk_in(&parent, &["init", "--lib", "lib"]));
+
+    let output = varyk_run_with(
+        &["add", "lib", "--path", "../lib", "--offline"],
+        &parent.join("app"),
+        &[("CARGO_TERM_COLOR", "never")],
+        &[],
+    );
+
+    assert_success(&output);
+    let manifest = fs::read_to_string(parent.join("app/Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains("lib = { version = \"0.1.0\", path = \"../lib\" }"),
+        "{manifest}"
+    );
 }
 
 /// A package named `name` whose `dep` dependency exports `give_drop!`
@@ -790,17 +893,9 @@ fn assemble_package(dir: &Path) -> (Package, PathBuf) {
     let package = package::load(&dir.join("Cargo.toml"), &mut sources).expect("loads");
     let text = fs::read_to_string(&package.entry).expect("read the entry file");
     let entry = SourceFile::new(FileId(sources.len() as u32), package.entry.clone(), text);
-    let crates: Vec<String> = package.dependencies.keys().cloned().collect();
-    let program = varyk::check_file(
-        entry,
-        package.kind,
-        Some(varyk::Dependencies {
-            crates: &crates,
-            dev: &package.dev_dependencies,
-        }),
-        &mut sources,
-    )
-    .unwrap_or_else(|diagnostics| panic!("expected the program to check, got {diagnostics:#?}"));
+    let program = varyk::check_file(entry, Some(&package), None, &mut sources)
+        .unwrap_or_else(|diagnostics| panic!("expected the program to check, got {diagnostics:#?}"))
+        .program;
     let info = CrateInfo {
         name: package.name.clone(),
         manifest: package.isolated_manifest(),
@@ -887,15 +982,14 @@ fn tree_files(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     out
 }
 
-/// Spec 2.3: one routine writes the tree for all three destinations, so
-/// the hidden crate's `src/`, `emit --out-dir`'s `src/`, and the publish
-/// assembly's `src/` are byte for byte the same.
+/// Spec 2.3: one routine writes the tree for both destinations, so
+/// the hidden crate's `src/` and the publish assembly's `src/` are byte
+/// for byte the same.
 #[test]
-fn the_hidden_crate_emit_and_publish_write_the_same_src_tree() {
+fn the_hidden_crate_and_publish_write_the_same_src_tree() {
     let dir = package_dir("lib");
 
     assert_success(&varyk_in(&dir, &["build"]));
-    assert_success(&varyk_in(&dir, &["emit", "--out-dir", "emitted"]));
     let (_package, assembled) = assemble_package(&dir);
 
     let hidden = tree_files(&dir.join("target/varyk/shapes/src"));
@@ -908,11 +1002,6 @@ fn the_hidden_crate_emit_and_publish_write_the_same_src_tree() {
         hidden.contains_key(Path::new("util.rs")),
         "{:?}",
         hidden.keys()
-    );
-    assert_eq!(
-        hidden,
-        tree_files(&dir.join("emitted/src")),
-        "emit --out-dir"
     );
     assert_eq!(
         hidden,
@@ -1061,239 +1150,6 @@ fn publish_assemble_only_assembles_prints_the_directory_and_runs_no_cargo() {
 }
 
 #[test]
-fn emit_into_the_package_itself_is_refused_and_every_file_is_left_intact() {
-    let dir = package_dir("with_dep");
-    let before: Vec<(PathBuf, Vec<u8>)> = fs::read_dir(dir.join("src"))
-        .unwrap()
-        .map(|entry| {
-            let path = entry.unwrap().path();
-            let bytes = fs::read(&path).unwrap();
-            (path, bytes)
-        })
-        .collect();
-
-    let output = varyk_in(&dir, &["emit", "--out-dir", "."]);
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    let message = stderr(&output);
-    assert!(message.contains("a file of this program"), "{message}");
-    for (path, bytes) in &before {
-        assert_eq!(
-            &fs::read(path).unwrap(),
-            bytes,
-            "{} changed",
-            path.display()
-        );
-    }
-    assert_eq!(
-        fs::read_dir(dir.join("src")).unwrap().count(),
-        before.len(),
-        "a file was added to src/"
-    );
-    assert!(!dir.join(".varyk-generated").exists());
-}
-
-#[test]
-fn emit_twice_into_a_fresh_dir_clears_a_stale_file_the_second_time() {
-    let dir = package_dir("with_dep");
-    let out = empty_dir("emit_twice").join("out");
-
-    assert_success(&varyk_in(
-        &dir,
-        &["emit", "--out-dir", out.to_str().unwrap()],
-    ));
-    fs::write(out.join("src/stale.rs"), "// stale").unwrap();
-    assert_success(&varyk_in(
-        &dir,
-        &["emit", "--out-dir", out.to_str().unwrap()],
-    ));
-
-    assert!(out.join("src/main.rs").is_file());
-    assert!(!out.join("src/stale.rs").exists(), "stale file remains");
-}
-
-#[test]
-fn emit_into_a_directory_varyk_did_not_write_is_refused() {
-    let dir = package_dir("with_dep");
-    let out = empty_dir("emit_foreign");
-    fs::create_dir_all(out.join("src")).unwrap();
-    fs::write(out.join("src/notes.txt"), "mine").unwrap();
-
-    let output = varyk_in(&dir, &["emit", "--out-dir", out.to_str().unwrap()]);
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("did not write"),
-        "{}",
-        stderr(&output)
-    );
-    assert_eq!(
-        fs::read_to_string(out.join("src/notes.txt")).unwrap(),
-        "mine"
-    );
-}
-
-#[test]
-fn emit_into_a_non_empty_directory_with_no_src_is_refused() {
-    let dir = package_dir("with_dep");
-    let out = empty_dir("emit_notes");
-    fs::write(out.join("notes.txt"), "mine").unwrap();
-
-    let output = varyk_in(&dir, &["emit", "--out-dir", out.to_str().unwrap()]);
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("did not write"),
-        "{}",
-        stderr(&output)
-    );
-    let names: Vec<_> = fs::read_dir(&out)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
-    assert_eq!(names, ["notes.txt"], "something was written");
-    assert_eq!(fs::read_to_string(out.join("notes.txt")).unwrap(), "mine");
-}
-
-#[test]
-fn emit_into_an_existing_empty_directory_then_again_into_it_works() {
-    let dir = package_dir("with_dep");
-    let out = empty_dir("emit_empty");
-
-    assert_success(&varyk_in(
-        &dir,
-        &["emit", "--out-dir", out.to_str().unwrap()],
-    ));
-    assert!(out.join(".varyk-generated").is_file());
-    assert_success(&varyk_in(
-        &dir,
-        &["emit", "--out-dir", out.to_str().unwrap()],
-    ));
-    assert!(out.join("src/main.rs").is_file());
-}
-
-/// A directory outside the package whose `src/keep.rs` is the user's.
-fn victim(label: &str) -> PathBuf {
-    let victim = empty_dir(label);
-    fs::create_dir_all(victim.join("src")).unwrap();
-    fs::write(victim.join("src/keep.rs"), "// mine").unwrap();
-    victim
-}
-
-#[test]
-fn emit_out_dir_going_up_out_of_target_varyk_is_refused() {
-    let dir = package_dir("with_dep");
-    let victim = victim("emit_dotdot_victim");
-    fs::create_dir_all(dir.join("target/varyk")).unwrap();
-    let name = victim.file_name().unwrap().to_str().unwrap();
-    // `dir` and `victim` are siblings under `packages/`.
-    let out = format!("target/varyk/../../../{name}");
-
-    let output = varyk_in(&dir, &["emit", "--out-dir", &out]);
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(stderr(&output).contains("`..`"), "{}", stderr(&output));
-    assert_eq!(
-        fs::read_to_string(victim.join("src/keep.rs")).unwrap(),
-        "// mine"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn emit_out_dir_through_a_link_in_target_varyk_is_refused() {
-    let dir = package_dir("with_dep");
-    let victim = victim("emit_link_victim");
-    fs::create_dir_all(dir.join("target/varyk")).unwrap();
-    std::os::unix::fs::symlink(&victim, dir.join("target/varyk/link")).unwrap();
-
-    let output = varyk_in(&dir, &["emit", "--out-dir", "target/varyk/link"]);
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("did not write"),
-        "{}",
-        stderr(&output)
-    );
-    assert_eq!(
-        fs::read_to_string(victim.join("src/keep.rs")).unwrap(),
-        "// mine"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn emit_out_dir_that_is_a_dangling_link_is_refused_as_a_link() {
-    let dir = package_dir("with_dep");
-    let links = empty_dir("emit_dangling");
-    let out = links.join("out");
-    std::os::unix::fs::symlink(links.join("missing"), &out).unwrap();
-
-    let output = varyk_in(&dir, &["emit", "--out-dir", out.to_str().unwrap()]);
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("is a symbolic link"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(!links.join("missing").exists());
-}
-
-/// `write_tree` checks only `DIR` and `DIR/src` for a link: cargo's
-/// `OUT_DIR` under the system temporary directory (`/var/folders/...` on
-/// macOS, where `/var` links to `/private/var`) keeps working.
-#[test]
-fn cargo_build_of_an_inited_package_in_the_system_temp_dir_works() {
-    let dir = std::env::temp_dir().join(format!("varyk-temp-build-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    if dir
-        .parent()
-        .into_iter()
-        .flat_map(Path::ancestors)
-        .any(|folder| folder.join("Cargo.toml").is_file())
-    {
-        let _ = fs::remove_dir_all(&dir);
-        return;
-    }
-    assert_success(&varyk_in(&dir, &["init"]));
-
-    let output = cargo_build_and_run(&dir);
-    let _ = fs::remove_dir_all(&dir);
-    assert_success(&output);
-    assert_eq!(stdout(&output), "Hello, world!\n");
-}
-
-#[test]
-fn a_cargo_failure_with_no_compiler_message_prints_cargo_s_reason_once() {
-    let dir = package_dir("basic");
-    let manifest = dir.join("Cargo.toml");
-    let text = fs::read_to_string(&manifest).unwrap();
-    fs::write(
-        &manifest,
-        format!("{text}\n[dependencies]\nouterr = {{ path = \"../outerr\" }}\n"),
-    )
-    .unwrap();
-
-    let output = varyk_in(&dir, &["build"]);
-
-    assert_eq!(output.status.code(), Some(1));
-    let message = stderr(&output);
-    assert_eq!(
-        message.matches("cargo could not build the package").count(),
-        1,
-        "{message}"
-    );
-    assert!(!message.contains("did not compile"), "{message}");
-    let first = message
-        .find("outerr")
-        .expect("cargo's own reason names the dependency");
-    let cargo_line = message[first..].lines().next().unwrap();
-    assert_eq!(message.matches(cargo_line).count(), 1, "{message}");
-}
-
-#[test]
 fn publish_assemble_makes_a_relative_dev_dependency_path_absolute() {
     let dir = package_dir("lib");
     let name = format!(
@@ -1332,41 +1188,6 @@ fn publish_assemble_makes_a_relative_dev_dependency_path_absolute() {
         .output()
         .expect("spawn cargo package");
     assert_success(&output);
-}
-
-#[test]
-fn cargo_build_of_an_inited_package_explains_an_emit_failure_and_a_missing_varyk() {
-    let dir = empty_dir("cargo_build_fails");
-    assert_success(&varyk_in(&dir, &["init"]));
-    fs::write(dir.join("src/main.vr"), "fn main() {\n    let x = ;\n}\n").unwrap();
-
-    let broken = Command::new("cargo")
-        .arg("build")
-        .args(["--config", &std_config()])
-        .current_dir(&dir)
-        .env("VARYK", env!("CARGO_BIN_EXE_varyk"))
-        .output()
-        .expect("spawn cargo build");
-    assert!(!broken.status.success());
-    assert!(
-        stderr(&broken).contains("run `varyk build` to see this without cargo's wrapping"),
-        "{}",
-        stderr(&broken)
-    );
-
-    let missing = Command::new("cargo")
-        .arg("build")
-        .args(["--config", &std_config()])
-        .current_dir(&dir)
-        .env("VARYK", "/no/such/varyk")
-        .output()
-        .expect("spawn cargo build");
-    assert!(!missing.status.success());
-    assert!(
-        stderr(&missing).contains("varyk was not found (tried `/no/such/varyk`)"),
-        "{}",
-        stderr(&missing)
-    );
 }
 
 /// A dependency's build script fails after another dependency printed a
@@ -1429,7 +1250,7 @@ fn init_of_the_current_directory_says_no_cd_and_quotes_one_with_a_space() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "created the package `dot` in `.`; run `varyk run` or `cargo run`\n"
+        "created the package `dot` in `.`; run `varyk run`\n"
     );
 
     let parent = empty_dir("init_space");
@@ -1437,7 +1258,7 @@ fn init_of_the_current_directory_says_no_cd_and_quotes_one_with_a_space() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "created the package `my_shop` in `my shop`; run `cd 'my shop'`, then `varyk run` or `cargo run`\n"
+        "created the package `my_shop` in `my shop`; run `cd 'my shop'`, then `varyk run`\n"
     );
 
     // Any character a shell treats specially is quoted, a `'` escaped.
@@ -1446,7 +1267,7 @@ fn init_of_the_current_directory_says_no_cd_and_quotes_one_with_a_space() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "created the package `it_s` in `it's`; run `cd 'it'\\''s'`, then `varyk run` or `cargo run`\n"
+        "created the package `it_s` in `it's`; run `cd 'it'\\''s'`, then `varyk run`\n"
     );
 }
 
@@ -1474,12 +1295,11 @@ fn package_with_a_dep(label: &str) -> PathBuf {
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(
         dir.join("Cargo.toml"),
-        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [[bin]]\nname = \"app\"\npath = \"src/main.vr\"\n\n[dependencies]\n",
     )
     .unwrap();
     fs::write(dir.join("src/main.vr"), "fn main() {}\n").unwrap();
-    // The stub `varyk init` writes; cargo add wants a target.
-    fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
     fs::create_dir_all(dir.join("dep/src")).unwrap();
     fs::write(
         dir.join("dep/Cargo.toml"),
@@ -1621,4 +1441,80 @@ fn varyk_test_passes_on_the_users_example() {
         "{out}"
     );
     assert!(out.contains("3 passed; 0 failed"), "{out}");
+}
+
+/// A package reached twice, `units` from the program directly and
+/// through `route`, is checked once, and its `Meters` is one type: the
+/// program passes `route::total(..)`'s result straight to `units::add`
+/// (M5b2 spec 4.2, Review Focus 2).
+#[test]
+fn a_package_reached_twice_is_checked_once_with_one_type() {
+    let dir = package_dir("diamond");
+    let mut sources = Vec::new();
+    let package = package::load(&dir.join("Cargo.toml"), &mut sources).expect("loads");
+    let graph = varyk::packages::Graph::read(&package)
+        .unwrap_or_else(|diagnostics| panic!("the graph: {diagnostics:#?}"))
+        .expect("a graph");
+    let text = fs::read_to_string(&package.entry).expect("read the entry file");
+    let entry = SourceFile::new(FileId(sources.len() as u32), package.entry.clone(), text);
+    let checked = varyk::check_file(entry, Some(&package), Some(&graph), &mut sources)
+        .unwrap_or_else(|diagnostics| {
+            panic!("expected the program to check, got {diagnostics:#?}")
+        });
+    let names: Vec<&str> = checked
+        .packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect();
+    assert_eq!(names, ["units", "route"]);
+    let meters = checked
+        .program
+        .structs
+        .iter()
+        .filter(|def| def.name == "Meters")
+        .count();
+    assert_eq!(meters, 1);
+}
+
+/// A copy of `diamond` whose `units` has the `.rs` module `helper.rs`
+/// holding `rust`.
+fn diamond_with_rust(rust: &str) -> PathBuf {
+    let dir = package_dir("diamond");
+    let lib = dir.join("units/src/lib.vr");
+    let text = fs::read_to_string(&lib).unwrap();
+    fs::write(&lib, format!("mod helper;\n\n{text}")).unwrap();
+    fs::write(dir.join("units/src/helper.rs"), rust).unwrap();
+    dir
+}
+
+/// A rustc error in a package's own `.rs` module is V0900 naming the
+/// package, saying the error is in its Rust, with no Varyk bug to report
+/// (M5b2 spec 4.3).
+#[test]
+fn a_rust_error_in_a_package_names_the_package_and_is_not_a_varyk_bug() {
+    let dir = diamond_with_rust("pub fn broken() -> i32 {\n    \"not a number\"\n}\n");
+    assert_success(&varyk_in(&dir, &["check"]));
+    let output = varyk_in(&dir, &["build"]);
+    assert!(!output.status.success());
+    let stderr = stderr(&output);
+    assert!(
+        stderr
+            .contains("error[V0900]: the package `units` 0.1.0 did not compile: mismatched types"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("units/Cargo.toml"), "{stderr}");
+    assert!(stderr.contains("the package's own Rust"), "{stderr}");
+    assert!(stderr.contains("units/src/helper.rs"), "{stderr}");
+    assert!(!stderr.contains("report it"), "{stderr}");
+}
+
+/// A warning in a package's crate is not shown (M5b2 spec 4.3).
+#[test]
+fn a_warning_in_a_package_is_not_shown() {
+    let dir = diamond_with_rust("pub fn one() -> i32 {\n    let unused = 2;\n    1\n}\n");
+    let output = varyk_in(&dir, &["run"]);
+    assert_success(&output);
+    assert_eq!(stdout(&output), "8\n");
+    let stderr = stderr(&output);
+    assert!(!stderr.contains("unused"), "{stderr}");
 }

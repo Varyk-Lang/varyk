@@ -1,0 +1,5 @@
+mod parts;
+
+pub fn square(side: i32) -> parts::Square {
+    parts::Square { side: side }
+}

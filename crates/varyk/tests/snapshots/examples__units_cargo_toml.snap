@@ -1,0 +1,19 @@
+---
+source: crates/varyk/tests/examples.rs
+expression: "redacted(&read(\"target/varyk/packages/units-0.1.0/Cargo.toml\"), parent)"
+---
+[dependencies]
+
+[lib]
+name = "units"
+path = "src/lib.rs"
+
+[package]
+build = false
+description = "A Varyk example library: lengths in meters"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+name = "units"
+version = "0.1.0"
+
+[workspace]

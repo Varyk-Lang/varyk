@@ -47,9 +47,17 @@ impl FnChecker<'_> {
         // `path_owner` returned `None`: the path, if any, is a module
         // path, and a module holds no values Varyk can name (spec 2.10).
         if let Some(path) = path {
-            if let Err(LookupError::NoParent { span }) = self.symbols.module_at(self.module, path) {
-                self.diagnostics.push(no_parent(span));
-                return None;
+            match self.symbols.module_at(self.module, path) {
+                Err(LookupError::NoParent { span }) => {
+                    self.diagnostics.push(no_parent(span));
+                    return None;
+                }
+                Err(LookupError::Dependency { span, dep }) => {
+                    let diagnostic = self.symbols.dependency_error(span, dep);
+                    self.diagnostics.push(diagnostic);
+                    return None;
+                }
+                _ => {}
             }
             let full = display_path(path, &name.name);
             // `m::U` for a `.rs` unit struct Varyk did not import (M3
@@ -213,7 +221,7 @@ impl FnChecker<'_> {
                 self.diagnostics.push(diagnostic);
                 return None;
             }
-            Err(LookupError::NoParent { .. }) => {
+            Err(LookupError::NoParent { .. } | LookupError::Dependency { .. }) => {
                 unreachable!("a member lookup follows no path")
             }
             Err(LookupError::Unknown) => {

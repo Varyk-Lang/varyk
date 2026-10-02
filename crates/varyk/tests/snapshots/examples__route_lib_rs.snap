@@ -1,0 +1,62 @@
+---
+source: crates/varyk/tests/examples.rs
+expression: "read(\"target/varyk/packages/route-0.1.0/src/lib.rs\")"
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+pub struct Leg {
+    pub from: String,
+    pub to: String,
+    pub length: ::units::length::Meters,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+pub struct Stop {
+    pub name: String,
+    pub minutes: u32,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub fn leg(from: &str, to: &str, meters: i32) -> Leg {
+    Leg { from: from.to_string(), to: to.to_string(), length: ::units::length::Meters { value: meters } }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub fn total(legs: &Vec<Leg>) -> ::units::length::Meters {
+    let mut sum = ::units::length::Meters { value: 0 };
+    for leg in legs {
+        sum = ::units::length::add(&sum, &leg.length);
+    }
+    sum
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub fn longest(legs: &Vec<Leg>) -> &Leg {
+    let mut best = 0usize;
+    let mut index = 0usize;
+    for leg in legs {
+        if leg.length.value > legs[best].length.value {
+            best = index;
+        }
+        index = index + 1usize;
+    }
+    &legs[best]
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub fn parse_stop(text: &str) -> Result<Stop, ::varyk_std::Error> {
+    let parsed: Result<Stop, ::varyk_std::Error> = ::varyk_std::json::parse::<Stop>(text);
+    if let Err(problem) = &parsed {
+        match (&(problem),) { (varyk_0,) => ::varyk_std::tracing::warn!("cannot read a stop: {}", varyk_0) };
+    }
+    parsed
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub async fn walking_minutes(meters: i32) -> i32 {
+    ::varyk_std::time::sleep(5u64).await;
+    meters / 80
+}

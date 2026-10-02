@@ -1,0 +1,4 @@
+pub fn one() -> i32 {
+    log::info("one");
+    1
+}

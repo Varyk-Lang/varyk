@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0115]: this is a `Meters` from the package `units` 0.1.0, which this package does not list
+ --> src/main.vr:3:35
+  |
+3 |     println!("{} {}", zero.value, route::total().value);
+  |                                   ^^^^^^^^^^^^^^ this is a `Meters` from the package `units` 0.1.0, which this package does not list
+  |
+  = note: this package lists `units` 0.2.0, another version of it; two versions of a package are two packages, and a `Meters` of one is not a `Meters` of the other
+  = note: to use this `Meters`, make the line of `units` in `Cargo.toml` this one: `units = { path = "units" }`

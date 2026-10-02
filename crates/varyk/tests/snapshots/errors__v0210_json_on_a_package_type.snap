@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0210]: `Stop` cannot be turned into JSON
+ --> src/main.vr:3:20
+  |
+3 |     println!("{}", json::stringify(stop));
+  |                    ^^^^^^^^^^^^^^^^^^^^^ `Stop` cannot be turned into JSON
+  |
+  = note: `Stop` is declared in the package `route`
+  = note: a package is built without knowing who uses it, so only `route` can convert its own types through JSON; do it there instead, with a `pub fn` such as `pub fn stop_json(stop: Stop) -> string`

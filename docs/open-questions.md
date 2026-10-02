@@ -59,14 +59,16 @@ Recorded, deliberately unanswered.
 - Will generics ever be Varyk surface syntax? Milestone 3 assumes not and
   designs the facade around that.
 - Should a Varyk library be importable from Varyk without a facade, given
-  that its public API is already Varyk-shaped?
+  that its public API is already Varyk-shaped? Answered in milestone 5b2:
+  yes, by its `Cargo.toml` key.
 - The site's hero shows a service as milestone 5 is meant to write it, and
   that example assumes four things this spec has not decided: standard
   modules `http`, `db`, and `json` reachable without `use`; one shared
   `Error` type so `?` works across them; automatic serde derivation for
   structs; and expected-type inference for a query result. Each is settled
   by the milestone-5 spec, and the site copies the real example once it
-  exists.
+  exists. Answered in part in milestone 5b2: `http` and `db` are packages a
+  program adds, named by their keys; `json` stays in `varyk-std`.
 - Should closures ever be values, with function types in the surface?
   Milestone 4 says no until the generics and traits question is answered,
   since no Varyk function could take one; closures exist only as arguments
@@ -96,3 +98,22 @@ Recorded, deliberately unanswered.
 - Should Varyk grow more attributes, and should they ever be namespaced?
   Milestone 5a's four are unprefixed because only the compiler defines
   attributes.
+- Should a library derive serde for every `pub` type it declares, so its
+  users can send its types through JSON? Milestone 5b2 refuses a `json` or
+  `env` call on a type from another package (V0210); deriving would make
+  every such library depend on `varyk-std`.
+- Should code be able to hold a value of a package it does not depend on?
+  Milestone 5b2 refuses it (V0115) because the generated Rust sometimes
+  writes the type.
+- Should a builder be able to skip compiling a package it trusts, an
+  official one for example, and use its shipped Rust?
+- Should a package ship a summary of its `pub` items, so `varyk check`
+  need not read and analyse its sources?
+- After 1.0, how is a package written for one version of the compiler
+  kept working with the next?
+- Should a Varyk package be usable under `[dev-dependencies]`, from
+  tests, or when a Rust crate in the build depends on it too?
+- Should a plain Rust project be able to use a Varyk package from source,
+  not only in its published form?
+- Should `varyk publish` verify with its own build instead of cargo's, so
+  publishing never compiles a dependency's shipped Rust?

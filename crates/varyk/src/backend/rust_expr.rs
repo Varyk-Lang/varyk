@@ -1179,11 +1179,11 @@ impl<'a> FnEmitter<'a> {
             }
             Callee::Imported(id) => {
                 let sig = &self.program.imported[id.0 as usize];
-                // An associated function is reached through its struct.
+                // An associated function is reached through its type.
                 let path = match sig.owner {
                     None => item_path(self.program, sig.module, self.module, &sig.name),
                     Some(owner) => {
-                        let owner = struct_path(self.program, owner, self.module);
+                        let owner = rust_type(self.program, &owner.ty(), self.module);
                         format!("{owner}::{}", sig.name)
                     }
                 };

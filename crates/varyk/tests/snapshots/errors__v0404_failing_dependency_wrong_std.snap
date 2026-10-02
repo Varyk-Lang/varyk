@@ -1,0 +1,20 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(&stderr)
+---
+error[V0200]: mismatched types: expected `i32`, found `string`
+ --> units/src/lib.vr:2:5
+  |
+2 |     "one"
+  |     ^^^^^ mismatched types: expected `i32`, found `string`
+  |
+  = note: in the package `units` 0.1.0, which this build uses
+
+error[V0404]: `varyk-std` must come from crates.io, not from a path
+  --> units/Cargo.toml:12:1
+   |
+12 | varyk-std = { path = "std" }
+   | ^^^^^^^^^ `varyk-std` must come from crates.io, not from a path
+   |
+   = note: write `varyk-std = "[version]"` under `[dependencies]` in `Cargo.toml`
+   = note: in the package `units` 0.1.0, which this build uses

@@ -1,0 +1,23 @@
+---
+source: crates/varyk/tests/examples.rs
+expression: manifest
+---
+[dependencies]
+varyk-std = "0.4.0"
+
+[dependencies.units]
+path = "<UNITS>"
+version = "0.1.0"
+
+[lib]
+path = "src/lib.rs"
+
+[package]
+build = false
+description = "A Varyk example library: the legs of a trip, in meters"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+name = "route"
+version = "0.1.0"
+
+[workspace]

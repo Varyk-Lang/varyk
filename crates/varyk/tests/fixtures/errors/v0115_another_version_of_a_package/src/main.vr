@@ -1,0 +1,4 @@
+fn main() {
+    let zero = units::Meters { value: 0 };
+    println!("{} {}", zero.value, route::total().value);
+}

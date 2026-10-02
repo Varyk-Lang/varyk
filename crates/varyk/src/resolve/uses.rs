@@ -38,6 +38,12 @@ impl Symbols {
     /// root, `crate::shop::cart` for a nested one.
     fn module_path(&self, module: ModuleId) -> String {
         let scope = &self.scopes[module.0 as usize];
+        // A module of another package: from the dependency's name, which
+        // a leading `::` keeps clear of a module of this package (M5b2
+        // spec 5).
+        if scope.package.is_some() {
+            return format!("::{}", scope.name);
+        }
         if module == ModuleId(0) {
             scope.name.clone()
         } else {
@@ -397,6 +403,9 @@ fn resolve_use_path(
     introduced: &HashMap<&str, &Path>,
 ) -> Result<Vec<UseTarget>, Diagnostic> {
     let path = &decl.path;
+    if let Some(diagnostic) = dependency_use(symbols, from, decl) {
+        return Err(diagnostic);
+    }
     let (prefix, last) = split_last(path).expect("a `use` path has at least one segment");
     // The whole path might just name a module: try that first, since a
     // module and a type inside its parent never share a name (spec 3.1's
@@ -412,6 +421,9 @@ fn resolve_use_path(
         match symbols.module_at(from, prefix) {
             Ok(_) => {}
             Err(LookupError::NoParent { span }) => return Err(no_parent(span)),
+            Err(LookupError::Dependency { span, dep }) => {
+                return Err(symbols.dependency_error(span, dep));
+            }
             Err(LookupError::Unknown) => {
                 return Err(unresolved_leading(
                     symbols,
@@ -422,7 +434,9 @@ fn resolve_use_path(
                     introduced,
                 ));
             }
-            Err(_) => unreachable!("`module_at` returns only `Unknown` or `NoParent`"),
+            Err(_) => {
+                unreachable!("`module_at` returns only `Unknown`, `NoParent`, or `Dependency`")
+            }
         }
     }
     item_target(symbols, from, prefix.as_ref(), last, path).map_err(|error| {
@@ -521,6 +535,7 @@ fn use_lookup_error(
         LookupError::NotVisible { decl, keyword } => not_visible(what, path, span, decl, keyword),
         LookupError::PrivateModule { module } => symbols.private_module(module, what, path, span),
         LookupError::NoParent { span } => no_parent(span),
+        LookupError::Dependency { span, dep } => symbols.dependency_error(span, dep),
         LookupError::Unknown => unreachable!("the caller handles `Unknown` itself"),
     }
 }
@@ -669,12 +684,51 @@ fn module_elsewhere(
 
 /// Whether `name` is a crate this compiler recognizes by name: the ones
 /// the standard library is split into, and the package's own
-/// `[dependencies]` (`crates`, as Rust code names them). An unrecognized
-/// name is not assumed to be a crate (spec 3.3's V0110 is for a *known*
-/// crate only, so a typo of a local module name is not misreported as
-/// one).
-fn is_known_crate_name(name: &str, crates: &[String]) -> bool {
-    matches!(name, "std" | "core" | "alloc") || crates.iter().any(|dep| dep == name)
+/// `[dependencies]`, as Rust code names them. An unrecognized name is not
+/// assumed to be a crate (spec 3.3's V0110 is for a *known* crate only,
+/// so a typo of a local module name is not misreported as one).
+fn is_known_crate_name(symbols: &Symbols, name: &str) -> bool {
+    matches!(name, "std" | "core" | "alloc") || symbols.dep(name).is_some()
+}
+
+/// The diagnostic for a `use` whose path starts at a dependency of the
+/// package, written bare and not a module of this file (M5b2 spec 2.1,
+/// 2.2): V0110 or V0401 for one Varyk code cannot name, and V0111 for
+/// a Varyk package's name alone, which is already in scope; and the V0111
+/// of a module declared elsewhere in the package, which comes first.
+/// `None` for anything else.
+fn dependency_use(symbols: &Symbols, from: ModuleId, decl: &UseDecl) -> Option<Diagnostic> {
+    let first = decl.path.segments.first()?;
+    if decl.path.leading != PathStart::None
+        || symbols.child(from, &first.name).is_some()
+        || symbols.dep(&first.name).is_none()
+    {
+        return None;
+    }
+    if symbols.module_named(&first.name) {
+        let rest: Vec<&Ident> = decl.path.segments[1..].iter().collect();
+        return Some(module_elsewhere(symbols, first, &rest, decl.alias.as_ref()));
+    }
+    match symbols.dependency_root(first) {
+        Err(LookupError::Dependency { span, dep }) => Some(symbols.dependency_error(span, dep)),
+        Ok(_) if decl.path.segments.len() == 1 => Some(
+            Diagnostic::new(
+                codes::V0111,
+                decl.path.span,
+                format!(
+                    "`{}` is a package this package depends on, so its name can already be \
+                     used here",
+                    first.name
+                ),
+            )
+            .with_note(format!(
+                "write paths that start with `{}::` where they are needed, and remove this \
+                 `use`; to call the package by another name, rename it in `Cargo.toml`",
+                first.name
+            )),
+        ),
+        _ => None,
+    }
 }
 
 /// V0111, V0110, or the ordinary "cannot find module" at `name`, a bare
@@ -698,7 +752,7 @@ fn leading_name_error(
         rest.push(last);
         return module_elsewhere(symbols, name, &rest, alias);
     }
-    if is_known_crate_name(&name.name, &symbols.crates) {
+    if is_known_crate_name(symbols, &name.name) {
         return Diagnostic::new(
             codes::V0110,
             name.span,

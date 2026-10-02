@@ -15,7 +15,13 @@ fn describe(kind: text::Kind) -> string {
 }
 
 fn main() {
-    let digits = text::Matcher::new("[0-9]+");
+    let digits = match text::Matcher::new("[0-9]+") {
+        Ok(m) => m,
+        Err(e) => {
+            println!("not a pattern: {}", e);
+            return;
+        }
+    };
     let mut inputs: Vec<string> = Vec::new();
     inputs.push("apple");
     inputs.push("42");

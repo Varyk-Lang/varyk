@@ -1,0 +1,13 @@
+[package]
+name = "route"
+version = "0.1.0"
+edition = "2024"
+description = "A Varyk example library: the legs of a trip, in meters"
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.vr"
+
+[dependencies]
+units = { version = "0.1.0", path = "../units" }
+varyk-std = "0.4.0"

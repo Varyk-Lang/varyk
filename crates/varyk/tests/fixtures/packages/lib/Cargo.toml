@@ -5,3 +5,6 @@ edition = "2024"
 description = "A tiny shapes library used in Varyk's package tests."
 license = "MIT"
 readme = "README.md"
+
+[lib]
+path = "src/lib.vr"

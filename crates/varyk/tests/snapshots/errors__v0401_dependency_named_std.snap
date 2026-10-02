@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0401]: a dependency cannot be called `std`
+  --> Cargo.toml:11:1
+   |
+11 | std = { path = "helper" }
+   | ^^^ a dependency cannot be called `std`
+   |
+   = note: the name would hide Rust's standard library, which the generated Rust uses; call it something else and name the real package with `package = ".."`

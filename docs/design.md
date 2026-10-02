@@ -17,8 +17,10 @@ milestone 2's additions are in
 [specs/2026-09-25-milestone-2-design.md](specs/2026-09-25-milestone-2-design.md),
 milestone 3's in
 [specs/2026-09-26-milestone-3-design.md](specs/2026-09-26-milestone-3-design.md),
-and milestone 4's in
-[specs/2026-09-29-milestone-4-design.md](specs/2026-09-29-milestone-4-design.md).
+milestone 4's in
+[specs/2026-09-29-milestone-4-design.md](specs/2026-09-29-milestone-4-design.md),
+and milestone 5b2's (packages) in
+[specs/2026-10-02-milestone-5b2-design.md](specs/2026-10-02-milestone-5b2-design.md).
 
 ## Principles
 
@@ -59,6 +61,30 @@ In priority order. When two conflict, the earlier one wins.
    front end never depends on the backend.
 9. **Advanced features must justify their complexity.** Go-like simplicity is
    the bar for anything added to the surface language.
+
+## Packages and batteries
+
+`varyk-std` stays the small runtime every program has: what the language
+itself needs and the light things nearly every service uses (`Error`,
+tasks, `json`, `env`, `log`). Anything heavy is a package the writer adds:
+SQL, MongoDB, Redis, the HTTP server and client. A program that prints a
+line never compiles a web server or a database driver. Official packages
+are named `varyk-*` and community packages `*-varyk` (`TRADEMARKS.md`
+draws the line), with neither `std` nor the crate underneath in the name.
+The mechanism comes first: with packages in place, a battery is written
+once as a package, by this project or by anyone, and needs no work in the
+compiler.
+
+Varyk code is built by `varyk`, as Go code is built by `go`. A package is
+`Cargo.toml`, its `.vr` files, and its `.rs` facades; it has no `build.rs`
+and no stub, and `varyk` compiles every Varyk package a build uses from its
+`.vr` sources, never from Rust a publisher shipped. Cargo still has to
+read the package (`cargo add`, `cargo update`, `cargo tree`, `cargo
+audit`, dependency bots), and it refuses a manifest with no target, so the
+manifest names the `.vr` root as the target. Plain `cargo build` does not
+build a source package, but it builds a published Varyk crate, which
+carries its generated Rust, so a Rust project can depend on one as on any
+crate.
 
 ## Non-goals
 
@@ -101,7 +127,7 @@ generated Rust have no stability guarantee before 1.0.
 | Modules | `mod name;` resolves to `.vr` or `.rs`, `pub` for visibility, one file per module in the generated crate | Rust's rule; Varyk and Rust modules are symmetric |
 | Rust interop | `.rs` files as modules, plus Cargo crates; no inline Rust blocks | the TypeScript and JavaScript model; one grammar per file |
 | Manifest | `Cargo.toml` | reuse Cargo entirely; no Varyk manifest |
-| Build orchestration | `varyk` drives `cargo` first; milestone 3 added the `build.rs` that `varyk init` writes for plain `cargo build` | diagnostics stay under Varyk's control |
+| Build orchestration | `varyk` drives `cargo` first; a package's `Cargo.toml` names its `.vr` root, and only `varyk` builds a Varyk package (milestone 5b2 removed `build.rs`, the stub, and `varyk emit`) | diagnostics stay under Varyk's control |
 | Generated code formatting | the compiler emits readable code; rustfmt only for display | builds must not depend on rustfmt |
 | Rust-layer errors | a line-level source map reports a rejection of Varyk's own generated code as a Varyk diagnostic, V0900, at the Varyk line responsible; a rejection inside a user's own `.rs` module passes through verbatim at their file | the two-layer model's promised net (M1 §6.5): generated-code failures read in Varyk's terms, the user's own Rust stays in the user's terms (M3 §5) |
 | rustc warnings | `#[allow(warnings, arithmetic_overflow, unconditional_panic)]` on every generated item, none on copied `.rs` files, and none on `mod` lines but `#[allow(non_snake_case)]` for a `.vr` module whose name is not in snake case (M3) | one tree for all three build destinations, works under `include!`, the user's own `.rs` warnings stay visible; verified with rustc |
@@ -121,16 +147,16 @@ generated Rust have no stability guarantee before 1.0.
 | Standard types | `Option`, `Result`, `Vec` with a hand-written table of six methods and indexing | no generics in the surface; the table is small, explicit, and sound by construction |
 | Lengths and indexes | `usize` added, no casts | matches Rust and rustc's types; `as` is lossy and can wait |
 | Type holes | `None`, `Vec::new()`, an empty `vec![]`, `Ok`, `Err` take the expected type or ask for an annotation | the integer-literal rule, no backward inference |
-| Crates from Varyk | never named; used through `.rs` facades in the package | most crate APIs are generic; a facade is where the concrete API is written; keeps check-passes-means-compiles; principle 6 |
+| Crates from Varyk | a Rust crate is never named; used through `.rs` facades in the package (a Varyk package is named, from 5b2) | most crate APIs are generic; a facade is where the concrete API is written; keeps check-passes-means-compiles; principle 6 |
 | `use` | package paths only; `use` lines are emitted as canonical `crate::` paths and every use site is written with its full path, so the aliases never affect the generated Rust (M3, amended from "verbatim"); no crates, braces, globs, variants | convenience without committing the keyword to a crate-import meaning before traits exist |
-| Build model | hidden crate for `varyk build`; `build.rs` + `include!` stub from `init` for plain cargo; assembled plain crate for publish | Varyk keeps its diagnostics; cargo tooling works unchanged; consumers need no `varyk` |
+| Build model | hidden crate for `varyk build`; assembled plain crate for publish (no `build.rs` or stub in a source package, from 5b2) | Varyk keeps its diagnostics; consumers need no `varyk` |
 | Edition | 2024 required in package mode | the hidden crate and plain cargo must compile the same code the same way |
 | Package mode detection | a file argument that is a package's crate root | no flag; `varyk run src/main.vr` gets the dependencies |
 | Visibility | Rust's rule for modules, items, and fields; `pub mod` added; no `pub(crate)` | generated Rust must resolve; one rule to teach |
 | Field privacy | private unless `pub`; breaking for M2 cross-module field reads | libraries need invariants; matches imported Rust structs; breaking, so the next release is 0.1.0 |
 | Rust import | structs with named fields, same-file inherent methods, unit-and-tuple enums; derives ignored | what a facade needs and nothing more; opaque otherwise, as M1 |
 | Nested `.rs` modules | cut | a facade is one file; removes the `syn` tree walk |
-| `check` and cargo | `check` never runs cargo, package mode included | M1 rule kept; TOML is parsed directly |
+| `check` and cargo | `check` parses `Cargo.toml` itself and runs cargo only to learn the package graph, when a package lists a dependency besides `varyk-std` (5b2) | a program that passes `check` builds; a package with no other dependency never needs cargo |
 | Milestone 4 scope | language only; `varyk fmt` and the interop leftovers to milestones 5 and 6 | two independent areas, as in milestone 2; the formatter needs comment-preserving syntax work of its own |
 | Chains | one expression from source to terminal; unfinished chains have no type; a source needs a stored receiver or a string literal | the iterator types have no Varyk spelling; nothing is lost, since a chain cannot be observed before it ends |
 | Items | borrowed, copies, or owned, decided at the source and by `map`; `collect` needs owned or copies | mirrors `for` and `match` on places and temporaries; a `Vec` of borrowed values has no Varyk type |
@@ -165,7 +191,21 @@ generated Rust have no stability guarantee before 1.0.
 | Dropped tasks (5b1) | cancelled; `detach` to keep running | no work leaks past the code that started it; a forgotten `.await` is an error, not a background job |
 | Waiting on many (5b1) | `Task::all` (first `Err` cancels the rest) and `Task::all_settled` (every outcome) | `Promise.all` and `Promise.allSettled`; two names keep cancellation visible |
 | Names (5b1) | `Task` reserved; `todo`'s `Task` renamed | `Task::all` reads as in other languages; a type with associated functions follows `Vec::new()` |
-| Shared values (5b1) | `Shared<T>` of a struct, read-only, `Arc` underneath, in parameters and `let`s only | one value for thousands of tasks without a copy each; 5b2's application state |
+| Shared values (5b1) | `Shared<T>` of a struct, read-only, `Arc` underneath, in parameters and `let`s only | one value for thousands of tasks without a copy each; the application state of `varyk-http` |
 | Where tasks live (5b1) | made by a `let`, `.detach()`, `vec!`, or collected `map`; only awaited, detached, or given to `Task::all` or `Task::all_settled` | no task is dropped by accident or moved out of a borrowed place |
 | Async recursion (5b1) | refused | Rust needs a boxed future for it; nothing in the examples recurses |
 | Concurrency model (5b1) | a task is a Rust future spawned on the tokio runtime `varyk_std::run` starts; `Task<T>` wraps its join handle and aborts on drop; every Varyk type is `Send` and `Sync`, so a `.rs` type that is not is refused at build (V0901) | the model runs on the Rust ecosystem unchanged, and the writer never sees `Send`, `Sync`, or `Pin` |
+| Milestone 5 split (5b2) | 5b2 packages; 5b3 facades and `varyk-sql`; 5b4 `varyk-http` and the golden path | batteries become packages, so the mechanism comes first; each slice testable on its own |
+| Batteries (5b2) | `varyk-std` is the small runtime every program has (`Error`, tasks, `json`, `env`, `log`); anything heavy is a package the writer adds | a program compiles only what it uses; anyone can write a battery |
+| Package names (5b2) | `varyk-*` official, `*-varyk` community; no `std`, no backing crate in the name | `TRADEMARKS.md` already draws the line; the crate underneath may change |
+| Name in code (5b2) | the `[dependencies]` key, `-` read as `_` | the writer chooses it; no second naming scheme; it is the crate name in the generated Rust |
+| What a package is (5b2) | a dependency with `src/lib.vr` | no marker to forget or forge |
+| How a package is compiled (5b2) | by the driver, from its `.vr` and its `.rs` modules, into a crate it writes | shipped Rust and build scripts could differ from the Varyk a reviewer reads |
+| Who builds Varyk (5b2) | `varyk` only; no `build.rs` or stub in a package; `varyk emit` removed | fewer files, and no build-script path to make safe; published crates still serve cargo users |
+| A package's target (5b2) | `Cargo.toml` names the `.vr` root (`[lib] path = "src/lib.vr"`) | cargo's tools (`add`, `update`, `tree`, `audit`) need a target to read the manifest; no Rust file needed |
+| Published form (5b2) | generated Rust with the `.vr` beside it, the target naming the generated root | cargo users and docs.rs need no `varyk` |
+| A Varyk package reached another way (5b2) | refused, V0401: `[dev-dependencies]`, `optional`, through a Rust crate | cargo would build it itself, outside the guarantee; one rule, no exceptions |
+| Reading a package (5b2) | the full check on its sources, its `pub` items imported | borrowed returns are inferred from bodies |
+| Asking cargo for the graph (5b2) | in every command, when any dependency besides `varyk-std` is listed, on a manifest in its own directory | a program that passes `check` builds; the graph is the build's own |
+| JSON on another package's type (5b2) | refused, V0210; convert it in its own package | serde is derived where a type is declared |
+| A type from a package not depended on (5b2) | refused, V0115 | the generated Rust must be able to name it |

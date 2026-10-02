@@ -53,6 +53,10 @@ pub const V0113: &str = "V0113";
 /// A `#[test]` function with parameters or a return type, called, or the
 /// entry `main` (M5a spec 2.7).
 pub const V0114: &str = "V0114";
+/// A value whose type is declared in a Varyk package this package does
+/// not list in `[dependencies]`, or in another version of one it does
+/// (M5b2 spec 2.4).
+pub const V0115: &str = "V0115";
 /// Type mismatch.
 pub const V0200: &str = "V0200";
 /// Wrong argument count.
@@ -137,11 +141,14 @@ pub const V0310: &str = "V0310";
 pub const V0311: &str = "V0311";
 /// The package's edition is not 2024.
 pub const V0400: &str = "V0400";
-/// `workspace = true` in the manifest, or a target-specific dependency
-/// table; not supported yet.
+/// `workspace = true` in the manifest, a target-specific dependency
+/// table, or another manifest setting not supported yet; or a Varyk
+/// package the build reaches other than through `[dependencies]` of a
+/// Varyk package, or twice with one name and version.
 pub const V0401: &str = "V0401";
-/// A target table (`[lib]`, `[[bin]]`, ...) with a `path`: a package's
-/// roots are fixed at `src/main.vr` and `src/lib.vr`.
+/// A target table (`[lib]`, `[[bin]]`, ...) other than the one that names
+/// the package's `.vr` root: a package's roots are fixed at `src/main.vr`
+/// and `src/lib.vr`.
 pub const V0402: &str = "V0402";
 /// This `Cargo.toml` cannot be used: unreadable, not valid TOML, no
 /// `[package]` `name`, an invalid or reserved `name`, or both or neither
@@ -151,6 +158,12 @@ pub const V0403: &str = "V0403";
 /// it, depends on it from a `path` or `git` or with a version that is not
 /// the compiler's minor, or whose `Cargo.lock` holds an older one.
 pub const V0404: &str = "V0404";
+/// Cargo could not say which packages the build uses (`cargo metadata`
+/// failed, or could not be run); carries cargo's own message.
+pub const V0405: &str = "V0405";
+/// A package whose `Cargo.toml` has no `[[bin]]` or `[lib]` naming its
+/// `.vr` root: only `varyk` builds a Varyk package.
+pub const V0406: &str = "V0406";
 /// The Rust rustc compiled from a generated file was rejected, at the
 /// Varyk line that produced it; carries rustc's message and code and asks
 /// for a bug report, since Varyk's own checks should have caught this
@@ -168,10 +181,10 @@ pub const V0901: &str = "V0901";
 /// checks `docs/language.md` against.
 pub const ALL: &[&str] = &[
     V0001, V0002, V0003, V0010, V0011, V0012, V0100, V0101, V0102, V0103, V0104, V0105, V0106,
-    V0107, V0108, V0109, V0110, V0111, V0112, V0113, V0114, V0200, V0201, V0202, V0203, V0204,
-    V0205, V0206, V0207, V0208, V0209, V0210, V0211, V0212, V0213, V0214, V0215, V0216, V0300,
-    V0301, V0302, V0303, V0304, V0305, V0306, V0307, V0308, V0309, V0310, V0311, V0400, V0401,
-    V0402, V0403, V0404, V0900, V0901,
+    V0107, V0108, V0109, V0110, V0111, V0112, V0113, V0114, V0115, V0200, V0201, V0202, V0203,
+    V0204, V0205, V0206, V0207, V0208, V0209, V0210, V0211, V0212, V0213, V0214, V0215, V0216,
+    V0300, V0301, V0302, V0303, V0304, V0305, V0306, V0307, V0308, V0309, V0310, V0311, V0400,
+    V0401, V0402, V0403, V0404, V0405, V0406, V0900, V0901,
 ];
 
 #[cfg(test)]

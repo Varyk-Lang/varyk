@@ -3,5 +3,9 @@ name = "with_dep"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "with_dep"
+path = "src/main.vr"
+
 [dependencies]
 dep = { path = "dep" }

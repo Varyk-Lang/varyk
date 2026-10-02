@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0401]: `units` is an optional dependency, and an optional dependency cannot be named yet
+ --> src/main.vr:2:20
+  |
+2 |     println!("{}", units::one());
+  |                    ^^^^^ `units` is an optional dependency, and an optional dependency cannot be named yet
+  |
+  = note: cargo leaves an optional dependency out of the build unless a feature turns it on, so Varyk cannot tell what it is; to use it from Varyk code, remove `optional = true` from its line in `Cargo.toml`

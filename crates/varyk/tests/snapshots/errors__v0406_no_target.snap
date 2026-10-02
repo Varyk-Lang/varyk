@@ -1,0 +1,18 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0406]: this `Cargo.toml` does not say where the package's code starts
+ --> crates/varyk/tests/fixtures/errors/v0406_no_target/Cargo.toml:2:8
+  |
+2 | name = "app"
+  |        ^^^^^ this `Cargo.toml` does not say where the package's code starts
+  |
+  = note: a Varyk package names its root in `Cargo.toml`, so that only `varyk` builds it; add these lines:
+          [[bin]]
+          name = "app"
+          path = "src/main.vr"
+help: insert `[[bin]]
+      name = "app"
+      path = "src/main.vr"
+      `

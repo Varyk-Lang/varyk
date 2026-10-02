@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{empty_dir, example_dir, std_config, varyk, varyk_run_with, varyk_with_env};
+use common::{empty_dir, example_dir, std_config, varyk, varyk_in, varyk_run_with, varyk_with_env};
 use varyk::backend::{Backend, CrateInfo, RustBackend, StdDependency};
 use varyk_syntax::{FileId, SourceFile};
 
@@ -565,8 +565,9 @@ fn the_readme_rust_sample_is_the_current_backend_output() {
     let text = fs::read_to_string(&path).expect("read examples/borrowing.vr");
     let mut sources = Vec::new();
     let entry = SourceFile::new(FileId(0), path, text);
-    let program = varyk::check_file(entry, varyk::package::Kind::Binary, None, &mut sources)
-        .unwrap_or_else(|diagnostics| panic!("borrowing should check: {diagnostics:#?}"));
+    let program = varyk::check_file(entry, None, None, &mut sources)
+        .unwrap_or_else(|diagnostics| panic!("borrowing should check: {diagnostics:#?}"))
+        .program;
     let std = StdDependency::for_program(program.uses_std);
     let generated =
         RustBackend.generate(&program, &CrateInfo::single_file("borrowing".into(), std));
@@ -935,6 +936,274 @@ fn an_example_copy_is_private_to_this_process() {
     assert!(dir.join("src/lib.vr").is_file(), "{dir:?}");
 }
 
+/// `trip` (M5b2 spec 6) uses `route` and `units`, and `route` uses
+/// `units`: `varyk check` on a copy, with both packages copied beside it,
+/// checks all three.
+#[test]
+fn trip_checks_with_route_and_units_beside_it() {
+    let dir = example_dir("trip");
+    for package in ["route", "units"] {
+        let sibling = dir.parent().expect("a parent").join(package);
+        assert!(sibling.join("src/lib.vr").is_file(), "{sibling:?}");
+    }
+    let output = varyk_in(&dir, &["check"]);
+    assert!(
+        output.status.success(),
+        "status: {:?}, stderr: {}",
+        output.status,
+        stderr_of(&output)
+    );
+}
+
+/// What `trip` prints on stdout (M5b2 spec 6).
+const TRIP_OUTPUT: &str = "total 1700 meters\n\
+                           longest Mill to Lake, 900 meters\n\
+                           stop Lake, 12 minutes\n\
+                           no stop\n\
+                           about 21 minutes on foot\n";
+
+/// Runs `varyk <args>` in `dir` with `LOG` and `LOG_FORMAT` removed, so
+/// the default level and format apply whatever the tester's own are.
+fn varyk_logged(dir: &Path, args: &[&str]) -> Output {
+    varyk_run_with(args, dir, &[], &["LOG", "LOG_FORMAT"])
+}
+
+fn assert_ok(output: &Output) {
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        stdout_of(output),
+        stderr_of(output)
+    );
+}
+
+/// `text` with every absolute path the driver writes for a copy of an
+/// example under `parent` shown as `[examples]`, and the workspace's
+/// `varyk-std` as `[varyk-std]`.
+fn redacted(text: &str, parent: &Path) -> String {
+    let parent = parent.canonicalize().expect("the copy's parent");
+    text.replace(&common::std_path().display().to_string(), "[varyk-std]")
+        .replace(&parent.display().to_string(), "[examples]")
+}
+
+/// `trip` runs under `varyk run` (M5b2 spec 4.3): the driver writes a
+/// crate for `route` and one for `units`, the program's `main` starts
+/// logging because `route` logs, though `trip` never calls `log`, and
+/// `route`'s warning reaches stderr.
+#[test]
+fn trip_runs_with_route_s_log_line() {
+    let dir = example_dir("trip");
+    let output = varyk_logged(&dir, &["run"]);
+    assert_ok(&output);
+    assert_eq!(stdout_of(&output), TRIP_OUTPUT);
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("cannot read a stop"), "stderr: {stderr}");
+
+    let parent = dir.parent().expect("a parent");
+    let read = |path: &str| {
+        fs::read_to_string(dir.join(path)).unwrap_or_else(|err| panic!("{path}: {err}"))
+    };
+    let main = read("target/varyk/trip/src/main.rs");
+    assert!(main.contains("::varyk_std::start();"), "{main}");
+    insta::assert_snapshot!("trip_main_rs", main);
+    insta::assert_snapshot!(
+        "route_lib_rs",
+        read("target/varyk/packages/route-0.1.0/src/lib.rs")
+    );
+    insta::assert_snapshot!(
+        "trip_cargo_toml",
+        redacted(&read("target/varyk/trip/Cargo.toml"), parent)
+    );
+    insta::assert_snapshot!(
+        "route_cargo_toml",
+        redacted(
+            &read("target/varyk/packages/route-0.1.0/Cargo.toml"),
+            parent
+        )
+    );
+    insta::assert_snapshot!(
+        "units_cargo_toml",
+        redacted(
+            &read("target/varyk/packages/units-0.1.0/Cargo.toml"),
+            parent
+        )
+    );
+}
+
+/// The modification time of every file under `dir`, by path.
+fn mtimes(dir: &Path) -> std::collections::BTreeMap<PathBuf, std::time::SystemTime> {
+    let mut found = std::collections::BTreeMap::new();
+    let mut next = vec![dir.to_path_buf()];
+    while let Some(dir) = next.pop() {
+        for entry in fs::read_dir(&dir).expect("read a directory").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                next.push(path);
+            } else {
+                let modified = entry.metadata().and_then(|meta| meta.modified());
+                found.insert(path, modified.expect("a modification time"));
+            }
+        }
+    }
+    found
+}
+
+/// A second build with no change writes no file and compiles nothing:
+/// every package crate and every library cargo made is as the first build
+/// left it. A change to `units` then reaches `trip` through `route` too
+/// (M5b2 spec 4.3).
+#[test]
+fn trip_rebuilds_a_changed_units_and_nothing_unchanged() {
+    let dir = example_dir("trip");
+    assert_ok(&varyk_logged(&dir, &["build"]));
+    // The graph's own directory is `check`'s, rewritten as cargo reads it.
+    let written = [
+        "target/varyk/packages/route-0.1.0",
+        "target/varyk/packages/units-0.1.0",
+        "target/varyk/trip/src",
+        "target/varyk/cache/debug/deps",
+    ];
+    let all = || -> Vec<_> { written.iter().map(|path| mtimes(&dir.join(path))).collect() };
+    let before = all();
+    assert_ok(&varyk_logged(&dir, &["build"]));
+    assert!(
+        before == all(),
+        "a build with no change wrote or compiled something"
+    );
+
+    let length = dir.parent().expect("a parent").join("units/src/length.vr");
+    let text = fs::read_to_string(&length).expect("read length.vr");
+    let changed = text.replace("a.value + b.value", "a.value + b.value * 2");
+    assert_ne!(text, changed);
+    fs::write(&length, changed).expect("write length.vr");
+    let output = varyk_logged(&dir, &["run"]);
+    assert_ok(&output);
+    // `route::total` doubles each leg, then `trip` adds nothing.
+    assert!(
+        stdout_of(&output).starts_with("total 3400 meters\n"),
+        "stdout: {}",
+        stdout_of(&output)
+    );
+}
+
+/// `varyk build` right after `varyk add --path ../units`, before any code
+/// names `units`, builds: the new dependency is a Varyk package crate.
+#[test]
+fn a_program_builds_right_after_adding_a_varyk_package() {
+    let units = example_dir("units");
+    let parent = units.parent().expect("a parent");
+    assert_ok(&varyk_in(parent, &["init", "app"]));
+    let app = parent.join("app");
+    assert_ok(&varyk_run_with(
+        &["add", "units", "--path", "../units", "--offline"],
+        &app,
+        &[("CARGO_TERM_COLOR", "never")],
+        &[],
+    ));
+    assert_ok(&varyk_in(&app, &["build"]));
+}
+
+/// `varyk test` in `trip` runs `trip`'s own tests, which may call into
+/// `route`, and never `route`'s (M5b2 spec 2.3).
+#[test]
+fn varyk_test_runs_the_program_s_tests_and_not_a_package_s() {
+    let dir = example_dir("trip");
+    let parent = dir.parent().expect("a parent");
+    let append = |path: &Path, text: &str| {
+        let mut source = fs::read_to_string(path).expect("read a source file");
+        source.push_str(text);
+        fs::write(path, source).expect("write a source file");
+    };
+    append(
+        &dir.join("src/main.vr"),
+        "\n#[test]\nfn totals_one_leg() {\n    \
+         let legs = vec![route::leg(\"A\", \"B\", 3)];\n    \
+         assert_eq(route::total(legs).value, 3);\n}\n",
+    );
+    append(
+        &parent.join("route/src/lib.vr"),
+        "\n#[test]\nfn never_runs_from_trip() {\n    assert(false);\n}\n",
+    );
+    let output = varyk_logged(&dir, &["test"]);
+    assert_ok(&output);
+    let stdout = stdout_of(&output);
+    assert!(stdout.contains("test totals_one_leg ... ok"), "{stdout}");
+    assert!(!stdout.contains("never_runs_from_trip"), "{stdout}");
+}
+
+/// A package named `route-planner`, listed under that key and named
+/// `route_planner::` in Varyk, builds and runs: its crate's library target
+/// is `route_planner`, since cargo refuses a `-` there (M5b2 Review Focus
+/// 3).
+#[test]
+fn a_package_with_a_hyphen_in_its_name_builds_and_runs() {
+    let dir = example_dir("trip");
+    let parent = dir.parent().expect("a parent");
+    let edit = |path: &Path, from: &str, to: &str| {
+        let text = fs::read_to_string(path).expect("read a file");
+        assert!(text.contains(from), "{path:?}: {text}");
+        fs::write(path, text.replace(from, to)).expect("write a file");
+    };
+    edit(
+        &parent.join("route/Cargo.toml"),
+        "name = \"route\"",
+        "name = \"route-planner\"",
+    );
+    edit(
+        &dir.join("Cargo.toml"),
+        "route = { path",
+        "route-planner = { path",
+    );
+    edit(&dir.join("src/main.vr"), "route::", "route_planner::");
+    let output = varyk_logged(&dir, &["run"]);
+    assert_ok(&output);
+    assert_eq!(stdout_of(&output), TRIP_OUTPUT);
+    let lib = fs::read_to_string(dir.join("target/varyk/packages/route-planner-0.1.0/Cargo.toml"))
+        .expect("the package crate's manifest");
+    assert!(lib.contains("name = \"route_planner\""), "{lib}");
+}
+
+/// A program that lists `units` as `u = { package = "units" }` names its
+/// types `::u::..`, `route::total`'s result included (M5b2 spec 5).
+#[test]
+fn a_renamed_dependency_names_its_types_by_the_key() {
+    let dir = example_dir("trip");
+    let edit = |path: &Path, from: &str, to: &str| {
+        let text = fs::read_to_string(path).expect("read a file");
+        assert!(text.contains(from), "{path:?}: {text}");
+        fs::write(path, text.replace(from, to)).expect("write a file");
+    };
+    edit(
+        &dir.join("Cargo.toml"),
+        "units = { path = \"../units\" }",
+        "u = { path = \"../units\", package = \"units\" }",
+    );
+    let main = dir.join("src/main.vr");
+    edit(&main, "units::", "u::");
+    // A `Vec` keeps the type written in the Rust (spec 2.3).
+    edit(
+        &main,
+        "    let best",
+        "    let totals = vec![route::total(legs)];\n    \
+         println!(\"{} totals\", totals.len());\n    let best",
+    );
+    let output = varyk_logged(&dir, &["build", "--emit-rust"]);
+    assert_ok(&output);
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("let totals: Vec<::u::length::Meters> = "),
+        "{stdout}"
+    );
+    let output = varyk_logged(&dir, &["run"]);
+    assert_ok(&output);
+    assert!(
+        stdout_of(&output).contains("total 1700 meters\n1 totals\n"),
+        "{}",
+        stdout_of(&output)
+    );
+}
+
 const GREETING_OUTPUT: &str = "== Greetings ==\nHello, Ada!\nHello, Grace!\n== 2 greeted ==\n";
 
 /// `greeting` is `varyk init greeting` committed as is (spec 7.1), plus
@@ -951,17 +1220,13 @@ fn greeting_keeps_the_files_varyk_init_writes() {
     }
 }
 
-/// `greeting` builds two ways with the same output (spec 7.1): `varyk run`
-/// through the hidden crate, and plain `cargo run` through `build.rs` and
-/// the `include!` stub.
+/// `greeting` runs through `varyk run`, the one way a Varyk package is
+/// built (M5b2 spec 1.2), with the output the example promises.
 #[test]
-fn greeting_runs_the_same_through_varyk_and_through_cargo() {
+fn greeting_runs_through_varyk() {
     let dir = example_dir("greeting");
     let main = dir.join("src/main.vr");
     assert_runs(main.to_str().expect("utf-8 path"), GREETING_OUTPUT);
-
-    let output = cargo_in(&dir, &["run", "--quiet"]);
-    assert_eq!(stdout_of(&output), GREETING_OUTPUT);
 }
 
 /// `matcher` (spec 7.2) wraps `regex-lite` in a `.rs` facade, fetched
@@ -972,6 +1237,19 @@ fn greeting_runs_the_same_through_varyk_and_through_cargo() {
 fn matcher_runs_through_its_facade_and_shows_the_rust_warning() {
     let dir = example_dir("matcher");
     let main = dir.join("src/main.vr");
+    // A program whose only dependency is a Rust crate still checks, now
+    // that `check` reads the package graph (M5b2 Review Focus 1).
+    let checked = varyk(&["check", main.to_str().expect("utf-8 path")]);
+    assert!(
+        checked.status.success(),
+        "status: {:?}, stderr: {}",
+        checked.status,
+        stderr_of(&checked)
+    );
+    assert!(
+        dir.join("target/varyk/packages/graph/Cargo.toml").is_file(),
+        "check read no graph"
+    );
     let output = varyk(&["run", main.to_str().expect("utf-8 path")]);
     assert!(
         output.status.success(),
@@ -1008,16 +1286,9 @@ fn units_assembles_packages_and_serves_a_cargo_only_consumer() {
     let package = varyk::package::load(&dir.join("Cargo.toml"), &mut sources).expect("loads");
     let text = fs::read_to_string(&package.entry).expect("read src/lib.vr");
     let entry = SourceFile::new(FileId(sources.len() as u32), package.entry.clone(), text);
-    let program = varyk::check_file(
-        entry,
-        package.kind,
-        Some(varyk::Dependencies {
-            crates: &[],
-            dev: &[],
-        }),
-        &mut sources,
-    )
-    .unwrap_or_else(|diagnostics| panic!("units should check: {diagnostics:#?}"));
+    let program = varyk::check_file(entry, Some(&package), None, &mut sources)
+        .unwrap_or_else(|diagnostics| panic!("units should check: {diagnostics:#?}"))
+        .program;
     let info = CrateInfo {
         name: package.name.clone(),
         manifest: package.isolated_manifest(),
@@ -1031,4 +1302,134 @@ fn units_assembles_packages_and_serves_a_cargo_only_consumer() {
 
     let output = cargo_in(&dir.join("consumer"), &["run", "--quiet"]);
     assert_eq!(stdout_of(&output), "7 meters\n");
+}
+
+/// Pins the key list of M5b2 spec 4.4: the manifest `cargo package` writes
+/// for the crate `varyk publish` assembles is one a dependency may have,
+/// on the toolchain running the tests. No `--no-verify`, so cargo unpacks
+/// the crate under `target/package/`; `units` has no dependencies, so
+/// nothing needs the network.
+#[test]
+fn the_manifest_cargo_package_writes_is_one_a_dependency_may_have() {
+    let dir = example_dir("units");
+    let mut sources = Vec::new();
+    let package = varyk::package::load(&dir.join("Cargo.toml"), &mut sources).expect("loads");
+    let text = fs::read_to_string(&package.entry).expect("read src/lib.vr");
+    let entry = SourceFile::new(FileId(sources.len() as u32), package.entry.clone(), text);
+    let program = varyk::check_file(entry, Some(&package), None, &mut sources)
+        .unwrap_or_else(|diagnostics| panic!("units should check: {diagnostics:#?}"))
+        .program;
+    let info = CrateInfo {
+        name: package.name.clone(),
+        manifest: package.generated_manifest(),
+        std_dependency: None,
+    };
+    let generated = RustBackend.generate(&program, &info);
+    let dest = varyk::driver::publish::assemble(&package, &generated).expect("assembles");
+
+    cargo_in(&dest, &["package", "--offline", "--quiet"]);
+
+    let unpacked = dest.join("target/package/units-0.1.0/Cargo.toml");
+    let mut sources = Vec::new();
+    if let Err(diagnostics) = varyk::package::load_dependency(&unpacked, &mut sources, false) {
+        let text = fs::read_to_string(&unpacked).unwrap_or_default();
+        panic!("cargo's manifest was refused: {diagnostics:#?}\n{text}");
+    }
+}
+
+/// Assembles `units` the way `varyk publish --assemble-only` does and
+/// returns the assembled crate's directory.
+fn assembled_units() -> PathBuf {
+    let dir = example_dir("units");
+    let output = varyk_in(&dir, &["publish", "--assemble-only"]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    dir.join(stdout_of(&output).trim_end())
+}
+
+/// A Varyk program with a `path` dependency on `crate_dir`, named `units`,
+/// in a fresh directory; it prints a length from the dependency.
+fn program_using_units(crate_dir: &Path) -> PathBuf {
+    let dir = empty_dir("uses-assembled-units");
+    fs::create_dir_all(dir.join("src")).expect("create src");
+    fs::write(
+        dir.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"uses_units\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [[bin]]\nname = \"uses_units\"\npath = \"src/main.vr\"\n\n\
+             [dependencies]\nunits = {{ path = \"{}\" }}\n",
+            crate_dir.display()
+        ),
+    )
+    .expect("write Cargo.toml");
+    fs::write(
+        dir.join("src/main.vr"),
+        "fn main() {\n    let a = units::length::Meters { value: 3 };\n    \
+         let b = units::length::Meters { value: 4 };\n    \
+         println!(\"{} meters\", units::length::add(a, b).value);\n}\n",
+    )
+    .expect("write main.vr");
+    dir
+}
+
+/// A Varyk program depending on the assembled `units` by path builds and
+/// runs under `varyk` (M5b2 spec 3).
+#[test]
+fn a_varyk_program_runs_against_the_assembled_units() {
+    let program = program_using_units(&assembled_units());
+    let output = varyk_in(&program, &["run"]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "7 meters\n");
+}
+
+/// Under `varyk` nothing an assembled crate ships runs (M5b2 spec 4.5):
+/// changed generated Rust and a failing build script, which plain cargo
+/// would run, have no effect.
+#[test]
+fn shipped_rust_and_build_scripts_have_no_effect_under_varyk() {
+    let crate_dir = assembled_units();
+    let marker = crate_dir.join("build-script-ran");
+    let _ = fs::remove_file(&marker);
+    let manifest = crate_dir.join("Cargo.toml");
+    let text = fs::read_to_string(&manifest).expect("read the assembled manifest");
+    assert!(text.contains("build = false"), "{text}");
+    fs::write(&manifest, text.replace("build = false", "")).expect("write the manifest");
+    fs::write(
+        crate_dir.join("build.rs"),
+        format!(
+            "fn main() {{\n    std::fs::write(r\"{}\", \"ran\").unwrap();\n    panic!(\"build script ran\");\n}}\n",
+            marker.display()
+        ),
+    )
+    .expect("write build.rs");
+    for file in ["src/lib.rs", "src/length.rs"] {
+        let path = crate_dir.join(file);
+        assert!(
+            path.is_file(),
+            "{} is not in the assembled crate",
+            path.display()
+        );
+        fs::write(&path, "compile_error!(\"shipped Rust compiled\");\n").expect("tamper");
+    }
+
+    let program = program_using_units(&crate_dir);
+    let output = varyk_in(&program, &["run"]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "7 meters\n");
+    assert!(!marker.exists(), "the shipped build script ran");
+}
+
+/// The manifest `varyk publish --assemble-only` writes for `route`: the
+/// generated root as the target, no build script, and `units` with its
+/// version kept and its path made absolute (redacted here).
+#[test]
+fn route_publish_manifest() {
+    let dir = example_dir("route");
+    let output = varyk_in(&dir, &["publish", "--assemble-only"]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let dest = dir.join(stdout_of(&output).trim_end());
+    let manifest = fs::read_to_string(dest.join("Cargo.toml")).expect("read the manifest");
+    let units = dir.join("../units");
+    let manifest = manifest.replace(&units.display().to_string(), "<UNITS>");
+    assert!(manifest.contains("<UNITS>"), "{manifest}");
+    insta::assert_snapshot!("route_publish_cargo_toml", manifest);
 }

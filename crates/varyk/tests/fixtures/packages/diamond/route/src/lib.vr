@@ -1,0 +1,11 @@
+pub fn leg(meters: i32) -> units::Meters {
+    units::Meters { value: meters }
+}
+
+pub fn total(legs: Vec<units::Meters>) -> units::Meters {
+    let mut sum = units::Meters { value: 0 };
+    for leg in legs {
+        sum = units::add(sum, leg);
+    }
+    sum
+}

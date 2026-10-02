@@ -22,9 +22,12 @@ use super::{
 /// `imports`). A `mod` resolves in its declaring module's
 /// [`Module::dir`]. Returns false if any module file had syntax errors,
 /// which stops resolution. `dependencies` are the package's, whose crates
-/// a `.rs` module may name (`None` for a single file).
+/// a `.rs` module may name (`None` for a single file); `dependency` says
+/// the package is a dependency of the build, whose `.vr` files win over
+/// `.rs` files of the same module (M5b2 spec 3).
 pub(super) fn load_modules(
     dependencies: Option<Dependencies<'_>>,
+    dependency: bool,
     sources: &mut Vec<SourceFile>,
     modules: &mut Vec<Module>,
     imports: &mut Vec<(ModuleId, ImportedModule)>,
@@ -55,7 +58,7 @@ pub(super) fn load_modules(
             if !check_name(decl, parent_id == ModuleId(0), &mut declared, diagnostics) {
                 continue;
             }
-            let Some(path) = find_file(decl, &dir, &place, diagnostics) else {
+            let Some(path) = find_file(decl, &dir, &place, dependency, diagnostics) else {
                 continue;
             };
             match load_one(
@@ -169,11 +172,14 @@ fn place(modules: &[Module], id: ModuleId) -> String {
 }
 
 /// The one file for `mod name;` in `dir`: `name.vr`, `name.rs`, or
-/// `name/mod.vr`. None of them, or more than one, is V0104 at the `mod`.
+/// `name/mod.vr`. None of them, or more than one, is V0104 at the `mod`;
+/// except that in a `dependency` a `.vr` file wins over `name.rs`, which
+/// is what a publisher's assembly put beside it (M5b2 spec 3).
 fn find_file(
     decl: &ModDecl,
     dir: &std::path::Path,
     place: &str,
+    dependency: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<PathBuf> {
     let name = &decl.name.name;
@@ -182,10 +188,13 @@ fn find_file(
         format!("{name}.rs"),
         format!("{name}/mod.vr"),
     ];
-    let found: Vec<&String> = candidates
+    let mut found: Vec<&String> = candidates
         .iter()
         .filter(|candidate| dir.join(candidate).is_file())
         .collect();
+    if dependency && found.iter().any(|file| file.ends_with(".vr")) {
+        found.retain(|file| file.ends_with(".vr"));
+    }
     match found.as_slice() {
         [one] => Some(dir.join(one)),
         [] => {

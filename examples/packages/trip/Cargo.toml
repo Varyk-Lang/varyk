@@ -1,0 +1,13 @@
+[package]
+name = "trip"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "trip"
+path = "src/main.vr"
+
+[dependencies]
+route = { path = "../route" }
+units = { path = "../units" }
+varyk-std = "0.4.0"
