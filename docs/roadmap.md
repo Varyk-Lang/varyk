@@ -140,6 +140,7 @@ Design: [specs/2026-10-01-milestone-5b1-design.md](specs/2026-10-01-milestone-5b
 - [ ] HTTP client on the same stack
 - [ ] Databases through one API; sqlx is the candidate crate
 - [ ] `.rs` signatures naming Varyk-declared types and `varyk_std::Error`, so the `varyk-std` facades can take and return Varyk structs (moved from milestone 4)
+- [ ] The examples' Rust stops calling `expect`: `Matcher::new` in `examples/packages/matcher/src/text.rs` returns a `Result` the Varyk code handles, and the `build.rs` that `varyk init` writes (copied into the example packages) reports a missing `OUT_DIR` without panicking, so the examples follow the rule that nothing stops a program because a value is absent
 - [ ] An agent evaluation: the examples written by a model from `docs/language.md` alone, pass rates published, before any page claims that agents write Varyk well
 
 ## Milestone 6: tooling and beyond
