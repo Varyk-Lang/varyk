@@ -713,10 +713,7 @@ fn a_rust_layer_error_in_json_mode_is_an_object_at_the_users_file() {
 /// output stays exactly what it printed.
 #[test]
 fn run_in_json_mode_keeps_stdout_for_the_program() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("json_run")
-        .join(std::process::id().to_string());
-    let _ = fs::remove_dir_all(&dir);
+    let dir = empty_dir("json_run");
     fs::create_dir_all(&dir).expect("create the program directory");
     fs::write(
         dir.join("main.vr"),
@@ -1095,8 +1092,19 @@ fn a_program_builds_right_after_adding_a_varyk_package() {
     let parent = units.parent().expect("a parent");
     assert_ok(&varyk_in(parent, &["init", "app"]));
     let app = parent.join("app");
+    // `init` pins `varyk-std` to the compiler's version, which a release
+    // pull request names before crates.io has it: use the local one.
+    let std = std_config();
     assert_ok(&varyk_run_with(
-        &["add", "units", "--path", "../units", "--offline"],
+        &[
+            "add",
+            "units",
+            "--path",
+            "../units",
+            "--offline",
+            "--config",
+            &std,
+        ],
         &app,
         &[("CARGO_TERM_COLOR", "never")],
         &[],
@@ -1431,5 +1439,10 @@ fn route_publish_manifest() {
     let units = dir.join("../units");
     let manifest = manifest.replace(&units.display().to_string(), "<UNITS>");
     assert!(manifest.contains("<UNITS>"), "{manifest}");
+    // The release pull request bumps `route`'s `varyk-std` line with the
+    // compiler, so the snapshot keeps no version of it.
+    let std_line = format!("varyk-std = \"{}\"", env!("CARGO_PKG_VERSION"));
+    assert!(manifest.contains(&std_line), "{manifest}");
+    let manifest = manifest.replace(&std_line, "varyk-std = \"[version]\"");
     insta::assert_snapshot!("route_publish_cargo_toml", manifest);
 }
