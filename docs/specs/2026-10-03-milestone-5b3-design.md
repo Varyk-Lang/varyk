@@ -106,8 +106,8 @@ The rules the importer applies:
   `varyk_std::serde::de::DeserializeOwned`; `varyk-std` re-exports
   `serde`, so the second spelling needs no serde dependency, while the
   first needs `serde` in `[dependencies]` as rustc and the crate check of
-  M3 §4 require; `use` is not read for it, as for any type in a
-  signature (M3 §4);
+  M3 §9 (V0104) require; `use` is not read for it, as for any type in a
+  signature (M3 §4.4);
 - two type parameters, a `where` clause, another bound, a lifetime
   parameter, or `T` in a parameter or elsewhere in the return keep
   today's rule: the function is imported but cannot be called (V0108),
@@ -128,7 +128,9 @@ let n: i64 = db.one("select count(*) from users").await?;
 
 all fix `T`. With no expected type (`match db.first(...).await? { .. }`,
 or a `let` without a type), the call is V0207, the message `json::parse`
-gives, with the help to write the type on the `let`.
+gives, with the help to write the type on the `let`. A started call
+(M5b1 §2.2) has no expected type either, so such a call is always
+awaited, never started into a task.
 
 `T` may be any type a `json::parse` result may be (M5a §2.9): a number,
 `bool`, `string`, `Option`, `Vec`, or `HashMap` of those, or a struct or
@@ -175,13 +177,15 @@ AGENTS.md's "no hidden allocation" rule names it beside the first.
 pub enum Value { Null, Bool(bool), Int(i64), Float(f64), Text(String) }
 ```
 
-with `From` for each of the Varyk types above, for `&str`, and for
-`Option` of each (`None` is `Null`), so the generated Rust is
-`vec![::varyk_std::Value::from(id), ::varyk_std::Value::from(name.as_str())]`,
-and `::varyk_std::Value::from("Ada")` for a literal. No conversion can
-fail. Which `From` the backend reaches is decided by the argument's type,
-so an `i32` becomes `Int` and an `f32` `Float` without a cast in Varyk
-code.
+with `From` for each of the Varyk types above, with a string as `&str`,
+and for `Option` of each (`None` is `Null`), so the generated Rust is
+`vec![::varyk_std::Value::from(id), ::varyk_std::Value::from(name.as_str())]`
+for an owned `name`, `::varyk_std::Value::from("Ada")` for a literal,
+and `::varyk_std::Value::from(maybe_name.as_deref())` for an
+`Option<string>`: a string is always handed over borrowed, and the
+`From` makes the copy. No conversion can fail. Which `From` the backend
+reaches is decided by the argument's type, so an `i32` becomes `Int` and
+an `f32` `Float` without a cast in Varyk code.
 
 A `Vec<varyk_std::Value>` anywhere but last, or a `varyk_std::Value`
 alone as a parameter or in a return, is V0108 with a note.
@@ -224,9 +228,10 @@ and reads `e.message()`.
 package that needs it (section 10). A bare `Error` from a `use` keeps the
 "write the full path" refusal of M3 §4.
 
-Naming `varyk_std::Error` in a `.rs` signature counts as using `Error`
-(`names_error`, M5a §7.3), so the program's manifest needs `varyk-std`,
-which every package has (M5a §5).
+A program holding such a result already needs `varyk-std` (`names_error`,
+M5b2 §7.4, counts every local and return); the imported signature itself
+counts too, so a discarded result still needs it. Every package has it
+(M5a §5).
 
 ### 2.5 `pub use`
 
@@ -264,8 +269,9 @@ A plain `use` is unchanged.
 
 ### 2.6 `varyk add sql`
 
-`varyk add` (M5a §4.5) is a pass-through to `cargo add`. It gains a table
-of shorthands for official packages, with one entry for now:
+`varyk add` (M5a §5.2, M5b2 §4.6) is a pass-through to `cargo add`. It
+gains a table of shorthands for official packages, with one entry for
+now (`http` joins it in 5b4):
 
 | Shorthand | Runs |
 |---|---|
@@ -275,11 +281,11 @@ The rename makes the dependency key `sql`, so code writes `sql::connect`.
 (Without it the key would be `varyk-sql`, which begins with `varyk_` and
 cannot be named, M5b2 §2.1; the V0100 help already shows the rename.)
 
-`varyk add sql` followed by cargo's own flags passes them on:
-`varyk add sql --features postgres`. One shorthand per call; `varyk add
-sql serde` is refused with "add one official package per `varyk add`
-call", and `varyk add http sql` the same until `http` exists (5b4).
-A first argument that is not a shorthand is passed through exactly as
+The rule: when the first argument is a shorthand, it is replaced by its
+row, and every later argument goes to cargo as written (`varyk add sql
+--features postgres`), except another shorthand, which is refused with
+"add one official package per `varyk add` call". When the first
+argument is not a shorthand, the whole call is passed through exactly as
 today, so `varyk add varyk-sql --rename sql` still works.
 
 ### 2.7 Not in milestone 5b3
@@ -327,8 +333,8 @@ add`; naming `Value` from Varyk code; everything of 5b4.
 One addition, `varyk_std::Value` (section 2.2), in a new module
 `value.rs`, re-exported at the crate root beside `Error`. `From` impls
 for `bool`, `String`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`,
-`u8`, `u16`, `u32`, for `&str`, and for `Option` of each owned type.
-`Value` derives `Debug`,
+`u8`, `u16`, `u32`, for `&str`, and for `Option` of each of those
+(`Option<&str>` included). `Value` derives `Debug`,
 `Clone`, and `PartialEq`. Nothing else in `varyk-std` changes; no new
 dependency.
 
@@ -354,8 +360,9 @@ Line numbers are approximate.
 ### 6.2 Resolve
 
 - `resolve/signatures.rs` (`Mapper::sig` ~28, `param` ~85, `ret` ~96,
-  `uncallable_note` ~214): `Literal` becomes a parameter mode "literal
-  text" of type `string`; `Values` becomes a variadic marker on the
+  `uncallable_note` ~214): `Literal` becomes a `string` parameter with a
+  literal-only flag (not a new `ParamMode`, which borrow analysis and the
+  backend share); `Values` becomes a variadic marker on the
   signature; `Param` in the allowed return shapes gives a signature with
   a type hole filled at the call; the notes of sections 2.1-2.3 for the
   refused shapes.
@@ -382,7 +389,7 @@ Line numbers are approximate.
   expected type reaches the call through `.await` and `?`; a test pins
   it.
 - `names_error` (`check.rs` ~230): an imported signature naming `Error`
-  counts.
+  counts, for a discarded result (section 2.4).
 - HIR: the call records the chosen `T`, the split between fixed and
   trailing arguments, and each trailing argument's scalar type.
 
@@ -391,7 +398,8 @@ Line numbers are approximate.
 - `callee` (~1180) writes the turbofish from the recorded `T`, using
   `rust_type`.
 - `args` (~768) writes the trailing `vec![..]` of `Value::from`, passing
-  a string argument as `&str` (section 2.2) and the rest by value.
+  a string argument as `&str` (`Need::Str`, as today), an `Option<string>`
+  as `.as_deref()`, and the rest by value (section 2.2).
 - `backend/rust.rs` writes `pub use crate::..;` for each re-export in a
   module and routes paths through re-exports (section 4).
 
@@ -473,7 +481,8 @@ The 5b3 list becomes:
 - `pub use` in a `.vr` file, and `varyk add sql`;
 - `varyk-sql`, in its own repository, on sqlx: SQLite, Postgres, and
   MySQL, each a cargo feature; `connect` and `connect_with`, `migrate`,
-  and on a pool or a transaction `one`, `first`, `all`, and `run`, each
+  `begin` and `commit`, and on a pool or a transaction `one`, `first`,
+  `all`, and `run`, each
   taking the query and its values; rows read into structs by column name;
   each database's own placeholders, passed through; the query text a
   literal, so a query built from input is a compile error; no secret in
