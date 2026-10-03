@@ -405,9 +405,9 @@ Line numbers are approximate.
   (`methods.rs` `try_` wraps it in `Result`); a test pins it. A call
   with a type hole in started position is V0207 with the note of
   section 2.1.
-- `names_error` (`check.rs` ~230): a call to an imported signature
-  naming any `varyk_std::` path of section 2 counts, through a
-  dependency package as well (section 2.4).
+- `uses_std` (`check.rs` ~49-96): set at the call site of an imported
+  signature naming any `varyk_std::` path of section 2, through a
+  dependency package as well (section 2.4); `names_error` is unchanged.
 - HIR: the call records the chosen `T`, the split between fixed and
   trailing arguments, and each trailing argument's scalar type.
 
@@ -482,9 +482,9 @@ clashes.
   gets an `extra-files` entry in `release-please-config.json`, as
   `route` and `trip` have, or the next release pull request breaks the
   test.
-- `tests/cli.rs`: the `cargo add` arguments for `varyk add sql`, `varyk
-  add sql --features postgres`, the refusal of a second shorthand, and a
-  plain crate name, without running cargo.
+- Unit tests of the argument builder: `varyk add sql`, `varyk add sql
+  --features postgres`, the refusal of a second shorthand, and a plain
+  crate name; `tests/cli.rs` runs the refusal end to end, without cargo.
 - The language-reference test (M4 §7) covers V0217 and V0218.
 - `docs/language.md` ("Calling Rust" gains the four signature shapes;
   "Modules" gains `pub use`; "Packages" gains the shorthand and points to
