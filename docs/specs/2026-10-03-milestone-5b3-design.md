@@ -106,9 +106,8 @@ The rules the importer applies:
 - the bound is `serde::de::DeserializeOwned` or
   `varyk_std::serde::de::DeserializeOwned`; `varyk-std` re-exports
   `serde`, so the second spelling needs no serde dependency, while the
-  first needs `serde` in `[dependencies]` as rustc and the crate check of
-  M3 §9 (V0104) require; `use` is not read for it, as for any type in a
-  signature (M3 §4.4);
+  first needs `serde` in `[dependencies]` for rustc; `use` is not read
+  for it, as for any type in a signature (M3 §4.4);
 - two type parameters, a `where` clause, another bound, a lifetime
   parameter, or `T` in a parameter or elsewhere in the return keep
   today's rule: the function is imported but cannot be called (V0108),
@@ -130,7 +129,7 @@ let n: i64 = db.one("select count(*) from users").await?;
 all fix `T`. With no expected type (`match db.first(...).await? { .. }`,
 or a `let` without a type), the call is V0207, the message `json::parse`
 gives, with the help to write the type on the `let`. A call in started
-position (M5b1 §2.2, no `.await`) has no expected type either and is
+position (M5b1 §2.3, no `.await`) has no expected type either and is
 refused with V0207 and the note "a call that takes its type from where
 its result goes cannot be started; add `.await`".
 
@@ -162,8 +161,11 @@ Each such argument is a `bool`, a `string`, `f32`, `f64`, `i8`, `i16`,
 and `usize` are not accepted, since they do not fit `Int`; write `n as
 i64`. Anything else (a struct, a `Vec`, a `HashMap`, a `Result`) is
 V0218, "a value of this type cannot be passed here", with the list of
-types that can. A `Vec` of `Value` itself cannot be written, since Varyk
-code cannot name `Value` (section 3).
+types that can. A bare `None` has no type to take, since a trailing
+argument is checked against this list and not against an expected type,
+so it is V0207 as elsewhere; write `let missing: Option<i64> = None`
+first. A `Vec` of `Value` itself cannot be written, since Varyk code
+cannot name `Value` (section 3).
 
 Each argument is read, not given away, as an argument of `json::stringify`
 is (M5a §2.4): a number is copied, and a string is copied into the
