@@ -34,6 +34,7 @@ use super::returns::Classification;
 use super::{
     Assigned, BORROWED_NOTE, Context, GONE_NOTE, Refers, captured_in, clone_fix_it, dangling,
     gone_message, owner_text, place_in, place_root, push_unique, started_modes, what_to_do,
+    with_trailing,
 };
 use crate::builtins::Owner;
 use crate::diagnostics::{Diagnostic, codes};
@@ -425,24 +426,29 @@ impl Flows<'_> {
             HirExprKind::Call {
                 callee,
                 args,
+                trailing,
                 started,
                 ..
             } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
                 let (modes, keeps) = started_modes(*started, modes, keeps);
-                self.call(args.iter(), &modes, keeps);
+                let modes = with_trailing(modes, trailing);
+                self.call(args.iter().chain(trailing), &modes, keeps);
             }
             HirExprKind::MethodCall {
                 receiver,
                 method,
                 args,
+                trailing,
                 started,
                 ..
             } => {
                 self.chain_params(receiver, *method, args);
                 let (_, modes, keeps) = self.cx.method(*method);
                 let (modes, keeps) = started_modes(*started, modes, keeps);
-                self.call(std::iter::once(&**receiver).chain(args), &modes, keeps);
+                let modes = with_trailing(modes, trailing);
+                let args = std::iter::once(&**receiver).chain(args).chain(trailing);
+                self.call(args, &modes, keeps);
             }
             HirExprKind::Field { base, .. } => self.expr(base),
             HirExprKind::Index { base, index } => {

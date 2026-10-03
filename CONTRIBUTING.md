@@ -57,8 +57,8 @@ concerns is rebase-merged with one conventional commit per concern.
 | `refactor:` | code change with no behavior change | no bump, not listed |
 
 A `!` after the prefix (`feat!:`) marks a breaking change. Before 1.0,
-`feat` and `fix` bump the patch version and a breaking change bumps the
-minor version.
+`feat` and a breaking change bump the minor version and `fix` bumps the
+patch version.
 
 Keep `<` and `>` out of commit subjects and `BREAKING CHANGE:` footers:
 write `Option of T`, not `Option<T>`. release-please copies them into the

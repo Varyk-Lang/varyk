@@ -1,0 +1,7 @@
+pub struct Book {
+    pub pages: i32,
+}
+
+pub fn item(pages: i32) -> Book {
+    Book { pages: pages }
+}

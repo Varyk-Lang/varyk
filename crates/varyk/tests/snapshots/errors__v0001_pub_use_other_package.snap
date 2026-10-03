@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0001]: `pub use` of an item from another package is not supported yet
+ --> src/main.vr:1:9
+  |
+1 | pub use units::one;
+  |         ^^^^^^^^^^ `pub use` of an item from another package is not supported yet
+  |
+  = note: a package can re-export only its own items; a package that uses this one can name `units::one` itself by listing that package in its `Cargo.toml`

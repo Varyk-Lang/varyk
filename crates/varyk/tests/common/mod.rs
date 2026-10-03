@@ -120,23 +120,30 @@ pub fn fixture_dir(kind: &str, case: &str) -> PathBuf {
 }
 
 /// A fresh copy of the example package `examples/packages/<name>/` under
-/// `CARGO_TARGET_TMPDIR/examples/<pid>/<n>/<name>/`, one per call, so that building it never
-/// writes into the source tree (its `target/`, its `Cargo.lock`) and two
-/// test processes in one checkout never clear each other's copy. The
-/// example packages it depends on by `path = "../<other>"`, and those
-/// they depend on, are copied beside it (M5b2 spec 4.7). The
-/// first call in a process removes the directory of any earlier process
-/// that has ended (or after an hour, in case its id was reused), and
-/// anything else there once it is a day old, as the soundness harness
-/// does with its scratch directories.
+/// `CARGO_TARGET_TMPDIR/examples/<pid>/<n>/<name>/`: [`package_copy`] with
+/// the root `examples/packages`.
 pub fn example_dir(name: &str) -> PathBuf {
-    let root = run_dir("examples");
+    package_copy("../../examples/packages", name)
+}
+
+/// A fresh copy of the package `<root>/<name>/`, `root` relative to this
+/// crate's directory, under `CARGO_TARGET_TMPDIR/examples/<pid>/<n>/<name>/`,
+/// one per call, so that building it never writes into the source tree
+/// (its `target/`, its `Cargo.lock`) and two test processes in one
+/// checkout never clear each other's copy. The packages under `root` it
+/// depends on by `path = "../<other>"`, and those they depend on, are
+/// copied beside it (M5b2 spec 4.7). The first call in a process removes
+/// the directory of any earlier process that has ended (or after an hour,
+/// in case its id was reused), and anything else there once it is a day
+/// old, as the soundness harness does with its scratch directories.
+pub fn package_copy(root: &str, name: &str) -> PathBuf {
+    let parent_dir = run_dir("examples");
     // A fresh directory per call: two tests of one process copying the
-    // same example must not clear each other's copy.
+    // same package must not clear each other's copy.
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/packages");
-    let parent = root.join(n.to_string());
+    let packages = Path::new(env!("CARGO_MANIFEST_DIR")).join(root);
+    let parent = parent_dir.join(n.to_string());
     let _ = fs::remove_dir_all(&parent);
     let mut copied: Vec<String> = Vec::new();
     let mut next = vec![name.to_string()];
@@ -144,8 +151,8 @@ pub fn example_dir(name: &str) -> PathBuf {
         if copied.contains(&package) {
             continue;
         }
-        copy_dir(&examples.join(&package), &parent.join(&package));
-        next.extend(sibling_dependencies(&examples.join(&package)));
+        copy_dir(&packages.join(&package), &parent.join(&package));
+        next.extend(sibling_dependencies(&packages.join(&package)));
         copied.push(package);
     }
     parent.join(name)

@@ -345,6 +345,72 @@ fn owned_local_into_field_return_and_imported_string_parameter() {
     insta::assert_snapshot!(file(&krate, "src/main.rs"));
 }
 
+/// A literal-text parameter (milestone 5b3 spec 2.3) is passed the
+/// literal as written, escapes included, from a method and a free call.
+#[test]
+fn literal_text_to_a_static_str_parameter() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/literal_text/main.vr");
+    insta::assert_snapshot!(file(&krate, "src/main.rs"));
+}
+
+/// Trailing values (milestone 5b3 spec 2.2, 4) are one `vec![..]` of
+/// `::varyk_std::Value::from(..)`, empty for none: a number by value, a
+/// string as a `&str`, an `Option<string>` through `.as_deref()`, a field
+/// read in place; nothing is cloned.
+#[test]
+fn trailing_values_to_a_vec_of_values() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/trailing_values/main.vr");
+    let main = file(&krate, "src/main.rs");
+    for expected in [
+        "vec![]",
+        "::varyk_std::Value::from(id)",
+        "::varyk_std::Value::from(name.as_str())",
+        "::varyk_std::Value::from(\"Ada\")",
+        "::varyk_std::Value::from(maybe.as_deref())",
+        "::varyk_std::Value::from(user.age)",
+        // `Some(x)` is passed as `x`, read in place.
+        "vec![::varyk_std::Value::from(\"Ada\"), ::varyk_std::Value::from(name.as_str())]",
+    ] {
+        assert!(main.contains(expected), "{expected} in {main}");
+    }
+    for line in main.lines().filter(|line| line.contains("Value::from")) {
+        assert!(
+            !line.contains(".clone()") && !line.contains(".to_string()"),
+            "{line}"
+        );
+    }
+    assert!(
+        krate.cargo_toml.contains("varyk-std = "),
+        "{}",
+        krate.cargo_toml
+    );
+    insta::assert_snapshot!(main);
+}
+
+/// A call that takes its type from where its result goes (milestone 5b3
+/// spec 2.1, 4) writes the type after the name, from a method and a free
+/// function, awaited and not; a struct it reads derives `Deserialize`.
+#[test]
+fn a_filled_type_parameter_is_a_turbofish() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/typed_result/main.vr");
+    let main = file(&krate, "src/main.rs");
+    for expected in [
+        "crate::ext::Store::one::<User>(&db, ",
+        "crate::ext::Store::all::<User>(&db, \"[]\")?",
+        "crate::ext::read::<i64>(\"7\")?",
+        "crate::ext::fetch::<i64>(\"null\").await?",
+        "::varyk_std::serde::Deserialize",
+    ] {
+        assert!(main.contains(expected), "{expected} in {main}");
+    }
+    assert!(
+        krate.cargo_toml.contains("varyk-std = "),
+        "{}",
+        krate.cargo_toml
+    );
+    insta::assert_snapshot!(main);
+}
+
 #[test]
 fn borrowed_local_and_literal_to_a_string_parameter() {
     insta::assert_snapshot!(main_rs(
@@ -511,6 +577,22 @@ fn cross_module_struct_and_function_paths() {
 fn use_forms_emit_canonical_crate_paths() {
     let krate = generate_path("crates/varyk/tests/fixtures/codegen/use_forms/main.vr");
     insta::assert_snapshot!("use_forms_main_rs", file(&krate, "src/main.rs"));
+}
+
+/// A `pub use` (milestone 5b3 spec 4) is a `pub use` line of the item's
+/// own `crate::` path; a call or a type written through the re-export is
+/// the item's own path, as every path is.
+#[test]
+fn pub_use_emits_a_pub_use_line_and_paths_stay_the_items_own() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/reexports/main.vr");
+    let main_rs = file(&krate, "src/main.rs");
+    assert!(main_rs.contains("pub use crate::db::connect;"), "{main_rs}");
+    assert!(main_rs.contains("pub use crate::db::Pool;"), "{main_rs}");
+    let app_rs = file(&krate, "src/app.rs");
+    assert!(app_rs.contains("show(&crate::db::connect(3))"), "{app_rs}");
+    assert!(app_rs.contains("pool: &crate::db::Pool"), "{app_rs}");
+    insta::assert_snapshot!("reexports_main_rs", main_rs);
+    insta::assert_snapshot!("reexports_app_rs", app_rs);
 }
 
 /// Two `use` declarations of one module sharing a local name in different
@@ -696,6 +778,23 @@ fn for_over_ranges_places_and_temporaries() {
     assert!(main.contains("let n = *n;"), "{main}");
     assert!(main.contains("let value = *value;"), "{main}");
     insta::assert_snapshot!("loops_main_rs", main);
+}
+
+/// A facade returning `Result<_, varyk_std::Error>` is opened by `?` in a
+/// function returning `Result<_, Error>` and by a `match` reading
+/// `message()`; the program depends on `varyk-std` (milestone 5b3 spec
+/// 2.4).
+#[test]
+fn a_result_of_varyk_std_error_from_rust_is_varyks_error() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/error_from_rust/main.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(main.contains("ext::load(id)?"), "{main}");
+    assert!(
+        krate.cargo_toml.contains("varyk-std = "),
+        "{}",
+        krate.cargo_toml
+    );
+    insta::assert_snapshot!("error_from_rust_main_rs", main);
 }
 
 #[test]

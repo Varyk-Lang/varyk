@@ -1559,6 +1559,39 @@ fn owned_non_copy_argument_after_a_shared_borrow_of_the_same_local_is_v0306() {
     assert!(sources[0].text.contains("ext::both(s, t)"), "{sources:#?}");
 }
 
+/// Milestone 5b3 spec 2.2 and 3: a trailing value is read, never moved,
+/// so a local, a field, or an element passed as one stays usable.
+#[test]
+fn a_trailing_value_is_read_and_its_root_stays_usable() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/trailing_values/main.vr");
+    if let Err(diagnostics) = result {
+        panic!("{diagnostics:#?}");
+    }
+}
+
+/// A trailing value read after its local was given to an owned
+/// parameter of the same call is V0306 and V0305; one read beside a
+/// mutable borrow of its root is V0306, as for any argument.
+#[test]
+fn a_trailing_value_follows_the_argument_rules() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/interop/trailing_misuse/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let codes_found: Vec<&str> = diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(
+        codes_found,
+        vec![codes::V0306, codes::V0305, codes::V0306],
+        "{diagnostics:#?}"
+    );
+    let keep = span_of(&sources, "keep(s, s)");
+    assert_eq!(diagnostics[0].span.start, keep.start + 8);
+    assert_eq!(diagnostics[1].span.start, keep.start + 8);
+    assert_eq!(
+        diagnostics[2].span,
+        part_of(&sources, "grow(list, list[0])", "list[0]")
+    );
+}
+
 #[test]
 fn copy_argument_beside_a_mutable_borrow_of_the_same_local_is_v0306_either_order() {
     let (result, sources) =

@@ -528,6 +528,17 @@ fn run_a_single_file_naming_error_only_in_a_signature() {
     );
 }
 
+/// A single file whose `.rs` module names `varyk_std::` only in
+/// functions it never calls builds: rustc compiles the module whole, so
+/// the program depends on `varyk-std` (milestone 5b3 spec 2.4).
+#[test]
+fn run_a_single_file_whose_rust_module_names_varyk_std_uncalled() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/interop/std_uncalled/main.vr",
+        "42\n",
+    );
+}
+
 /// `Error::new`, `message`, `{}` and `==` on an `Error`, and `?` on
 /// `parse`, whose error names the text (M5a spec 2.3, 2.8).
 #[test]
@@ -1445,4 +1456,110 @@ fn route_publish_manifest() {
     assert!(manifest.contains(&std_line), "{manifest}");
     let manifest = manifest.replace(&std_line, "varyk-std = \"[version]\"");
     insta::assert_snapshot!("route_publish_cargo_toml", manifest);
+}
+
+// --- The milestone-5b3 fixture packages (M5b3 spec 8) -----------------------
+//
+// `store` is a Varyk library whose `.rs` facade has the shapes of
+// `varyk-sql` with no database; `store_user` is a program that uses it.
+// They live under `tests/fixtures/packages/`, and run here rather than in
+// `tests/packages.rs` because their `serde_json` and `varyk-std` lines
+// need the registry.
+
+/// What `store_user` prints (its `src/main.vr` says the same).
+const STORE_USER_OUTPUT: &str = "Ada 36 countess 9.5 true\n\
+                                 2 users: Ada, Bo\n\
+                                 Bo has no nick\n\
+                                 nothing stored under user/9\n\
+                                 committed true, then: the batch is already committed\n\
+                                 Cy is in, Di is not\n\
+                                 3 users, 3 counted\n";
+
+/// `store_user` runs under `varyk run` and prints what it should: every
+/// facade shape of 5b3 through a dependency package, by the names its
+/// `pub use` lines give. `varyk test` in the `store` copied beside it runs
+/// the library's own test, which pins `varyk test` on a library.
+#[test]
+fn store_user_runs_and_store_s_test_passes() {
+    let dir = common::package_copy("tests/fixtures/packages", "store_user");
+    let output = varyk_logged(&dir, &["run"]);
+    assert_ok(&output);
+    assert_eq!(stdout_of(&output), STORE_USER_OUTPUT);
+
+    let read = |path: &str| {
+        fs::read_to_string(dir.join(path)).unwrap_or_else(|err| panic!("{path}: {err}"))
+    };
+    let main = read("target/varyk/store_user/src/main.rs");
+    for written in [
+        "::store::kv::Store::one::<User>(db, \"user/1\", vec![::varyk_std::Value::from(1)])",
+        "::store::kv::Store::all::<User>(&db, \"user/\", vec![])",
+        "::store::kv::Store::first::<User>(&db, \"user/2\"",
+        "::store::kv::Store::one::<i64>(&db, \"count\", vec![])",
+        "::varyk_std::Value::from(name.as_str())",
+        "::varyk_std::Value::from(nick.as_deref())",
+        "::store::kv::Batch::commit(&mut batch).await",
+    ] {
+        assert!(main.contains(written), "{written} is not in:\n{main}");
+    }
+    let lib = read("target/varyk/packages/store-0.1.0/src/lib.rs");
+    for written in [
+        "pub use crate::kv::open;",
+        "pub use crate::kv::Store;",
+        "pub use crate::kv::Batch;",
+    ] {
+        assert!(lib.contains(written), "{written} is not in:\n{lib}");
+    }
+
+    let store = dir.parent().expect("a parent").join("store");
+    let output = varyk_logged(&store, &["test"]);
+    assert_ok(&output);
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("test tests::one_reads_what_put_stored ... ok"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("1 passed"), "{stdout}");
+}
+
+/// A program that calls a facade method of `store` whose signature names
+/// `varyk_std::` needs `varyk-std` itself, since the call site writes
+/// `::varyk_std::Value::from` in the program's crate; one that only names
+/// `store`'s items does not (M5b3 spec 2.4). Neither names `Error`, so
+/// only the call counts.
+#[test]
+fn a_program_needs_varyk_std_at_a_call_through_store_and_not_before() {
+    let dir = common::package_copy("tests/fixtures/packages", "store_user");
+    let manifest = dir.join("Cargo.toml");
+    let text = fs::read_to_string(&manifest).expect("read the manifest");
+    // Any version: the release pull request bumps the line.
+    let without: String = text
+        .lines()
+        .filter(|line| !line.starts_with("varyk-std = "))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert_ne!(text, without, "{text}");
+    fs::write(&manifest, without).expect("write the manifest");
+    let main = dir.join("src/main.vr");
+
+    fs::write(
+        &main,
+        "fn main() {\n    let db = store::open();\n    println!(\"opened\");\n}\n",
+    )
+    .expect("write main.vr");
+    let output = varyk_logged(&dir, &["run"]);
+    assert_ok(&output);
+    assert_eq!(stdout_of(&output), "opened\n");
+
+    fs::write(
+        &main,
+        "fn main() {\n    let mut db = store::open();\n    println!(\"{}\", db.put(\"k\", 1).is_ok());\n}\n",
+    )
+    .expect("write main.vr");
+    let output = varyk_in(&dir, &["check"]);
+    assert!(!output.status.success(), "{}", stdout_of(&output));
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("V0404") && stderr.contains("needs `varyk-std`"),
+        "{stderr}"
+    );
 }

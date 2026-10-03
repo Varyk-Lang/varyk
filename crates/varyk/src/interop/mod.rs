@@ -90,6 +90,14 @@ pub struct ImportedFn {
     pub is_async: bool,
     /// Byte range of the function's name in the file.
     pub span: Range<usize>,
+    /// The one type parameter Varyk fills at the call from where the
+    /// result goes (milestone 5b3 spec 2.1), named as the signature names
+    /// it; it is [`RustTy::Param`] in `ret`.
+    pub type_param: Option<String>,
+    /// Why a generic signature is not callable, in words for a note
+    /// ("a `where` clause"); `ret` is then [`RustTy::Opaque`] holding the
+    /// signature.
+    pub type_param_refused: Option<&'static str>,
 }
 
 /// Whether an [`ImportedField`] is `pub` (plain `pub`) or not visible

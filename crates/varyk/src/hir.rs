@@ -117,6 +117,9 @@ pub struct HirUse {
     /// `Some` only when the user wrote `as`; the local name is otherwise
     /// already `path`'s last segment.
     pub alias: Option<String>,
+    /// A `pub use` (milestone 5b3 spec 2.5): written `pub use`, and its
+    /// item is the module's too for the packages that use this one.
+    pub is_pub: bool,
     pub span: Span,
 }
 
@@ -425,9 +428,20 @@ pub enum HirExprKind {
     /// `.await` (milestone 5b1 spec 2.3): it starts a task, of type
     /// `Task<T>`, and its arguments are owned slots the task keeps
     /// (spec 3).
+    ///
+    /// `trailing` holds the values passed after `args` to an imported
+    /// function whose last parameter is `Vec<varyk_std::Value>`
+    /// (milestone 5b3 spec 2.2), each of a type `Value::from` takes; they
+    /// are read, never moved, started or not. Empty for any other call.
+    ///
+    /// `type_arg` is the type filled in for the type parameter of an
+    /// imported function whose return has one (milestone 5b3 spec 2.1),
+    /// written as a turbofish; `None` for any other call.
     Call {
         callee: Callee,
         args: Vec<HirExpr>,
+        trailing: Vec<HirExpr>,
+        type_arg: Option<Ty>,
         rooted: Option<usize>,
         started: bool,
     },
@@ -520,11 +534,13 @@ pub enum HirExprKind {
     /// leaves it unset.
     ///
     /// `started` as on [`HirExprKind::Call`]: the receiver is then an
-    /// owned slot too.
+    /// owned slot too; `trailing` and `type_arg` as there.
     MethodCall {
         receiver: Box<HirExpr>,
         method: MethodRef,
         args: Vec<HirExpr>,
+        trailing: Vec<HirExpr>,
+        type_arg: Option<Ty>,
         rooted: Option<usize>,
         looked_into: bool,
         started: bool,

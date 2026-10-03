@@ -117,3 +117,16 @@ Recorded, deliberately unanswered.
   not only in its published form?
 - Should `varyk publish` verify with its own build instead of cargo's, so
   publishing never compiles a dependency's shipped Rust?
+- Should `varyk_std::Value` grow `UInt`, `List`, and `Map`, so a trailing
+  value may be a `u64`, a `Vec` (Postgres `= ANY($1)`), or a struct (a JSON
+  column)? Milestone 5b3 keeps scalars so that no conversion can fail.
+- Should a Varyk function be able to declare a literal-only or a variadic
+  parameter, so a `.vr` wrapper could forward them?
+- Should the facade's type parameter be allowed in parameter position
+  (`&T: Serialize`), and in other return shapes (`HashMap<String, T>`)?
+  The first is planned for 5b4.
+- Should `pub use` re-export a module, several names at once, or an item
+  of another package? The last reopens V0115 (milestone 5b2).
+- Should `varyk_std::Error` be accepted in parameters and fields, and
+  should a facade be able to carry a status or kind on it? 5b4's
+  `http::bad_request` is the first need.

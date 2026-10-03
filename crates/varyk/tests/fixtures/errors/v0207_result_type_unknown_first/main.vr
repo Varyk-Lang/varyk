@@ -1,0 +1,17 @@
+mod ext;
+
+struct User {
+    name: string,
+}
+
+async fn load(db: ext::Store) -> Result<string, Error> {
+    let user = db.first("{\"name\": \"ann\"}").await?;
+    Ok(user.name)
+}
+
+async fn main() {
+    match load(ext::Store::open()).await {
+        Ok(name) => println!("{}", name),
+        Err(e) => println!("{}", e.message()),
+    }
+}

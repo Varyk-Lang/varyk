@@ -6,13 +6,13 @@ mod shop;
 mod util;
 mod a;
 
-#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[allow(unused_imports)]
 use crate::shop::cart::Cart;
-#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[allow(unused_imports)]
 use crate::shop::cart;
-#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[allow(unused_imports)]
 use crate::util::helper;
-#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[allow(unused_imports)]
 use crate::a::B as C;
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]

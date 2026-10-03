@@ -1,0 +1,20 @@
+mod ext;
+
+struct User {
+    name: string,
+}
+
+fn main() {
+    let user = User { name: "Ada" };
+    let list = vec![1, 2];
+    let counts: HashMap<string, i64> = HashMap::new();
+    let big: u64 = 1;
+    ext::run("q", user);
+    ext::run("q", list);
+    ext::run("q", counts);
+    ext::run("q", big);
+    ext::run("q", big as u64);
+    ext::run("q", Some(user.name.len()));
+    ext::run("q", None);
+    ext::run();
+}

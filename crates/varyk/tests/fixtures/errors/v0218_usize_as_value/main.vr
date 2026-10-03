@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    let names = vec!["Ada", "Bo"];
+    println!("{}", ext::run("select ? as count", names.len()));
+}

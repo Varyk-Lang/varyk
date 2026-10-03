@@ -1,0 +1,17 @@
+mod ext;
+
+fn twice(id: i64) -> Result<i64, Error> {
+    let n = ext::load(id)?;
+    Ok(n)
+}
+
+fn main() {
+    match twice(21) {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{}", e.message()),
+    }
+    match ext::load(-1) {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{}", e.message()),
+    }
+}

@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0210]: `Handle` cannot be read from JSON
+ --> crates/varyk/tests/fixtures/errors/v0210_result_type_from_rust/main.vr:4:46
+  |
+4 |     let handle: Result<ext::Handle, Error> = ext::read("{\"id\": 1}");
+  |                                              ^^^^^^^^^^^^^^^^^^^^^^^^ `Handle` cannot be read from JSON
+  |
+  = note: `Handle` is a Rust type from a `.rs` module
+  = note: only Varyk's own types go through JSON; copy what is needed into a Varyk struct

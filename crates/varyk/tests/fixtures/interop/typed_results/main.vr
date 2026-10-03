@@ -1,0 +1,63 @@
+mod ext;
+
+struct User {
+    #[rename("user_name")]
+    name: string,
+    #[default(0)]
+    age: i64,
+}
+
+enum Role {
+    Admin,
+    Guest,
+}
+
+struct Holder {
+    user: User,
+}
+
+fn show(user: User) {
+    println!("{}", user.name);
+}
+
+async fn tail(db: ext::Store) -> Result<User, Error> {
+    db.one("{}").await
+}
+
+async fn early(db: ext::Store, stop: bool) -> Result<Option<User>, Error> {
+    if stop {
+        return db.first("null").await;
+    }
+    Ok(None)
+}
+
+async fn load(db: ext::Store) -> Result<i64, Error> {
+    let n: i64 = db.one("1").await?;
+    let text: string = db.one("\"a\"").await?;
+    let maybe: Option<i64> = db.one("null").await?;
+    let users: Vec<User> = db.all("[]")?;
+    let counts: HashMap<string, i64> = ext::read("{}")?;
+    let role: Role = ext::Store::read("\"Admin\"")?;
+    let user: Option<User> = db.first("null").await?;
+    show(db.one("{}").await?);
+    let holder = Holder { user: ext::fetch("{}").await? };
+    let awaited: Result<User, Error> = ext::fetch("{}").await;
+    println!("{} {} {} {} {} {}", text, users.len(), counts.len(), holder.user.name, maybe.is_some(), user.is_some());
+    match role {
+        Role::Admin => println!("admin"),
+        Role::Guest => println!("guest"),
+    }
+    match awaited {
+        Ok(u) => println!("{}", u.name),
+        Err(e) => println!("{}", e.message()),
+    }
+    Ok(n)
+}
+
+async fn main() {
+    let db = ext::Store::open();
+    match load(db).await {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{}", e.message()),
+    }
+}

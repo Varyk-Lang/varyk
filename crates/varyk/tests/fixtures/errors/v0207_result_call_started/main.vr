@@ -1,0 +1,10 @@
+mod ext;
+
+struct User {
+    name: string,
+}
+
+async fn main() {
+    let task = ext::fetch("{\"name\": \"ann\"}");
+    let user: Result<User, Error> = task.await;
+}

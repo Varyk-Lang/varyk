@@ -58,9 +58,12 @@ output; `crates/varyk/tests/examples.rs` checks that.
   cargo's verdict is the same under `varyk build` and `varyk publish`, and
   a manifest cargo rejects is a bug in that manifest. Do not chase further
   ways cargo can reject a manifest.
-- **No hidden allocation.** The compiler inserts exactly one allocation, a
-  string literal placed into an owned slot. Never solve an ownership
-  problem by emitting `.clone()` or `.to_string()` on anything else.
+- **No hidden allocation.** The compiler inserts exactly two allocations:
+  a string literal placed into an owned slot, and a string passed as a
+  trailing value of a facade's `Vec<varyk_std::Value>` parameter, which
+  `Value::from(&str)` copies as it hands the value over. Never solve an
+  ownership problem by emitting `.clone()` or `.to_string()` on anything
+  else.
 - **Safe by default.** Varyk is for services that face the network, so
   security is a design constraint, not a later pass. What runs is what a
   reader can review: do not design a path where Rust that nobody reads,
