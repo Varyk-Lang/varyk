@@ -107,18 +107,46 @@ fn level_from(text: &str) -> Option<LevelFilter> {
 }
 
 /// One line per event: `<time> <LEVEL> <message>`, or a JSON object with
-/// exactly `time`, `level`, and `message`. No target, no colour.
+/// exactly `time`, `level`, and `message`. The event's other fields follow
+/// the message as `name=value`. No target, no colour.
 struct LineFormat {
     json: bool,
     clock: fn() -> SystemTime,
 }
 
-struct Message(String);
+/// The event's `message` field, and every other field as `name=value`.
+#[derive(Default)]
+struct Message {
+    message: String,
+    fields: Vec<String>,
+}
+
+impl Message {
+    /// The message, then the fields, separated by spaces.
+    fn text(&self) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        if !self.message.is_empty() {
+            parts.push(&self.message);
+        }
+        parts.extend(self.fields.iter().map(String::as_str));
+        parts.join(" ")
+    }
+}
 
 impl Visit for Message {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "message" {
+            self.message = value.to_string();
+        } else {
+            self.fields.push(format!("{}={value}", field.name()));
+        }
+    }
+
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
-            self.0 = format!("{value:?}");
+            self.message = format!("{value:?}");
+        } else {
+            self.fields.push(format!("{}={value:?}", field.name()));
         }
     }
 }
@@ -134,11 +162,11 @@ where
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
-        let mut message = Message(String::new());
+        let mut message = Message::default();
         event.record(&mut message);
         let time = rfc3339((self.clock)());
         let level = event.metadata().level().as_str();
-        write!(writer, "{}", line(self.json, &time, level, &message.0))
+        write!(writer, "{}", line(self.json, &time, level, &message.text()))
     }
 }
 
@@ -334,6 +362,32 @@ mod tests {
         assert_eq!(value["time"], "2026-09-30T12:34:56.789Z");
         assert_eq!(value["level"], "INFO");
         assert_eq!(value["message"], "say \"hi\"\nnow");
+    }
+
+    #[test]
+    fn a_fields_only_event_shows_its_fields() {
+        let out = logged(false, LevelFilter::DEBUG, || {
+            tracing::debug!(summary = "select 1", rows = 1_u64);
+        });
+        assert_eq!(
+            out,
+            "2026-09-30T12:34:56.789Z DEBUG summary=select 1 rows=1\n"
+        );
+        let json = logged(true, LevelFilter::DEBUG, || {
+            tracing::debug!(summary = "select 1", rows = 1_u64);
+        });
+        assert!(
+            json.contains("\"message\":\"summary=select 1 rows=1\""),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_message_and_fields_show_both() {
+        let out = logged(false, LevelFilter::INFO, || {
+            tracing::info!(code = 7_u64, "hello");
+        });
+        assert_eq!(out, "2026-09-30T12:34:56.789Z INFO hello code=7\n");
     }
 
     #[test]

@@ -1,0 +1,5 @@
+pub fn connect() {}
+
+pub use crate::connect as open;
+
+fn main() {}

@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    let handle: Result<ext::Handle, Error> = ext::read("{\"id\": 1}");
+    println!("{}", handle.is_ok());
+}

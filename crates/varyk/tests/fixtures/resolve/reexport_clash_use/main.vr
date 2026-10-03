@@ -1,0 +1,7 @@
+pub mod a;
+pub mod b;
+
+use a::f;
+pub use b::f;
+
+fn main() {}

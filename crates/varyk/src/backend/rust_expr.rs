@@ -58,6 +58,9 @@ pub(super) enum Need {
     Mut { binding: bool },
     /// A `&str`.
     Str,
+    /// An `Option<&str>` from an `Option<string>`, through `.as_deref()`
+    /// (milestone 5b3 spec 2.2).
+    OptStr,
     /// Whatever form the value already has: a `println!` argument, or an
     /// expression statement's value, which is dropped.
     AsIs,
@@ -161,6 +164,12 @@ impl<'a> FnEmitter<'a> {
     /// `expr` as Rust code of the type `need` requires, at `indent` levels
     /// (for the inner lines of a multi-line `if` or block).
     pub(super) fn expr(&self, expr: &HirExpr, need: Need, indent: usize) -> String {
+        if need == Need::OptStr && is_block_like(expr) {
+            // Each branch lent, so that none is moved or is a `None` with
+            // no type to look through; the whole then looked through.
+            let lent = self.expr(expr, Need::Shared { binding: false }, indent);
+            return format!("({lent}).as_deref()");
+        }
         if self.borrows_new_value(expr, need) {
             // Borrowing inside each branch would borrow a temporary that
             // dies with the branch; borrow the whole value instead.
@@ -334,6 +343,8 @@ impl<'a> FnEmitter<'a> {
                 Have::Str => text,
                 _ => format!("{}.as_str()", postfix(expr, text)),
             },
+            // `as_deref` takes `&self`: a place is read, not moved.
+            Need::OptStr => format!("{}.as_deref()", postfix(expr, text)),
         }
     }
 
@@ -356,17 +367,21 @@ impl<'a> FnEmitter<'a> {
             HirExprKind::Call {
                 callee,
                 args,
+                trailing,
                 started: true,
                 ..
             } => {
-                let (path, modes) = self.callee(*callee);
+                let (path, modes) = self.callee(*callee, None);
                 let args: Vec<&HirExpr> = args.iter().collect();
-                self.started_call(&path, &args, &modes, indent)
+                let literal = self.literal(*callee);
+                let values = self.values(*callee, trailing, indent);
+                self.started_call(&path, &args, &modes, &literal, values, indent)
             }
             HirExprKind::MethodCall {
                 receiver,
                 method,
                 args,
+                trailing,
                 started: true,
                 ..
             } => {
@@ -375,12 +390,20 @@ impl<'a> FnEmitter<'a> {
                     MethodRef::Imported(id) => Callee::Imported(*id),
                     MethodRef::Builtin(id) => Callee::Builtin(*id),
                 };
-                let (path, modes) = self.callee(callee);
+                let (path, modes) = self.callee(callee, None);
                 let args: Vec<&HirExpr> = std::iter::once(&**receiver).chain(args).collect();
-                self.started_call(&path, &args, &modes, indent)
+                let literal = self.literal(callee);
+                let values = self.values(callee, trailing, indent);
+                self.started_call(&path, &args, &modes, &literal, values, indent)
             }
-            HirExprKind::Call { callee, args, .. } => {
-                let (mut path, modes) = self.callee(*callee);
+            HirExprKind::Call {
+                callee,
+                args,
+                trailing,
+                type_arg,
+                ..
+            } => {
+                let (mut path, modes) = self.callee(*callee, type_arg.as_ref());
                 // `json::parse` and `env::parse` name the type they read (M5a spec 7.5).
                 if let (Callee::Builtin(id), Ty::Result(read, _)) = (callee, &expr.ty) {
                     if matches!(id.get().owner, Owner::Json | Owner::Env) {
@@ -400,14 +423,28 @@ impl<'a> FnEmitter<'a> {
                         path = format!("::varyk_std::Task::{name}");
                     }
                 }
-                format!("{path}({})", self.args(args, &modes, indent))
+                let mut args = self.args(args, &modes, indent);
+                if let Some(values) = self.values(*callee, trailing, indent) {
+                    let comma = if args.is_empty() { "" } else { ", " };
+                    args = format!("{args}{comma}{values}");
+                }
+                format!("{path}({args})")
             }
             HirExprKind::MethodCall {
                 receiver,
                 method,
                 args,
+                trailing,
+                type_arg,
                 ..
-            } => self.method_call(receiver, *method, args, &expr.ty, indent),
+            } => self.method_call(
+                receiver,
+                *method,
+                (args, trailing),
+                type_arg.as_ref(),
+                &expr.ty,
+                indent,
+            ),
             HirExprKind::Field { .. } | HirExprKind::Index { .. } => {
                 self.place(expr, false, indent)
             }
@@ -764,6 +801,51 @@ impl<'a> FnEmitter<'a> {
         }
     }
 
+    /// Per argument of a call of `callee`, a method's receiver first:
+    /// whether its parameter takes only text written in the program
+    /// (milestone 5b3 spec 2.3). Empty for a callee with none.
+    fn literal(&self, callee: Callee) -> Vec<bool> {
+        let Callee::Imported(id) = callee else {
+            return Vec::new();
+        };
+        let sig = &self.program.imported[id.0 as usize];
+        let receiver = sig.self_mode.map(|_| false);
+        receiver
+            .into_iter()
+            .chain(sig.literal.iter().copied())
+            .collect()
+    }
+
+    /// The values of a call of `callee` passed after its other arguments,
+    /// when its last parameter is `Vec<varyk_std::Value>` (milestone 5b3
+    /// spec 2.2, 4): one `vec![..]` of `::varyk_std::Value::from(..)`,
+    /// which copies a string handed over as a `&str` (an `Option<string>`
+    /// through `.as_deref()`) and takes anything else by value. `None`
+    /// for any other callee.
+    fn values(&self, callee: Callee, trailing: &[HirExpr], indent: usize) -> Option<String> {
+        let Callee::Imported(id) = callee else {
+            return None;
+        };
+        if !self.program.imported[id.0 as usize].variadic {
+            return None;
+        }
+        let values: Vec<String> = trailing
+            .iter()
+            .map(|value| {
+                let need = match &value.ty {
+                    Ty::String => Need::Str,
+                    Ty::Option(inner) if **inner == Ty::String => Need::OptStr,
+                    _ => Need::Value,
+                };
+                format!(
+                    "::varyk_std::Value::from({})",
+                    self.expr(value, need, indent)
+                )
+            })
+            .collect();
+        Some(format!("vec![{}]", values.join(", ")))
+    }
+
     /// Call arguments, each as its parameter's mode requires.
     fn args(&self, args: &[HirExpr], modes: &[ParamMode], indent: usize) -> String {
         let args: Vec<String> = args
@@ -803,16 +885,18 @@ impl<'a> FnEmitter<'a> {
         &self,
         receiver: &HirExpr,
         method: MethodRef,
-        args: &[HirExpr],
+        (args, trailing): (&[HirExpr], &[HirExpr]),
+        type_arg: Option<&Ty>,
         ty: &Ty,
         indent: usize,
     ) -> String {
         let id = match method {
             MethodRef::Varyk(id) => {
-                return self.path_call(Callee::Varyk(id), receiver, args, indent);
+                return self.path_call(Callee::Varyk(id), receiver, (args, trailing), None, indent);
             }
             MethodRef::Imported(id) => {
-                return self.path_call(Callee::Imported(id), receiver, args, indent);
+                let callee = Callee::Imported(id);
+                return self.path_call(callee, receiver, (args, trailing), type_arg, indent);
             }
             MethodRef::Builtin(id) => id,
         };
@@ -917,23 +1001,23 @@ impl<'a> FnEmitter<'a> {
         }
     }
 
-    /// `Type::name(receiver, args)` for the method `callee`.
+    /// `Type::name(receiver, args)` for the method `callee`, its
+    /// `trailing` values last.
     fn path_call(
         &self,
         callee: Callee,
         receiver: &HirExpr,
-        args: &[HirExpr],
+        (args, trailing): (&[HirExpr], &[HirExpr]),
+        type_arg: Option<&Ty>,
         indent: usize,
     ) -> String {
-        let (path, modes) = self.callee(callee);
-        let receiver = self.args(std::slice::from_ref(receiver), &modes[..1], indent);
-        if args.is_empty() {
-            return format!("{path}({receiver})");
+        let (path, modes) = self.callee(callee, type_arg);
+        let mut all = vec![self.args(std::slice::from_ref(receiver), &modes[..1], indent)];
+        if !args.is_empty() {
+            all.push(self.args(args, &modes[1..], indent));
         }
-        format!(
-            "{path}({receiver}, {})",
-            self.args(args, &modes[1..], indent)
-        )
+        all.extend(self.values(callee, trailing, indent));
+        format!("{path}({})", all.join(", "))
     }
 
     /// The operands of `lhs op rhs` as written around `op`: those of
@@ -1048,27 +1132,46 @@ impl<'a> FnEmitter<'a> {
     /// evaluated in order into `varyk_N` by a `match`, as a direct call
     /// would evaluate it, before anything is bound; the task then owns
     /// them and passes each as its parameter takes it, by value to an
-    /// owned one and by reference otherwise.
+    /// owned one and by reference otherwise. An argument whose `literal`
+    /// flag is set is text written in the program, kept and passed as the
+    /// `&'static str` it is. `trailing`, the `vec![..]` of
+    /// [`FnEmitter::values`], is evaluated last and given by value.
     fn started_call(
         &self,
         path: &str,
         args: &[&HirExpr],
         modes: &[ParamMode],
+        literal: &[bool],
+        trailing: Option<String>,
         indent: usize,
     ) -> String {
-        let values: Vec<String> = args
+        let is_literal = |i: usize| literal.get(i) == Some(&true);
+        let mut values: Vec<String> = args
             .iter()
-            .map(|arg| format!("{},", self.expr(arg, Need::Value, indent)))
+            .enumerate()
+            .map(|(i, arg)| {
+                let need = if is_literal(i) {
+                    Need::Str
+                } else {
+                    Need::Value
+                };
+                format!("{},", self.expr(arg, need, indent))
+            })
             .collect();
-        let names: Vec<String> = (0..args.len()).map(|i| format!("varyk_{i},")).collect();
-        let passed: Vec<String> = modes
+        let mut passed: Vec<String> = modes
             .iter()
             .enumerate()
             .map(|(i, mode)| match mode {
                 ParamMode::Owned => format!("varyk_{i}"),
+                _ if is_literal(i) => format!("varyk_{i}"),
                 _ => format!("&varyk_{i}"),
             })
             .collect();
+        if let Some(trailing) = trailing {
+            values.push(format!("{trailing},"));
+            passed.push(format!("varyk_{}", args.len()));
+        }
+        let names: Vec<String> = (0..values.len()).map(|i| format!("varyk_{i},")).collect();
         format!(
             "match ({}) {{ ({}) => ::varyk_std::Task::start(async move {{ {path}({}).await }}) }}",
             values.join(" "),
@@ -1157,8 +1260,10 @@ impl<'a> FnEmitter<'a> {
         }
     }
 
-    /// The callee's path from the current module and its parameter modes.
-    fn callee(&self, callee: Callee) -> (String, Vec<ParamMode>) {
+    /// The callee's path from the current module and its parameter modes;
+    /// with `type_arg`, the type filled in for an imported function's type
+    /// parameter, after its name (milestone 5b3 spec 4).
+    fn callee(&self, callee: Callee, type_arg: Option<&Ty>) -> (String, Vec<ParamMode>) {
         match callee {
             Callee::Varyk(id) => {
                 let function = self.program.function(id);
@@ -1186,6 +1291,10 @@ impl<'a> FnEmitter<'a> {
                         let owner = rust_type(self.program, &owner.ty(), self.module);
                         format!("{owner}::{}", sig.name)
                     }
+                };
+                let path = match type_arg {
+                    Some(ty) => format!("{path}::<{}>", rust_type(self.program, ty, self.module)),
+                    None => path,
                 };
                 (path, sig.modes())
             }

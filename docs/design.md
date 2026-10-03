@@ -19,19 +19,22 @@ milestone 3's in
 [specs/2026-09-26-milestone-3-design.md](specs/2026-09-26-milestone-3-design.md),
 milestone 4's in
 [specs/2026-09-29-milestone-4-design.md](specs/2026-09-29-milestone-4-design.md),
-and milestone 5b2's (packages) in
-[specs/2026-10-02-milestone-5b2-design.md](specs/2026-10-02-milestone-5b2-design.md).
+milestone 5b2's (packages) in
+[specs/2026-10-02-milestone-5b2-design.md](specs/2026-10-02-milestone-5b2-design.md),
+and milestone 5b3's (facades for packages) in
+[specs/2026-10-03-milestone-5b3-design.md](specs/2026-10-03-milestone-5b3-design.md).
 
 ## Principles
 
 In priority order. When two conflict, the earlier one wins.
 
 1. **Rust's safety model, unchanged.** No garbage collector. No implicit
-   `Clone`. No implicit deep copy. The compiler inserts exactly one kind of
+   `Clone`. No implicit deep copy. The compiler inserts exactly two kinds of
    allocation: a string literal placed into an owned slot (a struct field, a
    return value, a variable that must own its string, or a Rust function
-   parameter of type `String`) is converted at that line, and `--emit-rust`
-   shows it. Aliasing rules are preserved. The generated Rust is checked by
+   parameter of type `String`) is converted at that line, and a string
+   passed as a trailing value of a facade (milestone 5b3) is copied into
+   the value it is handed over in; `--emit-rust` shows both. Aliasing rules are preserved. The generated Rust is checked by
    rustc, and Varyk never works around rustc with unsafe code.
 2. **The service developer first, human or agent.** Every tie-breaker on
    the surface language goes toward the developer building services who has
@@ -107,7 +110,7 @@ crate.
 ## Stability
 
 Varyk is experimental and pre-1.0: anything may change before 1.0; a
-breaking change bumps the minor version. Diagnostic codes are stable in one
+new feature or a breaking change bumps the minor version. Diagnostic codes are stable in one
 sense from the start: a code, once assigned, is never reused for a different
 meaning, though it may be retired. Command-line flags and the layout of the
 generated Rust have no stability guarantee before 1.0.
@@ -119,7 +122,7 @@ generated Rust have no stability guarantee before 1.0.
 | Name | Varyk | Lithuanian for "go!", the imperative of *varyti*; unclaimed on crates.io, npm, and PyPI at the time of writing, with no repository of that name on GitHub; does not contain "Rust" |
 | Extension | `.vr` | short, "var" mnemonic, unclaimed |
 | String type | `string`, lowercase, one type | newcomer first; owned versus borrowed is a compiler decision |
-| String allocation | only a literal placed into an owned slot converts, at that line | one predictable allocation, visible in `--emit-rust`; no hidden copies |
+| String allocation | only a literal placed into an owned slot converts, at that line; from 5b3, a string trailing value is also copied, by `Value::from`, as it is handed over | predictable allocations, visible in `--emit-rust`; no hidden copies |
 | Borrowed values | a value a function only borrows cannot be stored into a struct or returned, for now | the alternative is a hidden copy; lifetime inference comes later |
 | Assignment | Rust move semantics; `string` is never `Copy` | preserves Rust's model; diagnostics carry the burden |
 | Parameter passing | borrow by default, `mut` for mutable borrow | keeps Rust's ownership model while taking its bookkeeping out of everyday code |
@@ -209,3 +212,4 @@ generated Rust have no stability guarantee before 1.0.
 | Asking cargo for the graph (5b2) | in every command, when any dependency besides `varyk-std` is listed, on a manifest in its own directory | a program that passes `check` builds; the graph is the build's own |
 | JSON on another package's type (5b2) | refused, V0210; convert it in its own package | serde is derived where a type is declared |
 | A type from a package not depended on (5b2) | refused, V0115 | the generated Rust must be able to name it |
+| Facades for packages (5b3) | a `.rs` signature may take a type parameter filled from where the result goes, a last `Vec<varyk_std::Value>` written as trailing values, literal-only `&'static str` text, and `varyk_std::Error`; `Value` is scalars only, built by the compiler without serde; `varyk-sql` lives in its own repository | a package such as `varyk-sql` is Varyk with a thin layer of Rust, and its users write no Rust; with scalars no conversion can fail, so no failure is hidden as `Null` or turned into a crash; `varyk-sql`'s version follows sqlx and the databases as much as the compiler |

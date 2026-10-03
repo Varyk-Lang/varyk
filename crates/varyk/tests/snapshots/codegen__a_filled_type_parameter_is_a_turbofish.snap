@@ -1,0 +1,34 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct User {
+    name: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn load() -> Result<i64, ::varyk_std::Error> {
+    let db = crate::ext::Store::open();
+    let user = crate::ext::Store::one::<User>(&db, "{\"name\": \"Ada\"}").await?;
+    let users: Vec<User> = crate::ext::Store::all::<User>(&db, "[]")?;
+    let n = crate::ext::read::<i64>("7")?;
+    let maybe: Option<i64> = crate::ext::fetch::<i64>("null").await?;
+    ::std::println!("{} {} {}", user.name, users.len(), maybe.is_some());
+    Ok(n)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    ::varyk_std::run(async {
+        match load().await {
+            Ok(n) => ::std::println!("{}", n),
+            Err(e) => ::std::println!("{}", e.message()),
+        }
+    })
+}

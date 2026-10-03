@@ -1,0 +1,22 @@
+mod ext;
+
+struct User {
+    name: string,
+}
+
+async fn load() -> Result<i64, Error> {
+    let db = ext::Store::open();
+    let user: User = db.one("{\"name\": \"Ada\"}").await?;
+    let users: Vec<User> = db.all("[]")?;
+    let n: i64 = ext::read("7")?;
+    let maybe: Option<i64> = ext::fetch("null").await?;
+    println!("{} {} {}", user.name, users.len(), maybe.is_some());
+    Ok(n)
+}
+
+async fn main() {
+    match load().await {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{}", e.message()),
+    }
+}

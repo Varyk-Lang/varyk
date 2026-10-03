@@ -1,6 +1,6 @@
 # The Varyk language
 
-This page describes everything Varyk accepts today, in milestone 5b2 of an
+This page describes everything Varyk accepts today, in milestone 5b3 of an
 experimental, pre-1.0 language (see [roadmap.md](roadmap.md) for what comes
 next). Anything not described here is rejected with an error that names
 what is not supported. For the reasons behind the design, see
@@ -169,6 +169,29 @@ the name is both a function and a struct or enum (or a module) where it is
 declared, the `use` brings in all of them, so any of them can be the one
 that is already taken.
 
+`pub use path;` does what a `use` does and also re-exports the item: a
+function, struct, or enum of the same package then has a second name, in
+the module the `pub use` is in, beside its own path. A library's root can
+gather what its users need:
+
+```varyk
+// src/lib.vr of a package `shelf`
+pub mod store;
+
+pub use store::item;
+pub use store::Book;
+```
+
+A program that uses `shelf` writes `shelf::item(3)` and `shelf::Book`, and
+may still write `shelf::store::item(3)`. The item must be `pub`, and so
+must every module on its own path from the root (`pub mod store;` above),
+so the types it names stay visible to its users; otherwise it is an error.
+A name the module already declares or brings in with a `use` is taken, as
+for a `use`. A `pub use` of a module, of an item of another package, or
+with `as` is not supported yet. For Rust readers: the generated Rust has
+`pub use crate::store::item;` in the module, and every path through the
+re-export is written as the item's own path, `::shelf::store::item(3)`.
+
 An item or module declared without `pub` can be used in the module that
 declares it and in the modules inside that one, and nowhere else: a private
 function of `shop` works in `shop/cart.vr`, but not in the entry file or in
@@ -202,7 +225,7 @@ fn main() {
 
 A top-level item is a function (`fn`), a struct (`struct`), an enum
 (`enum`), an `impl` block, a module declaration (`mod name;`), or a `use`,
-each optionally preceded by `pub` (except `impl` and `use`). A struct's
+each optionally preceded by `pub` (except `impl`; `pub use` is below). A struct's
 fields follow the same visibility rule as everything else, each on its own
 (see "Types" below); all variants of a `pub enum` are public. Only the entry
 file of a program may define `main`.
@@ -1643,7 +1666,10 @@ a `let` with a written type, an argument, a return value, a field, and
 through `?`. The head of a `match` and the value a method is called on do
 not give it one, so a result looked at with `match` is put in a `let`
 first: `let r: Result<User, Error> = json::parse(body);`. With no type to
-take it is V0207, which shows `let u: User = json::parse(..)?;`.
+take it is V0207, which shows `let u: User = json::parse(..)?;`. A `.rs`
+function that reads its result the same way, with a type parameter
+`T: serde::de::DeserializeOwned`, takes `T` by these rules too (see
+"Calling Rust").
 
 How values map:
 
@@ -1773,7 +1799,7 @@ There is one string type, `string`. Behind it, the compiler picks either a
 borrowed `&str` or an owned `String` for each name, and `--emit-rust` shows
 which.
 
-The one allocation rule: a string literal that is placed into a struct
+The allocation rules: a string literal that is placed into a struct
 field, an enum value, `Some`, `Ok`, `Err`, a `vec!`, or a `Vec` element,
 passed to `push`, returned from a function, put into a name that must own
 its text (such as a name that is later stored in a struct field), passed to
@@ -1789,11 +1815,13 @@ item a `map` gives as part of something. `split` itself copies nothing:
 each piece is part of the text it is called on. `clone` is the one copy you write
 yourself,
 and in the generated Rust it is `.clone()`, or `.to_string()` when `s` is a
-`&str`. Passing a name to a Varyk function never copies it. Nothing else
-copies a string's text behind your back. A string that is already owned
-moves instead, with no copy.
+`&str`. Passing a name to a Varyk function never copies it. The second
+copy the compiler makes is a string passed as a trailing value to a Rust
+facade function: `Value::from` copies its text as it hands the value over.
+Nothing else copies a string's text behind your back. A string that is
+already owned moves instead, with no copy.
 
-## Not in milestone 5b2
+## Not in milestone 5b3
 
 These do not exist yet; where one can be written, it is an error that names
 what is not supported. They are left out because no program has needed
@@ -1817,7 +1845,7 @@ elision would not settle; and `Debug` with `{:?}`.
 Also not yet, from the Rust side and the package side: modules declared
 inside a `.rs` file; importing Rust tuple and unit structs; a `.rs`
 signature naming a type declared in Varyk; `pub(crate)` and `pub(super)`; `use` with braces or globs;
-re-exports (`pub use`) in either direction; settings taken from a Cargo
+a `pub use` in a `.rs` file; settings taken from a Cargo
 workspace; custom target paths; reading `[features]`; sharing cargo's
 `target/` between `varyk build` and `cargo build`; `varyk init` into an
 existing project; and a `varyk` command for `cargo doc`.
@@ -1828,9 +1856,18 @@ custom formats in JSON; structured log fields (`log::info("x", id = 1)`),
 log targets, and spans; `.env` variable expansion and several `.env`
 files; a kind or a cause on `Error`, and automatic conversion into `Error`
 from other error types at `?`; attributes on structs, methods, and
-variants with data; `#[default]` on an `Option`, enum, or struct field;
-`varyk_std::Error` in a `.rs` signature; and HTTP and the database, which
-are to come as packages (milestones 5b3 and 5b4).
+variants with data; `#[default]` on an `Option`, enum, or struct field; and HTTP, which is to
+come as a package in milestone 5b4, as the database comes as `varyk-sql`.
+
+Also not yet, from facades (see [A facade for a package](#a-facade-for-a-package)):
+a type parameter in a parameter (`&T: Serialize`, planned for 5b4), two
+type parameters, a `where` clause, or another bound; a `u64`, a struct, a
+`Vec`, or a map as a trailing value; `varyk_std::Error`
+anywhere but as the error of a returned `Result`; a Varyk function with a
+literal-only parameter or one taking any number of values; naming
+`varyk_std::Value` from Varyk code; `pub use` of a module, with braces,
+globs, or `as`, or of an item of another package; and several shorthands in
+one `varyk add`.
 
 Also not yet, from async code: `race` and `any`; timeouts; channels;
 changing a value shared between tasks (a `Mutex`); a task anywhere but where
@@ -1916,20 +1953,30 @@ the return type is one of these:
 | `bool`, `i8` to `i64`, `u8` to `u64`, `usize`, `f32`, `f64` | the same type, passed by value |
 | `&str` | a borrowed `string` |
 | `&mut String` | a `mut string` |
+| `&'static str` parameter | a `string` that takes only text written in the program: a string literal, escapes included, and nothing else (V0217), so no input can reach it |
+| `Vec<varyk_std::Value>` as the last parameter, written by that full path | any number of values after the other arguments, none included: each a `bool`, `string`, `f32`, `f64`, `i8` to `i64`, `u8` to `u32`, or an `Option` of one of those (V0218; write `n as i64` for a `u64` or `usize`, and give a `None` a type with `let` first). Each is read, not given away, so a name passed stays usable; a string is copied into the value, the one copy besides a literal placed into an owned slot. A program needs `varyk-std` when its own `.rs` module has such a function, called or not, and when it calls one of a dependency package |
 | `String` parameter | an owned `string`: a literal is copied, an owned string moves |
 | `String` return | `string` |
 | `&str` or `&S` return, where lifetime elision names the parameter it borrows from (below) | a borrowed return of that argument: `string`, or the struct or enum |
 | `S`, a struct or enum imported from a `.rs` file of the package (below) | that struct or enum, given away (moved) |
 | `Vec<T>`, `Option<T>`, `Result<T, E>` where `T` and `E` are in this table | the same Varyk type, given away (moved) |
+| `Result<T, varyk_std::Error>` return, written by that full path, where `T` is in this table | `Result<T, Error>`: `?` opens it in a function returning `Result<_, Error>`, and `match` reads `e.message()`; a program needs `varyk-std` when its own `.rs` module has such a function, called or not, and when it calls one of a dependency package |
+| `Result<T, varyk_std::Error>`, `Result<Option<T>, varyk_std::Error>`, or `Result<Vec<T>, varyk_std::Error>` return of a `pub fn` or method with one type parameter `T: serde::de::DeserializeOwned` (or `varyk_std::serde::de::DeserializeOwned`, which needs no `serde` dependency), written inline by that full path, and `T` nowhere else | `T` is the type the result is used as, found as for `json::parse`: a `let` with a written type, an argument, a return value, or a field, through `?` and `.await`; with none, or for a started call (no `.await`), it is V0207. `T` is any type `json::parse` reads, with the same attribute checks (V0209), and a Rust type from a `.rs` module or a type of another package is V0210. The generated Rust writes `T` after the name, as in `crate::db::Store::one::<User>(&db, ..)`. The result is a new value the caller owns; a program needs `varyk-std` for such a function as for `varyk_std::Error` |
 | `&T` or `&mut T` where `T` is one of the value types above but `String` | borrowed, or `mut` |
 | `()` return, or none | nothing |
 
 Any other signature cannot be called: `&String` (take `&str` instead),
-generics, lifetimes, trait objects, `HashMap` and other `std` types,
+generics other than the type parameter just above (two of them, a `where`
+clause, another bound, a lifetime parameter, or `T` in a parameter or
+elsewhere in the return; the note says which), lifetimes (`&'static str`
+anywhere but a parameter included), trait objects, `HashMap` and other `std` types,
+`varyk_std::Value` anywhere but in a last `Vec<varyk_std::Value>` parameter,
 references in the return type other than the ones just above (return an
 owned value such as `String`),
 `()` inside another type (`Result<(), String>`; use `bool` or a struct
-instead), and unknown types. Calling such a function is an error that shows its Rust
+instead), `varyk_std::Error` anywhere but as the error of the returned
+`Result` (or as a bare `Error` a `use` brings in: write the full path),
+and unknown types. Calling such a function is an error that shows its Rust
 signature and what to change. `unsafe fn`, `const fn`, trait
 methods, names a `pub use` brings in, and functions, methods, structs, and
 enums marked `pub(crate)`, `pub(super)`, `pub(self)`, or `pub(in ..)` are
@@ -2163,6 +2210,89 @@ only there (V0108 elsewhere), and a variant holding one makes its enum
 opaque. The message
 names the module and says which `pub mod` fixes it.
 
+### A facade for a package
+
+The shapes of the table above that name `varyk_std::` are there so a
+package can offer, in Varyk terms, "read the result into whatever type you
+name" and "take these values, however many", and so a program using it
+writes no Rust. A facade shaped like the database package `varyk-sql`'s,
+with a map in memory in place of a database:
+
+```rust
+// src/kv.rs of a package `store`, with `serde_json` and `varyk-std` in
+// its [dependencies]
+pub struct Store {
+    entries: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+pub fn open() -> Store {
+    Store { entries: std::collections::BTreeMap::new() }
+}
+
+impl Store {
+    pub fn put(
+        &mut self,
+        key: &'static str,
+        values: Vec<varyk_std::Value>,
+    ) -> Result<u64, varyk_std::Error> {
+        // turns `values` into JSON and stores it under `key`
+    }
+
+    pub fn one<T: varyk_std::serde::de::DeserializeOwned>(
+        &self,
+        key: &'static str,
+        values: Vec<varyk_std::Value>,
+    ) -> Result<T, varyk_std::Error> {
+        // reads the JSON under `key` with `serde_json::from_value`
+    }
+}
+```
+
+```varyk
+// src/lib.vr of `store`
+pub mod kv;
+
+pub use kv::open;
+pub use kv::Store;
+```
+
+```varyk
+// in a program with `store = { path = "../store" }` and `varyk-std` in
+// its [dependencies]
+struct User {
+    id: i64,
+    name: string,
+}
+
+fn add_ada() -> Result<User, Error> {
+    let mut db = store::open();
+    let name = "Ada";
+    db.put("user/1", 1, name)?;
+    db.one("user/1")
+}
+```
+
+`add_ada` stores `[1, "Ada"]` and reads it back as a `User`. Each shape
+does one thing:
+
+- `key: &'static str` takes only text written in the program (V0217), so
+  in `varyk-sql` no input can become part of a query;
+- `values: Vec<varyk_std::Value>`, last, is written as the arguments after
+  the others, `1, name` here, each read and not given away (V0218 for a
+  type that cannot be passed);
+- `T: varyk_std::serde::de::DeserializeOwned` is filled from where the
+  result goes, `User` from the return type here, so the facade reads into a struct it
+  has never seen (V0207 when nothing says the type);
+- `varyk_std::Error` is Varyk's own `Error`, so `?` and `e.message()` work.
+
+The `pub use` lines (see [Files and modules](#files-and-modules)) give the
+program the short names `store::open` and `store::Store`. The real
+`varyk-sql` has the same shapes on its `Pool` and `Tx`, async, and is
+added with `varyk add sql` (see [`varyk add` and
+upgrading](#varyk-add-and-upgrading)); its README says what it offers.
+For Rust readers: the call is written
+`::store::kv::Store::one::<User>(&db, "user/1", vec![])`.
+
 ## Packages
 
 A Varyk package can use another Varyk package, and so can that package, to
@@ -2184,7 +2314,7 @@ There is no new syntax. The one new kind of name is the name of a package.
 
 A package is named by its key in `[dependencies]`, with each `-` read as
 `_` (the name the Rust crate has). `route-planner = "1"` is
-`route_planner::`, and `sql = { package = "varyk-sql", version = "0.5" }`
+`route_planner::`, and `sql = { package = "varyk-sql", version = "0.1" }`
 is `sql::`. You choose the key, and two packages cannot share one.
 
 The first name of a path, in an expression, a type, a pattern, or a `use`,
@@ -2366,8 +2496,7 @@ through: `::u::length::Meters` when you list `u = { package = "units" }`.
 
 ### Not yet
 
-Re-exports (`pub use`), so a package's path is the path of its modules;
-shorthands in `varyk add` (`varyk add sql`); a Varyk package under
+Several shorthands in one `varyk add`; a Varyk package under
 `[dev-dependencies]`, marked `optional`, or reached through a Rust crate;
 reading a package's `[features]`; skipping the compile of a package you
 trust; a summary file so `check` need not read a package's sources; rustc
@@ -2384,6 +2513,7 @@ varyk run [file.vr] [--release] [-- args...]     build, then run with the given 
 varyk test [file.vr]                             build the tests and run them
 varyk init [dir] [--lib]                         write a new package
 varyk add [cargo add args]                       run cargo add in the package
+varyk add sql [cargo add args]                   add the official database package as `sql`
 varyk publish [--assemble-only] [-- cargo args]  check, assemble a plain Rust crate, and run
                                                   cargo publish there
 ```
@@ -2483,6 +2613,15 @@ package it says "no Varyk package here". Cargo reads the package's
 `Cargo.toml`, which names the `.vr` root, so `varyk add --path ../lib` works
 in any package `varyk init` made.
 
+`varyk add sql` adds the official database package: it runs `cargo add
+varyk-sql --rename sql`, so code writes `sql::connect`, and any later
+arguments go to cargo as written (`varyk add sql --features postgres`). Only
+one shorthand per call: `varyk add sql sql` is refused with "add one
+official package per `varyk add` call". A call whose first argument is not a
+shorthand is passed through unchanged, so `varyk add varyk-sql --rename sql`
+still works. The package lives in its own repository, and its README says
+what it offers.
+
 A program that uses `varyk-std` (it names `Error`, calls one of its
 features, such as `json`, `log`, `time::sleep`, or `Task::all`, starts a call, or has an
 async `main` or an async test; `Shared` alone, which is std's `Arc`, does
@@ -2537,7 +2676,7 @@ Every error has a code. A code is never reused for a different meaning.
 
 | Code | Meaning |
 |---|---|
-| V0001 | a construct Varyk does not support yet; the message names it. Also an `if`, a block, or a field or element of a value made right there as the value a `match`, `if let`, or `while let` looks at or a `for` goes over, and a pattern taking a struct apart; a `for` over a `HashMap` (use `keys()` or `values()`); a `get` looked into on a value made right there (store it with `let` first), and so the value `trim` is called on, or the argument a function returns part of, made right there; a field of a call as such a head; a closure anywhere but as the argument of a call that takes one (the message names those calls), a type on a closure's parameter or `move`, and `return`, `break`, `continue`, or `?` inside a closure; `iter()`, `split()`, `keys()`, or `values()` on a value made right there (store it with `let` first) |
+| V0001 | a construct Varyk does not support yet; the message names it. Also an `if`, a block, or a field or element of a value made right there as the value a `match`, `if let`, or `while let` looks at or a `for` goes over, and a pattern taking a struct apart; a `for` over a `HashMap` (use `keys()` or `values()`); a `get` looked into on a value made right there (store it with `let` first), and so the value `trim` is called on, or the argument a function returns part of, made right there; a field of a call as such a head; a closure anywhere but as the argument of a call that takes one (the message names those calls), a type on a closure's parameter or `move`, and `return`, `break`, `continue`, or `?` inside a closure; `iter()`, `split()`, `keys()`, or `values()` on a value made right there (store it with `let` first); a `pub use` of a module, of an item of another package, or with `as` |
 | V0002 | unexpected token or malformed syntax |
 | V0003 | a bad escape in a string, or a string with no closing `"` |
 | V0010 | `&x` or `&mut x` written at a call; Varyk works out references itself |
@@ -2546,9 +2685,9 @@ Every error has a code. A code is never reused for a different meaning.
 | V0100 | unknown name, or a variant, method, or associated function the type does not have; for `Vec`, `string`, `Option`, `Result`, `HashMap`, and a chain the message lists their calls; for an imported struct, a note says when the `.rs` file has the method but Varyk does not import it (a trait method, `unsafe`, `const`, behind `#[cfg]`, or `pub(crate)` or another `pub(..)`), and likewise for a function or `pub use` name of a `.rs` module and for any method of an imported enum, which Varyk does not import yet; a path into an inline `mod` of a `.rs` file, whose items Varyk does not read, says so; also naming a variant of an opaque imported enum, saying why it is opaque; `.clone()` on a number or `bool`, which is copied on use |
 | V0101 | unknown type, or `Option`, `Result`, `Vec`, or `HashMap` with the wrong number of types, a `HashMap` key type that is not an integer type, `bool`, or `string`, or a Rust struct or enum Varyk does not import (a tuple or unit struct, one with type or lifetime parameters, a `#[repr(packed)]` struct or one with no fixed size, one behind `#[cfg]`, or one marked `pub(crate)` or another `pub(..)`), or a type a `pub use` of the `.rs` file brings in, saying why |
 | V0102 | unknown field, of a struct or of a variant with named fields, in a value or a pattern |
-| V0103 | a name defined more than once (a method included, a field of a variant, a field named twice in a value or a pattern, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
+| V0103 | a name defined more than once (a method included, a `use` or `pub use` name the module already declares or brings in, a field of a variant, a field named twice in a value or a pattern, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
 | V0104 | a module file that is missing, present as both `.vr` and `.rs` (in a Varyk package this build uses, the `.vr` is loaded and the `.rs` ignored instead) or as both `shop.vr` and `shop/mod.vr`, unreadable, a `.rs` file that cannot be parsed as Rust, or named `main` or `lib` (or `bin` in the entry file), in any capitalization; a `.rs` file that uses a crate not in `[dependencies]` (or only in `[dev-dependencies]`, or any crate in a single file) in a `use` or `extern crate` item (a crate named only in a path, `other::f()`, is rustc's to report, at build), declares a module of its own, or uses `include!`, shown at that line of the `.rs` file |
-| V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see (in a library, the packages that use it included: a `pub` item in `pub` modules, or a `pub` function, method, or field of a `.rs` module they can reach, naming a type in a private module); a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub` |
+| V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see (in a library, the packages that use it included: a `pub` item in `pub` modules, or a `pub` function, method, or field of a `.rs` module they can reach, naming a type in a private module); a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub`; a `pub use` of an item without `pub`, or of one in a module that is not `pub` all the way from the root |
 | V0106 | a missing or malformed `fn main()`, `main` defined in a library's `src/lib.vr`, or a call to an async `main` |
 | V0107 | `String` or `str` written where `string` is meant |
 | V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change. Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path, and a type in a `.rs` file with a glob `use` or a macro that could define names |
@@ -2566,16 +2705,18 @@ Every error has a code. A code is never reused for a different meaning.
 | V0204 | a `match` that does not handle every value: a variant at any depth, a `bool` value, or, on a number or a string, the catch-all it always needs; the message names a value shape it misses |
 | V0205 | a pattern that does not fit the value: a variant of another type, the wrong number of positions in a variant, a variant pattern leaving out a named field, a literal or range of another type or not fitting it, a range whose ends are reversed, a float literal, or a string literal inside another pattern; an arm that can never run, such as one after `_` or a name; or a `match`, `if let`, or `while let` on something that is not an enum, `Option`, `Result`, number, `bool`, or string |
 | V0206 | `?` in a function that does not return a `Result` or an `Option`, on a `Result` in a function returning an `Option` or the reverse, or on a value that is not a `Result` with the function's error type |
-| V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, `parse()`, `json::parse(..)`, or `env::parse()` whose type cannot be worked out where it is written, `Err(e)?;`, `text.parse().ok()`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
+| V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, `parse()`, `json::parse(..)`, `env::parse()`, or a call of a `.rs` function whose result type has a `DeserializeOwned` type parameter whose type cannot be worked out where it is written (a started call of one included), `Err(e)?;`, `text.parse().ok()`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
 | V0208 | a value that must be used where it is made: an `Option` from `get`, or from `find` on a chain of borrowed items, holding part of a stored value, stored in a `let`, passed, returned, used with `?`, given any method, or named whole by a pattern (look inside it with `match` or `if let`); an unfinished chain anywhere but as the value the next call of the chain is made on or the head of a `for` (finish the chain there) |
 | V0209 | a `#[rename]` value that is not a string in quotes, or is empty; a `#[default]` value that does not fit its field's type (`"x"` on an `i32`, `300` on a `u8`, `1` on an `f64`); `#[default]` on an `Option` field or on a field that is not a number, `string`, or `bool`; on a type a `json` call reaches, a skipped field with no `#[default]` that is not an `Option` when the type is read, or two fields that are not skipped, or two variants, with the same key once renamed, and, on a type `env::parse` reaches, two fields whose upper-cased keys are the same variable |
-| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, a type declared in another Varyk package (convert it in that package), a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
+| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call or a call of a `.rs` function with a `DeserializeOwned` type parameter, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, a type declared in another Varyk package (convert it in that package), a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
 | V0211 | a call to an async function, or `.await`, in a function that is not `async`; `.await` inside a closure |
 | V0212 | `.await` after something that is not a call to an async function, `Task::all`, `Task::all_settled`, or a name holding a task; `Task::all` or `Task::all_settled` without `.await` |
 | V0213 | a started call anywhere but a `let` with a name, the value `.detach()` is called on, a `vec!` element, or the value of a collected `map`'s closure, `let _ =` included; a name holding a task, or a `Vec` of tasks, that nothing awaits, detaches, or gives to `Task::all` or `Task::all_settled`: its task would be thrown away |
 | V0214 | async functions that call each other in a cycle, or an async function that calls itself, whether the calls are awaited or started; the message names the cycle |
 | V0215 | a name holding a task used other than by `.await` or `.detach()`, or a `Vec` of tasks used other than by `Task::all` or `Task::all_settled` (indexed, given `push`, looped over, passed, returned, given to another name, or followed by `.await`); `Task` written as a type |
 | V0216 | `Shared` of anything but a struct, at `Shared::new` or written, or `Shared` written anywhere but a parameter's or a `let`'s type (a field, a return type, or inside another type) |
+| V0217 | an argument to a `.rs` parameter of type `&'static str`, which takes only text written in the program, that is not a string literal (a name, a parameter, or a `format!`; pass the values after the text instead) |
+| V0218 | a value passed after the other arguments to a `.rs` function whose last parameter is `Vec<varyk_std::Value>`, of a type that cannot be one: anything but `bool`, `string`, `f32`, `f64`, `i8` to `i64`, `u8` to `u32`, or an `Option` of one of those (a struct, a `Vec`, a `HashMap`, a `u64`, or a `usize`, for which the help writes `as i64`) |
 | V0300 | changing a parameter that was declared without `mut`, by assigning to it or calling `push` or `pop` on it |
 | V0301 | changing a `let` name that was declared without `mut`, or a name a `match` pattern or a `for` made, by assigning to it or calling `push` or `pop` on it; also changing, inside a closure, a name from outside it or the closure's parameter |
 | V0302 | a `let` name without `mut` passed to a `mut` parameter or used to call a `mut self` method |

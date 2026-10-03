@@ -213,6 +213,14 @@ fn started_modes(started: bool, modes: Vec<ParamMode>, keeps: bool) -> (Vec<Para
     }
 }
 
+/// `modes` followed by a shared borrow for each of `trailing`: a value
+/// passed after the other arguments is read, never moved, whether the
+/// call is started or not (milestone 5b3 spec 2.2, 3).
+fn with_trailing(mut modes: Vec<ParamMode>, trailing: &[HirExpr]) -> Vec<ParamMode> {
+    modes.extend(trailing.iter().map(|_| ParamMode::SharedBorrow));
+    modes
+}
+
 impl Context<'_> {
     /// The callee's name, its parameter modes, and whether it is imported.
     fn callee(&self, callee: Callee) -> (String, Vec<ParamMode>, bool) {
@@ -1077,18 +1085,21 @@ impl FnAnalyzer<'_> {
             HirExprKind::Call {
                 callee,
                 args,
+                trailing,
                 started,
                 ..
             } => {
-                for arg in args {
+                for arg in args.iter().chain(trailing) {
                     self.expr(arg);
                 }
                 let (name, modes, keeps) = self.cx.callee(*callee);
-                let args: Vec<&HirExpr> = args.iter().collect();
                 if *started {
-                    return self.started_call(&name, &modes, &args);
+                    let args: Vec<&HirExpr> = args.iter().collect();
+                    self.started_call(&name, &modes, &args);
+                    return self.trailing_values(&name, trailing);
                 }
-                self.call(&name, &modes, keeps, &args, None);
+                let args: Vec<&HirExpr> = args.iter().chain(trailing).collect();
+                self.call(&name, &with_trailing(modes, trailing), keeps, &args, None);
                 self.rooted_argument_stored(expr);
             }
             HirExprKind::MethodCall { .. } => self.method_value(expr, None),
@@ -1229,6 +1240,7 @@ impl FnAnalyzer<'_> {
             receiver,
             method,
             args,
+            trailing,
             ..
         } = &call.kind
         else {
@@ -1254,6 +1266,9 @@ impl FnAnalyzer<'_> {
                 mapped = Some(class);
             }
         }
+        for value in trailing {
+            self.expr(value);
+        }
         let values: Vec<&HirExpr> = std::iter::once(&**receiver).chain(args).collect();
         // A `mut self` method of the struct a `Shared` holds would change
         // it (milestone 5b1 spec 2.6).
@@ -1264,8 +1279,11 @@ impl FnAnalyzer<'_> {
             return;
         }
         if let HirExprKind::MethodCall { started: true, .. } = call.kind {
-            return self.started_call(&name, &modes, &values);
+            self.started_call(&name, &modes, &values);
+            return self.trailing_values(&name, trailing);
         }
+        let values: Vec<&HirExpr> = values.into_iter().chain(trailing).collect();
+        let modes = with_trailing(modes, trailing);
         self.call(&name, &modes, keeps, &values, Some(*method));
         if let Some(entry) = chain {
             self.chain_call(call, receiver, entry, incoming, mapped);
@@ -1712,6 +1730,15 @@ impl FnAnalyzer<'_> {
         }
     }
 
+    /// The values passed after the other arguments of a started call of
+    /// `name`: read before the task starts, as the arguments of a call
+    /// that is not started are (milestone 5b3 spec 2.2).
+    fn trailing_values(&mut self, name: &str, trailing: &[HirExpr]) {
+        let values: Vec<&HirExpr> = trailing.iter().collect();
+        let modes = with_trailing(Vec::new(), trailing);
+        self.call(name, &modes, false, &values, None);
+    }
+
     /// A started call of `name`, whose parameters take `args` by `modes`
     /// (milestone 5b1 spec 3): the task keeps every argument, a method's
     /// receiver first, so each is an owned slot (V0304), and none may go
@@ -1858,24 +1885,29 @@ impl FnAnalyzer<'_> {
             HirExprKind::Call {
                 callee,
                 args,
+                trailing,
                 started,
                 ..
             } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
                 let (modes, keeps) = started_modes(*started, modes, keeps);
-                self.call_uses(args.iter(), &modes, keeps, out);
+                let modes = with_trailing(modes, trailing);
+                self.call_uses(args.iter().chain(trailing), &modes, keeps, out);
             }
             // The receiver of a changing method is changed (spec 2.5).
             HirExprKind::MethodCall {
                 receiver,
                 method,
                 args,
+                trailing,
                 started,
                 ..
             } => {
                 let (_, modes, keeps) = self.cx.method(*method);
                 let (modes, keeps) = started_modes(*started, modes, keeps);
-                self.call_uses(std::iter::once(&**receiver).chain(args), &modes, keeps, out);
+                let modes = with_trailing(modes, trailing);
+                let args = std::iter::once(&**receiver).chain(args).chain(trailing);
+                self.call_uses(args, &modes, keeps, out);
             }
             HirExprKind::StructLit { fields, .. } => {
                 for (_, value) in fields {

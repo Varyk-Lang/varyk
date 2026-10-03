@@ -1,0 +1,7 @@
+pub fn run() {
+    show(crate::connect(3));
+}
+
+fn show(pool: crate::Pool) {
+    println!("{}", pool.size);
+}

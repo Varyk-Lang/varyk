@@ -1,0 +1,28 @@
+mod ext;
+
+struct Account {
+    name: string,
+    #[skip]
+    secret: string,
+}
+
+async fn load(db: ext::Store) -> Result<i64, Error> {
+    let untyped = db.one("1").await?;
+    match db.first("2").await? {
+        Some(n) => println!("{}", n),
+        None => println!("none"),
+    }
+    let task = ext::fetch("3");
+    let wrong: i64 = db.first("4").await?;
+    let handle: ext::Handle = ext::read("5")?;
+    let account: Account = db.one("6").await?;
+    Ok(1)
+}
+
+async fn main() {
+    let db = ext::Store::open();
+    match load(db).await {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{}", e.message()),
+    }
+}

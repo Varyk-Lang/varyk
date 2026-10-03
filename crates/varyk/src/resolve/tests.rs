@@ -1524,6 +1524,159 @@ fn usize_imports_and_resolves() {
     assert_eq!(sig.ret, usize);
 }
 
+// --- `varyk_std::Error` in a signature (milestone 5b3 spec 2.4) -------
+
+/// The one function of `.rs` text `text`, mapped in a package whose only
+/// dependency is `varyk-std`.
+fn mapped(text: &str) -> ImportedSig {
+    let crates = ["varyk-std".to_string()];
+    let imported = crate::interop::import_rust_module_in(text, Some(&crates)).expect("parses");
+    let symbols = Symbols::default();
+    signatures::Mapper::new(&symbols, ModuleId(1))
+        .sig(None, imported.fns.into_iter().next().expect("one fn"))
+}
+
+#[test]
+fn a_result_with_varyk_std_error_is_a_result_of_error() {
+    let sig = mapped("pub fn load(id: i64) -> Result<i64, varyk_std::Error> { Ok(id) }");
+    assert!(sig.callable, "{:?}", sig.note);
+    assert_eq!(
+        sig.ret,
+        Ty::Result(Box::new(Ty::Int(IntKind::I64)), Box::new(Ty::Error))
+    );
+    assert!(sig.names_std);
+    let sig = mapped("pub fn all() -> Result<Vec<String>, varyk_std::Error> { Ok(Vec::new()) }");
+    assert!(sig.callable, "{:?}", sig.note);
+    assert_eq!(
+        sig.ret,
+        Ty::Result(Box::new(Ty::Vec(Box::new(Ty::String))), Box::new(Ty::Error))
+    );
+    assert!(sig.names_std);
+}
+
+#[test]
+fn a_signature_without_varyk_std_does_not_name_it() {
+    let sig = mapped("pub fn load(id: i64) -> Result<i64, String> { Ok(id) }");
+    assert!(sig.callable);
+    assert!(!sig.names_std);
+}
+
+#[test]
+fn varyk_std_error_anywhere_else_is_not_callable_and_says_where_it_can_be() {
+    for text in [
+        "pub fn f(e: varyk_std::Error) -> bool { true }",
+        "pub fn f(e: &varyk_std::Error) -> bool { true }",
+        "pub fn f(e: Option<varyk_std::Error>) -> bool { true }",
+        "pub fn f() -> varyk_std::Error { todo!() }",
+        "pub fn f() -> Option<varyk_std::Error> { None }",
+        "pub fn f() -> Result<varyk_std::Error, String> { todo!() }",
+        "pub fn f() -> Result<i64, Vec<varyk_std::Error>> { Ok(1) }",
+        "pub fn f(r: Result<i64, varyk_std::Error>) -> bool { true }",
+        "pub fn f() -> Option<Result<i64, varyk_std::Error>> { None }",
+        "pub fn f() -> Result<Result<i64, varyk_std::Error>, String> { Ok(Ok(1)) }",
+    ] {
+        let sig = mapped(text);
+        assert!(!sig.callable, "{text}");
+        let note = sig.note.unwrap_or_default();
+        assert!(
+            note.contains("`varyk_std::Error` can only be the error of a returned `Result`"),
+            "{text}: {note}"
+        );
+    }
+}
+
+#[test]
+fn a_static_str_parameter_takes_only_literal_text() {
+    let sig = mapped("pub fn one(query: &'static str, id: i64) -> i64 { id }");
+    assert!(sig.callable, "{:?}", sig.note);
+    assert_eq!(
+        sig.params,
+        vec![
+            (Ty::String, ParamMode::SharedBorrow),
+            (Ty::Int(IntKind::I64), ParamMode::Owned)
+        ]
+    );
+    assert_eq!(sig.literal, vec![true, false]);
+    assert!(!sig.names_std);
+    let sig = mapped("pub fn show(text: &str) {}");
+    assert_eq!(sig.literal, vec![false]);
+}
+
+#[test]
+fn a_static_str_anywhere_else_is_not_callable_and_says_where_it_can_be() {
+    for text in [
+        "pub fn f() -> &'static str { \"\" }",
+        "pub fn f() -> Option<&'static str> { None }",
+        "pub fn f(q: Option<&'static str>) {}",
+        "pub fn f(q: Vec<&'static str>) {}",
+    ] {
+        let sig = mapped(text);
+        assert!(!sig.callable, "{text}");
+        assert!(sig.literal.is_empty(), "{text}");
+        let note = sig.note.unwrap_or_default();
+        assert!(
+            note.contains("`&'static str` can only be a parameter"),
+            "{text}: {note}"
+        );
+    }
+}
+
+#[test]
+fn a_last_vec_of_values_makes_the_signature_variadic() {
+    let sig = mapped("pub fn run(query: &'static str, values: Vec<varyk_std::Value>) -> i64 { 1 }");
+    assert!(sig.callable, "{:?}", sig.note);
+    assert!(sig.variadic);
+    assert_eq!(sig.params, vec![(Ty::String, ParamMode::SharedBorrow)]);
+    assert_eq!(sig.literal, vec![true]);
+    assert!(sig.names_std);
+    let sig = mapped("pub fn run(values: Vec<varyk_std::Value>) {}");
+    assert!(sig.callable, "{:?}", sig.note);
+    assert!(sig.variadic);
+    assert!(sig.params.is_empty());
+    let sig = mapped("pub fn run(id: i64) {}");
+    assert!(!sig.variadic);
+    assert!(!sig.names_std);
+}
+
+#[test]
+fn values_anywhere_else_is_not_callable_and_says_where_they_can_be() {
+    for text in [
+        "pub fn f(values: Vec<varyk_std::Value>, id: i64) {}",
+        "pub fn f(value: varyk_std::Value) {}",
+        "pub fn f(value: &varyk_std::Value) {}",
+        "pub fn f(value: Option<varyk_std::Value>) {}",
+        "pub fn f() -> Vec<varyk_std::Value> { Vec::new() }",
+        "pub fn f() -> varyk_std::Value { todo!() }",
+    ] {
+        let sig = mapped(text);
+        assert!(!sig.callable, "{text}");
+        assert!(!sig.variadic, "{text}");
+        // Uncallable, but the module still needs `varyk-std` to compile.
+        assert!(sig.names_std, "{text}");
+        let note = sig.note.unwrap_or_default();
+        assert!(
+            note.contains("`Vec<varyk_std::Value>` can only be the last parameter"),
+            "{text}: {note}"
+        );
+    }
+}
+
+#[test]
+fn a_unit_result_with_varyk_std_error_stays_unsupported() {
+    let sig = mapped("pub fn save() -> Result<(), varyk_std::Error> { Ok(()) }");
+    assert!(!sig.callable);
+    let note = sig.note.unwrap_or_default();
+    assert!(note.contains("`()` inside another type"), "{note}");
+}
+
+#[test]
+fn a_bare_error_from_a_use_says_to_write_the_full_path() {
+    let sig = mapped("use varyk_std::Error;\npub fn f() -> Result<i64, Error> { Ok(1) }");
+    assert!(!sig.callable);
+    let note = sig.note.unwrap_or_default();
+    assert!(note.contains("write the full path"), "{note}");
+}
+
 // --- Private modules (spec 3.2) -----------------------------------------
 
 fn private_module() -> Resolved {
@@ -2596,6 +2749,87 @@ fn a_negative_default_on_an_unsigned_field_is_v0209_even_zero() {
     );
 }
 
+// --- `pub use` (milestone 5b3 spec 2.5) --------------------------------------
+
+fn reexports() -> (Resolved, Vec<SourceFile>) {
+    let (result, sources) = resolve_file("crates/varyk/tests/fixtures/resolve/reexports/main.vr");
+    (
+        result.unwrap_or_else(|d| panic!("reexports should resolve: {d:#?}")),
+        sources,
+    )
+}
+
+#[test]
+fn pub_use_names_vr_and_rs_items_from_the_reexporting_module() {
+    let (r, _) = reexports();
+    let symbols = &r.symbols;
+    let user = module_id(&r, "user");
+    let krate = p("crate");
+    let fn_at = |path: &str, name: &str| symbols.lookup_fn(user, Some(&p(path)), name);
+    let type_at = |path: &str, name: &str| symbols.lookup_type(user, Some(&p(path)), name);
+    // A `.vr` function (a bare path), struct (`self::`), and enum
+    // (`crate::`), and a `.rs` function and struct: each the item itself,
+    // still reachable at its own path.
+    for name in ["connect", "item"] {
+        let short = symbols.lookup_fn(user, Some(&krate), name);
+        assert!(matches!(short, Ok(Callee::Varyk(_))), "{name}: {short:?}");
+        assert_eq!(short, fn_at("crate::db", name), "{name}");
+    }
+    let ping = fn_at("crate", "ping");
+    assert!(matches!(ping, Ok(Callee::Imported(_))), "{ping:?}");
+    assert_eq!(ping, fn_at("crate::ext", "ping"));
+    for name in ["Pool", "Mode", "Handle"] {
+        let short = type_at("crate", name);
+        assert!(short.is_ok(), "{name}: {short:?}");
+    }
+    assert_eq!(type_at("crate", "Pool"), type_at("crate::db", "Pool"));
+    assert!(matches!(type_at("crate", "Mode"), Ok(UserType::Enum(_))));
+    assert_eq!(type_at("crate", "Mode"), type_at("crate::db", "Mode"));
+    assert_eq!(type_at("crate", "Handle"), type_at("crate::ext", "Handle"));
+    // A `pub use` of a `pub use` is the original item.
+    assert_eq!(fn_at("crate::facade", "item"), fn_at("crate::db", "item"));
+    // The re-exporting module's own file names it bare.
+    assert_eq!(
+        symbols.lookup_fn(r.entry, None, "connect"),
+        fn_at("crate::db", "connect")
+    );
+}
+
+#[test]
+fn pub_use_program_typechecks() {
+    let (r, sources) = reexports();
+    crate::types::typecheck(r, &sources)
+        .unwrap_or_else(|d| panic!("reexports should typecheck: {d:#?}"));
+}
+
+#[test]
+fn pub_use_of_a_module_is_v0001() {
+    let (d, _) = error_fixture("v0001_pub_use_module");
+    let d = only(&d);
+    assert_eq!(d.code, codes::V0001);
+    assert!(d.message.contains("module"), "{d:#?}");
+    assert!(d.message.contains("not supported yet"), "{d:#?}");
+}
+
+#[test]
+fn pub_use_clashing_with_a_declared_or_imported_name_is_v0103() {
+    let (d, _) = error_fixture("v0103_pub_use_clash");
+    assert_eq!(only(&d).code, codes::V0103);
+    let (d, _) = fixture("reexport_clash_use");
+    assert_eq!(only(&d).code, codes::V0103);
+}
+
+#[test]
+fn pub_use_of_a_private_item_or_through_a_private_module_is_v0105() {
+    let (d, sources) = error_fixture("v0105_pub_use_private");
+    let d = only(&d);
+    assert_eq!(d.code, codes::V0105);
+    assert!(d.message.contains("pub mod db;"), "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, 0, "db::connect"));
+    let (d, _) = fixture("reexport_private_item");
+    assert_eq!(only(&d).code, codes::V0105);
+}
+
 // --- Varyk packages (M5b2 spec 2.1 to 2.4) ----------------------------------
 
 mod packages {
@@ -2969,6 +3203,54 @@ mod packages {
             Err(LookupError::Unknown)
         );
     }
+
+    #[test]
+    fn a_pub_use_of_another_packages_item_is_v0001() {
+        let mut build = units();
+        let d = resolve_errors(
+            &mut build,
+            "pub use units::one;\nfn main() {}\n",
+            &[("units", Dep::Package("units"))],
+        );
+        let d = only(&d);
+        assert_eq!(d.code, codes::V0001);
+        assert!(d.message.contains("another package"), "{d:#?}");
+    }
+
+    #[test]
+    fn a_packages_pub_use_names_its_item_from_the_reexporting_module() {
+        let mut build = Build::default();
+        build.add("relib", &[]);
+        let deps = [("relib", Dep::Package("relib"))];
+        build
+            .check(
+                "fn main() {\n    let thing: relib::Thing = relib::item();\n    println!(\"{}\", thing.size);\n}\n",
+                &deps,
+            )
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        let resolved = build
+            .resolve("fn main() {}\n", &deps)
+            .unwrap_or_else(|d| panic!("{d:#?}"));
+        // The short path and the item's own path name one function and
+        // one struct, declared in `relib::db`.
+        let short = callee(&resolved, "relib", "item");
+        assert!(matches!(short, Ok(Callee::Imported(_))), "{short:?}");
+        assert_eq!(short, callee(&resolved, "relib::db", "item"));
+        let symbols = &resolved.symbols;
+        let thing = symbols.lookup_type(resolved.entry, Some(&p("relib")), "Thing");
+        assert!(matches!(thing, Ok(UserType::Struct(_))), "{thing:?}");
+        assert_eq!(
+            thing,
+            symbols.lookup_type(resolved.entry, Some(&p("relib::db")), "Thing")
+        );
+        assert_eq!(
+            sig(&resolved, "relib", "item")
+                .package
+                .as_ref()
+                .map(|item| item.path.clone()),
+            Some(vec!["db".to_string()])
+        );
+    }
 }
 
 /// A library's `pub` items in `pub` modules are used by other packages,
@@ -3046,4 +3328,75 @@ fn a_library_s_items_other_packages_use_must_name_types_they_can_see() {
         diagnostics.iter().all(|d| d.code != codes::V0105),
         "{diagnostics:#?}"
     );
+}
+
+// --- A type parameter chosen from the result (milestone 5b3 spec 2.1) ----
+
+#[test]
+fn a_deserialize_owned_result_has_a_hole_of_its_shape() {
+    for (text, shape) in [
+        (
+            "pub fn one<T: serde::de::DeserializeOwned>(q: &'static str) -> Result<T, varyk_std::Error> { todo!() }",
+            ResultShape::Plain,
+        ),
+        (
+            "pub fn first<T: varyk_std::serde::de::DeserializeOwned>() -> Result<Option<T>, varyk_std::Error> { todo!() }",
+            ResultShape::Option,
+        ),
+        (
+            "pub async fn all<T: serde::de::DeserializeOwned>(id: i64) -> Result<Vec<T>, varyk_std::Error> { todo!() }",
+            ResultShape::Vec,
+        ),
+    ] {
+        let sig = mapped(text);
+        assert!(sig.callable, "{text}: {:?}", sig.note);
+        assert_eq!(sig.result_hole, Some(shape), "{text}");
+        // The call writes `T`'s serde derive, whichever path the bound has.
+        assert!(sig.names_std, "{text}");
+    }
+    let sig = mapped("pub fn load(id: i64) -> Result<i64, varyk_std::Error> { Ok(id) }");
+    assert_eq!(sig.result_hole, None);
+}
+
+#[test]
+fn another_generic_shape_is_not_callable_and_says_which() {
+    for (text, reason) in [
+        (
+            "pub fn f<T: serde::de::DeserializeOwned, U: Clone>() -> Result<T, varyk_std::Error> { todo!() }",
+            "two or more type parameters",
+        ),
+        (
+            "pub fn f<T>() -> Result<T, varyk_std::Error> where T: serde::de::DeserializeOwned { todo!() }",
+            "a `where` clause",
+        ),
+        (
+            "pub fn f<T: Default>() -> Result<T, varyk_std::Error> { todo!() }",
+            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+        ),
+        (
+            "pub fn f<'a, T: serde::de::DeserializeOwned>(s: &'a str) -> Result<T, varyk_std::Error> { todo!() }",
+            "a lifetime parameter",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned>(t: T) -> Result<T, varyk_std::Error> { todo!() }",
+            "the type parameter in a parameter",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned>() -> Result<(T, i64), varyk_std::Error> { todo!() }",
+            "a return that is not one of those three shapes",
+        ),
+    ] {
+        let sig = mapped(text);
+        assert!(!sig.callable, "{text}");
+        assert_eq!(sig.result_hole, None, "{text}");
+        let note = sig.note.unwrap_or_default();
+        assert!(
+            note.contains("only with one type parameter `T: serde::de::DeserializeOwned`"),
+            "{text}: {note}"
+        );
+        assert!(
+            note.ends_with(&format!("this one has {reason}")),
+            "{text}: {note}"
+        );
+    }
 }

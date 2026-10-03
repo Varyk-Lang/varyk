@@ -27,7 +27,7 @@ use varyk_syntax::Span;
 
 use super::chains::source_receiver;
 use super::slots::clone_fix_it;
-use super::{Context, captured_in, roots, started_modes};
+use super::{Context, captured_in, roots, started_modes, with_trailing};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
     HirBlock, HirExpr, HirExprKind, HirForHead, HirFunction, HirPattern, HirStmt, LocalId,
@@ -506,24 +506,29 @@ impl<R: Rule> Walker<'_, R> {
             HirExprKind::Call {
                 callee,
                 args,
+                trailing,
                 started,
                 ..
             } => {
                 let (_, modes, keeps) = self.cx.callee(*callee);
                 let (modes, keeps) = started_modes(*started, modes, keeps);
-                self.call(args.iter(), &modes, keeps);
+                let modes = with_trailing(modes, trailing);
+                self.call(args.iter().chain(trailing), &modes, keeps);
             }
             // The receiver is an argument: a changing method changes it.
             HirExprKind::MethodCall {
                 receiver,
                 method,
                 args,
+                trailing,
                 started,
                 ..
             } => {
                 let (_, modes, keeps) = self.cx.method(*method);
                 let (modes, keeps) = started_modes(*started, modes, keeps);
-                self.call(std::iter::once(&**receiver).chain(args), &modes, keeps);
+                let modes = with_trailing(modes, trailing);
+                let args = std::iter::once(&**receiver).chain(args).chain(trailing);
+                self.call(args, &modes, keeps);
             }
             // Reading or moving a field or an element reads its base;
             // changing one changes its base.

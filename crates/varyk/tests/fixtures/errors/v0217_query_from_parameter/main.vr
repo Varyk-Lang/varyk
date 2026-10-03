@@ -1,0 +1,9 @@
+mod ext;
+
+fn count(query: string) -> i64 {
+    ext::one(query)
+}
+
+fn main() {
+    println!("{}", count("select 1"));
+}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0218]: a value of type `User` cannot be passed here
+  --> crates/varyk/tests/fixtures/errors/v0218_struct_as_value/main.vr:10:76
+   |
+10 |     println!("{}", ext::run("insert into users (name, age) values (?, ?)", user));
+   |                                                                            ^^^^ a value of type `User` cannot be passed here
+   |
+   = note: after its other arguments, `ext::run` takes values of type `bool`, `string`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, or an `Option` of one of those

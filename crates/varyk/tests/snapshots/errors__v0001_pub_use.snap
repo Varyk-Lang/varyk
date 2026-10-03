@@ -1,9 +1,0 @@
----
-source: crates/varyk/tests/errors.rs
-expression: stderr
----
-error[V0001]: `pub use` is not supported in Varyk yet; a `use` only shortens a name inside this package, so write it without `pub`
- --> crates/varyk/tests/fixtures/errors/v0001_pub_use/main.vr:3:1
-  |
-3 | pub use a::B;
-  | ^^^^^^^ `pub use` is not supported in Varyk yet; a `use` only shortens a name inside this package, so write it without `pub`

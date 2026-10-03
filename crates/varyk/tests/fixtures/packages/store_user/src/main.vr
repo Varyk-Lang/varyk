@@ -1,0 +1,81 @@
+// expected output:
+// Ada 36 countess 9.5 true
+// 2 users: Ada, Bo
+// Bo has no nick
+// nothing stored under user/9
+// committed true, then: the batch is already committed
+// Cy is in, Di is not
+// 3 users, 3 counted
+
+struct User {
+    id: i64,
+    name: string,
+    age: i32,
+    nick: Option<string>,
+    score: f64,
+    admin: bool,
+}
+
+fn find(db: store::Store) -> Result<User, Error> {
+    db.one("user/1", 1)
+}
+
+fn show(user: User) -> string {
+    match user.nick {
+        Some(nick) => format!("{} {} {} {} {}", user.name, user.age, nick, user.score, user.admin),
+        None => format!("{} has no nick", user.name),
+    }
+}
+
+async fn run() -> Result<i64, Error> {
+    let mut db = store::open();
+    let name = format!("A{}", "da");
+    let nick: Option<string> = Some("countess");
+    let age: i32 = 36;
+    db.put("user/1", 1, name, age, nick, 9.5, true)?;
+    let missing: Option<string> = None;
+    db.put("user/2", 2, "Bo", 41, missing, 7.0, false)?;
+    println!("{}", show(find(db)?));
+
+    let users: Vec<User> = db.all("user/")?;
+    println!("{} users: {}, {}", users.len(), users[0].name, users[1].name);
+    let maybe: Option<User> = db.first("user/2", 2)?;
+    match maybe {
+        Some(user) => println!("{}", show(user)),
+        None => println!("no user 2"),
+    }
+    let gone: Result<User, Error> = db.one("user/9", 9);
+    match gone {
+        Ok(user) => println!("found {}", user.name),
+        Err(e) => println!("{}", e.message()),
+    }
+
+    let mut batch = db.batch().await?;
+    batch.put("user/3", 3, "Cy", 25, missing, 5.5, false).await?;
+    let done = batch.commit().await?;
+    match batch.commit().await {
+        Ok(_) => println!("committed twice"),
+        Err(e) => println!("committed {}, then: {}", done, e.message()),
+    }
+    let mut dropped = db.batch().await?;
+    dropped.put("user/4", 4, "Di", 52, missing, 1.0, true).await?;
+    let cy: Option<User> = db.first("user/3")?;
+    let di: Option<User> = db.first("user/4")?;
+    match cy {
+        Some(user) => println!("{} is in, Di is {}", user.name, if di.is_some() { "in" } else { "not" }),
+        None => println!("Cy is not in"),
+    }
+
+    let all: Vec<User> = db.all("")?;
+    db.put("count", all.len() as i64)?;
+    let n: i64 = db.one("count")?;
+    println!("{} users, {} counted", all.len(), n);
+    Ok(n)
+}
+
+async fn main() {
+    match run().await {
+        Ok(_) => {}
+        Err(e) => println!("error: {}", e.message()),
+    }
+}

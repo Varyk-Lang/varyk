@@ -240,12 +240,51 @@ impl Symbols {
     /// and the item and every module from it up to the root are `pub`
     /// (M5b2 spec 2.3).
     pub(super) fn exported(&self, module: ModuleId, is_pub: bool) -> bool {
-        self.library
-            && is_pub
-            && self.ancestors(module).all(|module| {
-                let scope = &self.scopes[module.0 as usize];
-                scope.parent.is_none() || scope.is_pub
-            })
+        self.library && is_pub && self.private_on_chain(module).is_none()
+    }
+
+    /// The highest module from the root down to `module`, itself
+    /// included, declared without `pub`; `None` when every one is `pub`.
+    /// An item there with `pub` is one any user of the package can name
+    /// by its own path, which a `pub use` of it needs (milestone 5b3 spec
+    /// 2.5), as [`Self::exported`] does.
+    pub(super) fn private_on_chain(&self, module: ModuleId) -> Option<ModuleId> {
+        let chain: Vec<ModuleId> = self.ancestors(module).collect();
+        chain.into_iter().rev().find(|module| {
+            self.scopes
+                .get(module.0 as usize)
+                .is_some_and(|scope| scope.parent.is_some() && !scope.is_pub)
+        })
+    }
+
+    /// V0105 at `span`, the path `path` of a `pub use` of an item in
+    /// `module` that is `pub`, when a module on its chain is not
+    /// (milestone 5b3 spec 2.5): the generated Rust names the item by its
+    /// own path everywhere, which users of the re-export must be able to
+    /// name too.
+    pub(super) fn reexport_through_private(
+        &self,
+        module: ModuleId,
+        path: &str,
+        span: Span,
+    ) -> Option<Diagnostic> {
+        let scope = self.scopes.get(self.private_on_chain(module)?.0 as usize)?;
+        let short = scope.name.rsplit("::").next().unwrap_or(&scope.name);
+        let decl = scope.decl?;
+        let diagnostic = Diagnostic::new(
+            codes::V0105,
+            span,
+            format!(
+                "module `{short}` is not public, so `pub use` cannot make `{path}` public; \
+                 write `pub mod {short};`"
+            ),
+        )
+        .with_note(
+            "an item made public with `pub use` keeps its own path too, and every module on that \
+             path must be public; in Rust terms, the generated Rust names the item by its full \
+             path",
+        );
+        Some(declared_without_pub(diagnostic, decl, "mod"))
     }
 
     /// Whether a type of this package `ty` names, itself or inside

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0207]: the type `db.first` reads cannot be worked out here; write the type, as in `let u: Option<User> = db.first(..).await?;`
+ --> crates/varyk/tests/fixtures/errors/v0207_result_type_unknown_first/main.vr:8:16
+  |
+8 |     let user = db.first("{\"name\": \"ann\"}").await?;
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the type `db.first` reads cannot be worked out here; write the type, as in `let u: Option<User> = db.first(..).await?;`
+  |
+  = note: such a value takes its type from where it goes: a `let` with a written type, a parameter, a return value, a field, or a `vec!` element after one whose type is known; in Rust terms, the type cannot be inferred here

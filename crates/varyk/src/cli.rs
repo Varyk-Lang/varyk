@@ -793,9 +793,42 @@ fn run_publish(assemble_only: bool, args: &[String], message_format: MessageForm
     }
 }
 
+/// The official packages `varyk add` has a shorthand for: the name typed,
+/// and the crate it adds (renamed to the shorthand so code can name it).
+const SHORTHANDS: &[(&str, &str)] = &[("sql", "varyk-sql")];
+
+/// The arguments after `cargo add` for a `varyk add` call: a leading
+/// shorthand becomes its crate and `--rename`, the rest is passed as
+/// written, except a second shorthand, which is refused. Any other call
+/// passes through unchanged.
+fn add_args(args: &[String]) -> Result<Vec<String>, String> {
+    let is_shorthand = |arg: &String| SHORTHANDS.iter().find(|(name, _)| name == arg);
+    let Some(first) = args.first().and_then(is_shorthand) else {
+        return Ok(args.to_vec());
+    };
+    let rest = &args[1..];
+    if rest.iter().any(|arg| is_shorthand(arg).is_some()) {
+        return Err("add one official package per `varyk add` call".to_string());
+    }
+    let mut out = vec![
+        first.1.to_string(),
+        "--rename".to_string(),
+        first.0.to_string(),
+    ];
+    out.extend(rest.iter().cloned());
+    Ok(out)
+}
+
 /// Runs `add`: `cargo add` with `args` in the package found upward from
 /// the current directory, its output and exit code passed through.
 fn run_add(args: &[String]) -> ExitCode {
+    let args = match add_args(args) {
+        Ok(args) => args,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
     let Some(manifest) = manifest_here() else {
         eprintln!("error: no Varyk package here; run `varyk add` inside a package");
         return ExitCode::FAILURE;
@@ -935,6 +968,60 @@ fn emit_diagnostics(
         MessageFormat::Human => eprintln!("{}", render_human(diagnostics, sources)),
         MessageFormat::Json | MessageFormat::JsonToStderr => {
             json_line(message_format, &render_json(diagnostics, sources));
+        }
+    }
+}
+
+#[cfg(test)]
+mod add_tests {
+    use super::add_args;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn a_shorthand_becomes_its_row() {
+        assert_eq!(
+            add_args(&args(&["sql"])),
+            Ok(args(&["varyk-sql", "--rename", "sql"]))
+        );
+    }
+
+    #[test]
+    fn later_arguments_follow_the_row() {
+        assert_eq!(
+            add_args(&args(&["sql", "--features", "postgres"])),
+            Ok(args(&[
+                "varyk-sql",
+                "--rename",
+                "sql",
+                "--features",
+                "postgres"
+            ]))
+        );
+    }
+
+    #[test]
+    fn a_second_shorthand_is_refused() {
+        assert_eq!(
+            add_args(&args(&["sql", "sql"])),
+            Err("add one official package per `varyk add` call".to_string())
+        );
+    }
+
+    #[test]
+    fn a_shorthand_leaves_other_crates_as_written() {
+        assert_eq!(
+            add_args(&args(&["sql", "serde"])),
+            Ok(args(&["varyk-sql", "--rename", "sql", "serde"]))
+        );
+    }
+
+    #[test]
+    fn a_call_not_starting_with_a_shorthand_passes_through() {
+        for call in [&["serde"][..], &["varyk-sql", "--rename", "sql"]] {
+            assert_eq!(add_args(&args(call)), Ok(args(call)));
         }
     }
 }

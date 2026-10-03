@@ -71,6 +71,7 @@ impl FnChecker<'_> {
         // Arguments typed before the parameter types were known.
         let mut typed = None;
         let mut started = false;
+        let mut type_arg = None;
         let (found, params, ret): (MethodRef, Vec<Ty>, Ty) = match reached {
             Ty::Struct(_) | Ty::Enum(_) => {
                 let owner = match *reached {
@@ -126,6 +127,8 @@ impl FnChecker<'_> {
                             ));
                             return None;
                         }
+                        // The call names `varyk-std` (milestone 5b3 spec 2.4).
+                        self.uses_std |= sig.names_std;
                         let params = sig.params.iter().map(|p| p.0.clone()).collect();
                         (
                             sig.self_mode,
@@ -154,7 +157,21 @@ impl FnChecker<'_> {
                     }
                     _ => {}
                 }
-                (found, params, ret)
+                // A type hole is filled from where the result goes
+                // (milestone 5b3 spec 2.1).
+                let imported = match found {
+                    MethodRef::Imported(id) => Some(id),
+                    _ => None,
+                };
+                let written = Span::new(span.file, receiver.span.start, method.span.end);
+                let filled = self.filled(imported, written, started, expected.as_ref(), span)?;
+                match filled {
+                    Some((ret, t)) => {
+                        type_arg = Some(t);
+                        (found, params, ret)
+                    }
+                    None => (found, params, ret),
+                }
             }
             other => {
                 let Some((owner, subst)) = Owner::of(other) else {
@@ -238,9 +255,16 @@ impl FnChecker<'_> {
                 }
             }
         };
-        let args = match typed {
-            Some(args) => args,
-            None => self.arguments(&method.name, &params, args, span)?,
+        let (literal, variadic) = match found {
+            MethodRef::Imported(id) => {
+                let sig = &self.symbols.imported[id.0 as usize];
+                (sig.literal.clone(), sig.variadic)
+            }
+            _ => (Vec::new(), false),
+        };
+        let (args, trailing) = match typed {
+            Some(args) => (args, Vec::new()),
+            None => self.arguments(&method.name, &params, &literal, variadic, args, span)?,
         };
         // A looked-into result holds part of its receiver, unless its
         // payload is Copy, when it is a plain `Option` of a copy (M4 spec
@@ -263,6 +287,8 @@ impl FnChecker<'_> {
                 receiver: Box::new(receiver),
                 method: found,
                 args,
+                trailing,
+                type_arg,
                 rooted,
                 looked_into: false,
                 started,
@@ -330,7 +356,7 @@ impl FnChecker<'_> {
             self.blocked(span, headline, blocker, rust);
             return None;
         }
-        let args = self.arguments(&method.name, &[], args, span)?;
+        let (args, _) = self.arguments(&method.name, &[], &[], false, args, span)?;
         // The row is always in the table.
         let id = builtins::lookup(Owner::String, "clone", true)?;
         Some(HirExpr {
@@ -338,6 +364,8 @@ impl FnChecker<'_> {
                 receiver: Box::new(receiver),
                 method: MethodRef::Builtin(id),
                 args,
+                trailing: Vec::new(),
+                type_arg: None,
                 rooted: None,
                 looked_into: false,
                 started: false,
@@ -365,8 +393,8 @@ impl FnChecker<'_> {
             // The count is all `arguments` looks at here.
             let params = vec![Ty::Unit; entry.params.len()];
             return self
-                .arguments(entry.name, &params, args, span)
-                .map(|args| (args, subst));
+                .arguments(entry.name, &params, &[], false, args, span)
+                .map(|(args, _)| (args, subst));
         }
         let wanted = match (entry.result, expected) {
             (builtins::Shape::OptionOfR, Some(Ty::Option(r))) => Some(*r),

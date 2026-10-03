@@ -1,0 +1,11 @@
+#[test]
+fn one_reads_what_put_stored() {
+    let mut db = crate::open();
+    let stored = db.put("answer", 42);
+    assert(stored.is_ok());
+    let read: Result<i64, Error> = db.one("answer");
+    match read {
+        Ok(n) => assert_eq(n, 42),
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
+}

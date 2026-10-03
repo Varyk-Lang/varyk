@@ -1,0 +1,15 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0105]: module `db` is not public, so `pub use` cannot make `db::connect` public; write `pub mod db;`
+ --> crates/varyk/tests/fixtures/errors/v0105_pub_use_private/main.vr:3:9
+  |
+1 | mod db;
+  | --- declared here without `pub`
+2 |
+3 | pub use db::connect;
+  |         ^^^^^^^^^^^ module `db` is not public, so `pub use` cannot make `db::connect` public; write `pub mod db;`
+  |
+  = note: an item made public with `pub use` keeps its own path too, and every module on that path must be public; in Rust terms, the generated Rust names the item by its full path
+help: insert `pub ` before `mod`

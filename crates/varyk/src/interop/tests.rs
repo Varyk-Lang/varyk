@@ -245,6 +245,80 @@ fn param_lifetime_ref_is_opaque() {
     }
 }
 
+// --- Text written in the program (milestone 5b3 spec 2.3) --------------
+
+#[test]
+fn a_static_str_parameter_is_literal_text() {
+    let f = one("pub fn one(query: &'static str, id: i64) {}");
+    assert_eq!(f.params, vec![RustTy::Literal, RustTy::I64]);
+    let f = method_sig("fn one(&self, query: &'static str) -> i64");
+    assert_eq!(f.params, vec![RustTy::Literal]);
+}
+
+#[test]
+fn a_static_str_anywhere_else_is_opaque() {
+    for (text, opaque) in [
+        ("pub fn f(q: &'static mut str) {}", "& 'static mut str"),
+        (
+            "pub fn f(q: Option<&'static str>) {}",
+            "Option < & 'static str >",
+        ),
+        ("pub fn f(q: &'static String) {}", "& 'static String"),
+    ] {
+        let f = one(text);
+        assert_eq!(f.params, vec![RustTy::Opaque(opaque.to_string())], "{text}");
+    }
+    let f = one("pub fn f() -> Option<&'static str> { None }");
+    assert_eq!(
+        f.ret,
+        RustTy::Opaque("Option < & 'static str >".to_string())
+    );
+    let f = one("pub fn f() -> &'static str { \"\" }");
+    assert_eq!(f.ret, RustTy::Opaque("& 'static str".to_string()));
+}
+
+// --- Any number of values (milestone 5b3 spec 2.2) ---------------------
+
+#[test]
+fn a_last_vec_of_values_is_values_after_the_fixed_parameters() {
+    let f = one("pub fn run(query: &'static str, values: Vec<varyk_std::Value>) {}");
+    assert_eq!(f.params, vec![RustTy::Literal, RustTy::Values]);
+    let f = one("pub fn run(values: Vec<::varyk_std::Value>) {}");
+    assert_eq!(f.params, vec![RustTy::Values]);
+    let f =
+        method_sig("fn run(&self, query: &'static str, id: i64, values: Vec<varyk_std::Value>)");
+    assert_eq!(f.params, vec![RustTy::Literal, RustTy::I64, RustTy::Values]);
+}
+
+#[test]
+fn values_anywhere_else_is_opaque() {
+    for (text, opaque) in [
+        (
+            "pub fn f(values: Vec<varyk_std::Value>, id: i64) {}",
+            "Vec < varyk_std :: Value >",
+        ),
+        ("pub fn f(value: varyk_std::Value) {}", "varyk_std :: Value"),
+        (
+            "pub fn f(values: &Vec<varyk_std::Value>) {}",
+            "& Vec < varyk_std :: Value >",
+        ),
+        (
+            "pub fn f(values: Option<varyk_std::Value>) {}",
+            "Option < varyk_std :: Value >",
+        ),
+    ] {
+        let f = one(text);
+        assert_eq!(f.params[0], RustTy::Opaque(opaque.to_string()), "{text}");
+    }
+    let f = one("pub fn f() -> Vec<varyk_std::Value> { Vec::new() }");
+    assert_eq!(
+        f.ret,
+        RustTy::Opaque("Vec < varyk_std :: Value >".to_string())
+    );
+    let f = one("pub fn f() -> varyk_std::Value { todo!() }");
+    assert_eq!(f.ret, RustTy::Opaque("varyk_std :: Value".to_string()));
+}
+
 #[test]
 fn param_trait_object_is_opaque() {
     let f = one("pub fn f(x: &dyn Foo) {}");
@@ -1584,5 +1658,177 @@ fn a_macro_spelling_drop_in_any_position_marks_every_enum() {
     ] {
         let imported = import_rust_module(text).expect("should parse");
         assert!(imported.drops.unknown.is_none(), "{text}");
+    }
+}
+
+// --- `varyk_std::` paths (milestone 5b3 spec 2.4) ---------------------
+
+#[test]
+fn std_item_knows_error_value_and_the_serde_bound() {
+    use signatures::{StdItem, std_item};
+    let item = |text: &str| std_item(&syn::parse_str(text).expect("a path"));
+    assert_eq!(item("varyk_std::Error"), Some(StdItem::Error));
+    assert_eq!(item("::varyk_std::Error"), Some(StdItem::Error));
+    assert_eq!(item("varyk_std::Value"), Some(StdItem::Value));
+    assert_eq!(
+        item("serde::de::DeserializeOwned"),
+        Some(StdItem::DeserializeOwned)
+    );
+    assert_eq!(
+        item("varyk_std::serde::de::DeserializeOwned"),
+        Some(StdItem::DeserializeOwned)
+    );
+    for other in [
+        "Error",
+        "varyk_std::Task",
+        "std::Error",
+        "varyk_std::error::Error",
+        "varyk_std::Error<i32>",
+        "serde::DeserializeOwned",
+        "varyk_std::serde::Deserialize",
+    ] {
+        assert_eq!(item(other), None, "{other}");
+    }
+}
+
+#[test]
+fn varyk_std_error_maps_by_its_full_path() {
+    let f = one(
+        "pub fn f(e: varyk_std::Error) -> Result<Vec<String>, varyk_std::Error> { Ok(Vec::new()) }",
+    );
+    assert_eq!(f.params, vec![RustTy::Error]);
+    assert_eq!(
+        f.ret,
+        RustTy::Result(
+            Box::new(RustTy::Vec(Box::new(RustTy::String))),
+            Box::new(RustTy::Error)
+        )
+    );
+    assert_eq!(RustTy::Error.text(), "varyk_std::Error");
+}
+
+#[test]
+fn a_bare_error_from_a_use_is_still_a_used_name() {
+    let crates = ["varyk-std".to_string()];
+    let imported = import_rust_module_in(
+        "use varyk_std::Error;\npub fn f() -> Result<i64, Error> { Ok(1) }",
+        Some(&crates),
+    )
+    .expect("should parse");
+    assert_eq!(
+        imported.fns[0].ret,
+        RustTy::Result(
+            Box::new(RustTy::I64),
+            Box::new(RustTy::Named(RustPath::Used("Error".to_string())))
+        )
+    );
+}
+
+// --- A type parameter chosen from the result (milestone 5b3 spec 2.1) ----
+
+#[test]
+fn a_deserialize_owned_type_parameter_in_the_result_is_imported() {
+    let param = |ty: RustTy| RustTy::Result(Box::new(ty), Box::new(RustTy::Error));
+    for (text, ret) in [
+        (
+            "pub fn one<T: serde::de::DeserializeOwned>(q: &'static str) -> Result<T, varyk_std::Error> { todo!() }",
+            param(RustTy::Param),
+        ),
+        (
+            "pub fn first<T: varyk_std::serde::de::DeserializeOwned>() -> Result<Option<T>, varyk_std::Error> { todo!() }",
+            param(RustTy::Option(Box::new(RustTy::Param))),
+        ),
+        (
+            "pub async fn all<Row: ::serde::de::DeserializeOwned>(n: i64) -> Result<Vec<Row>, ::varyk_std::Error> { todo!() }",
+            param(RustTy::Vec(Box::new(RustTy::Param))),
+        ),
+    ] {
+        let f = one(text);
+        assert_eq!(f.ret, ret, "{text}");
+        assert!(f.type_param.is_some(), "{text}");
+        assert_eq!(f.type_param_refused, None, "{text}");
+    }
+    let f = one(
+        "pub async fn all<Row: ::serde::de::DeserializeOwned>(n: i64) -> Result<Vec<Row>, ::varyk_std::Error> { todo!() }",
+    );
+    assert_eq!(f.type_param.as_deref(), Some("Row"));
+    assert!(f.is_async);
+    assert_eq!(f.params, vec![RustTy::I64]);
+    let m = method_sig(
+        "async fn one<T: varyk_std::serde::de::DeserializeOwned>(&self, q: &'static str) -> Result<T, varyk_std::Error>",
+    );
+    assert_eq!(m.type_param.as_deref(), Some("T"));
+    assert_eq!(m.receiver, Some(SelfMode::Shared));
+    assert_eq!(m.ret, param(RustTy::Param));
+    assert_eq!(m.ret_root, None);
+}
+
+#[test]
+fn any_other_generic_shape_is_opaque_with_its_reason() {
+    for (text, reason) in [
+        (
+            "pub fn f<T: serde::de::DeserializeOwned, U: serde::de::DeserializeOwned>() -> Result<T, varyk_std::Error> { todo!() }",
+            "two or more type parameters",
+        ),
+        (
+            "pub fn f<T>() -> Result<T, varyk_std::Error> where T: serde::de::DeserializeOwned { todo!() }",
+            "a `where` clause",
+        ),
+        (
+            "pub fn f<T: Default>() -> Result<T, varyk_std::Error> { todo!() }",
+            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned + Clone>() -> Result<T, varyk_std::Error> { todo!() }",
+            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+        ),
+        (
+            "pub fn f<T>() -> Result<T, varyk_std::Error> { todo!() }",
+            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+        ),
+        (
+            "pub fn f<T: DeserializeOwned>() -> Result<T, varyk_std::Error> { todo!() }",
+            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+        ),
+        (
+            "pub fn f<'a, T: serde::de::DeserializeOwned>(s: &'a str) -> Result<T, varyk_std::Error> { todo!() }",
+            "a lifetime parameter",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned>(t: T) -> Result<T, varyk_std::Error> { todo!() }",
+            "the type parameter in a parameter",
+        ),
+        (
+            "pub fn f<T>(v: Vec<T>) -> i64 { todo!() }",
+            "the type parameter in a parameter",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned>(t: Vec<T>) -> Result<i64, varyk_std::Error> { todo!() }",
+            "the type parameter in a parameter",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned>() -> Result<Vec<Option<T>>, varyk_std::Error> { todo!() }",
+            "a return that is not one of those three shapes",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned>() -> Result<T, String> { todo!() }",
+            "a return that is not one of those three shapes",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned>() -> T { todo!() }",
+            "a return that is not one of those three shapes",
+        ),
+        (
+            "pub fn f<T: serde::de::DeserializeOwned>() -> Result<i64, varyk_std::Error> { todo!() }",
+            "a return that is not one of those three shapes",
+        ),
+    ] {
+        let f = one(text);
+        assert!(
+            matches!(&f.ret, RustTy::Opaque(ret) if *ret == f.signature),
+            "{text}: {f:?}"
+        );
+        assert_eq!(f.type_param, None, "{text}");
+        assert_eq!(f.type_param_refused, Some(reason), "{text}");
     }
 }

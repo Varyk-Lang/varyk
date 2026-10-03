@@ -37,6 +37,13 @@ pub enum RustTy {
     String,
     /// `&mut String`.
     RefMutString,
+    /// `&'static str` as a parameter: text written in the program
+    /// (milestone 5b3 spec 2.3). Anywhere else it is [`RustTy::Opaque`].
+    Literal,
+    /// `Vec<varyk_std::Value>` as the last parameter: any number of
+    /// values after the others (milestone 5b3 spec 2.2). Anywhere else it
+    /// is [`RustTy::Opaque`].
+    Values,
     /// `&T`.
     Ref(Box<RustTy>),
     /// `&mut T`.
@@ -52,6 +59,14 @@ pub enum RustTy {
     Option(Box<RustTy>),
     /// `Result<T, E>`.
     Result(Box<RustTy>, Box<RustTy>),
+    /// `varyk_std::Error`, written by that full path (milestone 5b3 spec
+    /// 2.4); the resolver accepts it only as the error of a `Result`.
+    Error,
+    /// The function's one type parameter, filled at the call from where
+    /// the result goes (milestone 5b3 spec 2.1); only in a return of
+    /// `Result<T, varyk_std::Error>`, `Result<Option<T>, ..>`, or
+    /// `Result<Vec<T>, ..>`.
+    Param,
     /// Anything else: generics, explicit lifetimes, trait objects, `impl
     /// Trait`, tuples, arrays, references to anything unmapped, `std`
     /// paths, and references in return position. Holds the original type
@@ -78,7 +93,11 @@ impl RustTy {
             RustTy::Str => "&str",
             RustTy::String => "String",
             RustTy::RefMutString => "&mut String",
+            RustTy::Literal => "&'static str",
+            RustTy::Values => "Vec<varyk_std::Value>",
             RustTy::Unit => "()",
+            RustTy::Error => "varyk_std::Error",
+            RustTy::Param => "T",
             RustTy::Ref(inner) => return format!("&{}", inner.text()),
             RustTy::RefMut(inner) => return format!("&mut {}", inner.text()),
             RustTy::Named(
@@ -123,6 +142,43 @@ pub enum RustPath {
     Macro(String),
 }
 
+/// An item of `varyk-std` a `.rs` signature may name (milestone 5b3
+/// spec 2.2-2.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StdItem {
+    /// `varyk_std::Error`.
+    Error,
+    /// `varyk_std::Value`.
+    Value,
+    /// `serde::de::DeserializeOwned` or
+    /// `varyk_std::serde::de::DeserializeOwned`, the bound of a type
+    /// parameter.
+    DeserializeOwned,
+}
+
+/// The [`StdItem`] `path` names, by its full path (a leading `::` is
+/// allowed), with no generic arguments; `None` for any other path,
+/// including a bare name a `use` brings in.
+pub(super) fn std_item(path: &syn::Path) -> Option<StdItem> {
+    let segments: Option<Vec<String>> = path
+        .segments
+        .iter()
+        .map(|segment| {
+            matches!(segment.arguments, PathArguments::None).then(|| ident_name(&segment.ident))
+        })
+        .collect();
+    let segments = segments?;
+    let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
+    match segments[..] {
+        ["varyk_std", "Error"] => Some(StdItem::Error),
+        ["varyk_std", "Value"] => Some(StdItem::Value),
+        ["serde", "de", "DeserializeOwned"] | ["varyk_std", "serde", "de", "DeserializeOwned"] => {
+            Some(StdItem::DeserializeOwned)
+        }
+        _ => None,
+    }
+}
+
 /// What bare names mean in the file being imported; see
 /// [`super::collect_names`].
 #[derive(Debug, Clone, Default)]
@@ -135,6 +191,9 @@ pub(super) struct Names {
     pub shadowed: HashSet<String>,
     /// Inside an `impl S` block, `S`: what `Self` means.
     pub self_ty: Option<String>,
+    /// The signature's accepted type parameter, which is
+    /// [`RustTy::Param`] (milestone 5b3 spec 2.1).
+    pub param: Option<String>,
 }
 
 impl Names {
@@ -300,13 +359,21 @@ fn generic_std(ty: &Type, names: &Names) -> Option<RustTy> {
 }
 
 /// Maps a reference type (`&T` / `&mut T`) appearing in parameter position.
-/// A reference carrying an explicit lifetime is always [`RustTy::Opaque`],
+/// `&'static str` is [`RustTy::Literal`] (milestone 5b3 spec 2.3); any
+/// other reference carrying an explicit lifetime is [`RustTy::Opaque`],
 /// per spec 4.5's "explicit lifetimes ... imported as opaque".
 fn map_reference(reference: &TypeReference, whole: &Type, names: &Names) -> RustTy {
-    if reference.lifetime.is_some() {
-        return RustTy::Opaque(type_to_text(whole));
-    }
     let inner = reference.elem.as_ref();
+    if let Some(lifetime) = &reference.lifetime {
+        let literal = lifetime.ident == "static"
+            && reference.mutability.is_none()
+            && is_named(inner, "str", names);
+        return if literal {
+            RustTy::Literal
+        } else {
+            RustTy::Opaque(type_to_text(whole))
+        };
+    }
     // `&str` is the table's shared-borrow-of-string case; `&mut str` isn't
     // in the table at all (mutable string slices are not part of the
     // spec's mapping), so it falls through to the generic Opaque case
@@ -333,6 +400,10 @@ fn map_reference(reference: &TypeReference, whole: &Type, names: &Names) -> Rust
 /// non-reference parameter or return type): a reference here is always
 /// [`RustTy::Opaque`].
 pub(super) fn map_value(ty: &Type, names: &Names) -> RustTy {
+    // A type parameter hides any type of its name.
+    if names.param.is_some() && plain_path_ident(ty) == names.param {
+        return RustTy::Param;
+    }
     if let Some(prim) = primitive_ty(ty, names) {
         return prim;
     }
@@ -351,15 +422,49 @@ pub(super) fn map_value(ty: &Type, names: &Names) -> RustTy {
     if let Some(found) = generic_std(ty, names) {
         return found;
     }
+    // A `.rs` file's own `mod varyk_std` would be read as varyk-std's
+    // here too; accepted for the MVP.
+    if let Type::Path(type_path) = ty {
+        if type_path.qself.is_none() && std_item(&type_path.path) == Some(StdItem::Error) {
+            return RustTy::Error;
+        }
+    }
     RustTy::Opaque(type_to_text(ty))
 }
 
-/// Maps a parameter type.
-pub(super) fn map_param_type(ty: &Type, names: &Names) -> RustTy {
+/// Maps a parameter type; `last` when it is the last parameter, the one
+/// place `Vec<varyk_std::Value>` is [`RustTy::Values`].
+pub(super) fn map_param_type(ty: &Type, names: &Names, last: bool) -> RustTy {
     match ty {
         Type::Reference(reference) => map_reference(reference, ty, names),
+        _ if last && is_values(ty, names) => RustTy::Values,
         _ => map_value(ty, names),
     }
+}
+
+/// Whether `ty` is `Vec<varyk_std::Value>` (an unshadowed `Vec`).
+fn is_values(ty: &Type, names: &Names) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+    if type_path.qself.is_some() || type_path.path.leading_colon.is_some() {
+        return false;
+    }
+    let [segment] = type_path.path.segments.iter().collect::<Vec<_>>()[..] else {
+        return false;
+    };
+    let name = ident_name(&segment.ident);
+    if name != "Vec" || names.shadowed.contains(&name) {
+        return false;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    let [GenericArgument::Type(Type::Path(inner))] = arguments.args.iter().collect::<Vec<_>>()[..]
+    else {
+        return false;
+    };
+    inner.qself.is_none() && std_item(&inner.path) == Some(StdItem::Value)
 }
 
 /// Maps a return type. A reference in return position is

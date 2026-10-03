@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0217]: this argument must be text written in the program
+ --> crates/varyk/tests/fixtures/errors/v0217_query_from_variable/main.vr:5:29
+  |
+5 |     println!("{}", ext::one(query));
+  |                             ^^^^^ this argument must be text written in the program
+  |
+  = note: `ext::one` takes only literal text, so no input can reach it
