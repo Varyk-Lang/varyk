@@ -24,8 +24,9 @@ it is Rust.
 
 A facade `.rs` module (M3 §1) can name only concrete types, so until now a
 package could not offer "read this row into whatever struct you name" or
-"take these values, however many". Milestone 5b3 adds five things a
-facade can say, and one convenience for adding a package:
+"take these values, however many". Milestone 5b3 adds four shapes a
+`.rs` facade can declare, one thing a `.vr` file can say, and one
+convenience for adding a package:
 
 1. a function or method with one type parameter standing for any Varyk
    data type, chosen from where the result goes (section 2.1);
@@ -102,9 +103,11 @@ The rules the importer applies:
   with `E` the error of section 2.4; `async` is allowed as for any
   imported function (M5b1);
 - the bound is `serde::de::DeserializeOwned` or
-  `varyk_std::serde::de::DeserializeOwned` (`varyk-std` re-exports
-  `serde`, so a facade needs no serde dependency of its own); `use` is
-  not read for it, as for any type in a signature (M3 §4);
+  `varyk_std::serde::de::DeserializeOwned`; `varyk-std` re-exports
+  `serde`, so the second spelling needs no serde dependency, while the
+  first needs `serde` in `[dependencies]` as rustc and the crate check of
+  M3 §4 require; `use` is not read for it, as for any type in a
+  signature (M3 §4);
 - two type parameters, a `where` clause, another bound, a lifetime
   parameter, or `T` in a parameter or elsewhere in the return keep
   today's rule: the function is imported but cannot be called (V0108),
@@ -127,10 +130,10 @@ all fix `T`. With no expected type (`match db.first(...).await? { .. }`,
 or a `let` without a type), the call is V0207, the message `json::parse`
 gives, with the help to write the type on the `let`.
 
-`T` may be any type a `json::parse` result may be (M5a §2.3): a number,
+`T` may be any type a `json::parse` result may be (M5a §2.9): a number,
 `bool`, `string`, `Option`, `Vec`, or `HashMap` of those, or a struct or
 enum declared in the current package. The type joins the serde reach
-analysis as a read type (M5a §3): its serde derive is generated, the
+analysis as a read type (M5a §2.4, §2.9): its serde derive is generated, the
 attributes `#[rename]`, `#[default]`, and `#[skip]` apply with their
 read-side checks (V0209), and a struct imported from a `.rs` module or
 declared in another package is V0210, as for `json::parse`.
@@ -159,8 +162,12 @@ types that can. A `Vec` of `Value` itself cannot be written, since Varyk
 code cannot name `Value` (section 5).
 
 Each argument is read, not given away, as an argument of `json::stringify`
-is (M5a §2.3): a string is copied into the `Value`, a number is copied.
-After the call the local is still usable.
+is (M5a §2.4): a number is copied, and a string is copied into the
+`Value`. After the call the local is still usable. That string copy is
+the hand-over: the callee owns its values (sqlx binds owned values), so
+the copy is the cost of sending the value out, as a literal placed into
+an owned slot is. It is the second allocation the compiler writes, and
+AGENTS.md's "no hidden allocation" rule names it beside the first.
 
 `varyk_std::Value` is
 
@@ -168,12 +175,13 @@ After the call the local is still usable.
 pub enum Value { Null, Bool(bool), Int(i64), Float(f64), Text(String) }
 ```
 
-with `From` for each of the Varyk types above and for `Option` of each
-(`None` is `Null`), so the generated Rust is
-`vec![::varyk_std::Value::from(id), ::varyk_std::Value::from(name.clone())]`.
-No conversion can fail. Which `From` the backend reaches is decided by
-the argument's type, so an `i32` becomes `Int` and an `f32` `Float`
-without a cast in Varyk code.
+with `From` for each of the Varyk types above, for `&str`, and for
+`Option` of each (`None` is `Null`), so the generated Rust is
+`vec![::varyk_std::Value::from(id), ::varyk_std::Value::from(name.as_str())]`,
+and `::varyk_std::Value::from("Ada")` for a literal. No conversion can
+fail. Which `From` the backend reaches is decided by the argument's type,
+so an `i32` becomes `Int` and an `f32` `Float` without a cast in Varyk
+code.
 
 A `Vec<varyk_std::Value>` anywhere but last, or a `varyk_std::Value`
 alone as a parameter or in a return, is V0108 with a note.
@@ -205,9 +213,10 @@ through; `varyk-sql` therefore puts every call that takes a query in its
 ### 2.4 `varyk_std::Error` in a signature
 
 A `.rs` signature may name `varyk_std::Error`, by that full path, as the
-error type of a returned `Result`: `Result<T, varyk_std::Error>`,
-`Result<(), varyk_std::Error>`, and the shapes of section 2.1. Varyk sees
-it as its own `Error` (M5a §2.1), so `?` works on the call's result in a
+error type of a returned `Result` whose `Ok` type is any type the
+"Calling Rust" table admits (`Result<Pool, varyk_std::Error>`,
+`Result<u64, ..>`, `Result<(), ..>`), or one of the shapes of section
+2.1. Varyk sees it as its own `Error` (M5a §2.3), so `?` works on the call's result in a
 function returning `Result<_, Error>`, and `match` opens it with `Err(e)`
 and reads `e.message()`.
 
@@ -216,8 +225,8 @@ package that needs it (section 10). A bare `Error` from a `use` keeps the
 "write the full path" refusal of M3 §4.
 
 Naming `varyk_std::Error` in a `.rs` signature counts as using `Error`
-(`names_error`, M5a §5), so the program's manifest needs `varyk-std`,
-which every package has (M5a §4.1).
+(`names_error`, M5a §7.3), so the program's manifest needs `varyk-std`,
+which every package has (M5a §5).
 
 ### 2.5 `pub use`
 
@@ -225,7 +234,7 @@ A `.vr` file may re-export one item of its own package:
 
 ```varyk
 // src/lib.vr of varyk-sql
-mod db;
+pub mod db;
 pub use db::connect;
 pub use db::connect_with;
 pub use db::Pool;
@@ -237,22 +246,21 @@ The rules:
 - the path names a function, struct, or enum (not a module) of the same
   package, through `pub` modules and items, declared in a `.vr` file or
   imported from a `.rs` module of the package; `crate::` and `self::` work
-  as in a `use` (M3 §2.4);
+  as in a `use` (M3 §3.3);
 - the item then has two names: its own path, and the module the `pub use`
   is in, so a program using the package writes `sql::connect(url)` and
-  `sql::Pool`, and the generated Rust writes `::sql::connect` too;
+  `sql::Pool` (and may still write `sql::db::connect`), and the generated
+  Rust writes `::sql::connect` too;
 - a name already declared or imported in the module is V0103, as for a
   `use`;
-- an item that is not `pub` all the way is V0105, and a type the item
-  names that outside users could not see is V0105 as today (M5b2 §2.3);
-  a type reached only through a `pub use` on a `pub` path counts as seen,
-  so `pub use db::Pool` lets `pub fn connect(...) -> Pool` in the private
-  module `db` pass;
+- an item that is not `pub` all the way is V0105, and the visibility rule
+  of M5b2 §2.3 is unchanged: the module the item comes from is `pub`, as
+  `pub mod db;` above, so every type the item names stays visible to
+  outside users;
 - `pub use` of a module, with braces, with a glob, with `as`, or of an
   item of another package is V0001, "not supported yet".
 
-A plain `use` is unchanged. Inside the package the item keeps its original
-path too.
+A plain `use` is unchanged.
 
 ### 2.6 `varyk add sql`
 
@@ -319,7 +327,8 @@ add`; naming `Value` from Varyk code; everything of 5b4.
 One addition, `varyk_std::Value` (section 2.2), in a new module
 `value.rs`, re-exported at the crate root beside `Error`. `From` impls
 for `bool`, `String`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`,
-`u8`, `u16`, `u32`, and `Option` of each. `Value` derives `Debug`,
+`u8`, `u16`, `u32`, for `&str`, and for `Option` of each owned type.
+`Value` derives `Debug`,
 `Clone`, and `PartialEq`. Nothing else in `varyk-std` changes; no new
 dependency.
 
@@ -354,10 +363,8 @@ Line numbers are approximate.
   `varyk-syntax/src/parser/item.rs` (~121): `pub use` parsed as a `use`
   with a visibility, registered as a re-export of the item it resolves
   to; V0001 for the forms of section 2.5; the package's exported items
-  (`resolve/mod.rs`, `ImportedSig` ~149) include re-exports under the
+  (`resolve/mod.rs`, `ImportedSig` ~173) include re-exports under the
   re-exporting module's path.
-- The V0105 "a type its users cannot see" check (M5b2 §2.3) counts a
-  type reachable through a `pub use` on a `pub` path.
 
 ### 6.3 Types
 
@@ -371,9 +378,9 @@ Line numbers are approximate.
   call with a type hole takes `T` from `expected` as `json::parse` does,
   with the same V0207, and adds `T` to the read reach set (V0210 for a
   Rust or foreign type).
-- `types/check/asyncs.rs` (`async_call` ~127) and `await_expr`
-  (`check.rs` ~968): the expected type reaches the call through `.await`
-  and `?`; a test pins it.
+- `types/check/asyncs.rs` (`async_call` ~127, `await_expr` ~51): the
+  expected type reaches the call through `.await` and `?`; a test pins
+  it.
 - `names_error` (`check.rs` ~230): an imported signature naming `Error`
   counts.
 - HIR: the call records the chosen `T`, the split between fixed and
@@ -383,8 +390,8 @@ Line numbers are approximate.
 
 - `callee` (~1180) writes the turbofish from the recorded `T`, using
   `rust_type`.
-- `args` (~768) writes the trailing `vec![..]` of `Value::from`, cloning
-  a string argument and copying the rest.
+- `args` (~768) writes the trailing `vec![..]` of `Value::from`, passing
+  a string argument as `&str` (section 2.2) and the rest by value.
 - `backend/rust.rs` writes `pub use crate::..;` for each re-export in a
   module and routes paths through re-exports (section 4).
 
@@ -417,8 +424,8 @@ clashes.
 - Interop unit tests: each accepted signature shape of sections 2.1-2.4,
   and each refused one with its note.
 - Resolver tests: `pub use` of a `.vr` item, of a `.rs` item, through
-  `crate::` and `self::`; each V0001 form; V0103 on a clash; V0105 lifted
-  by a re-export.
+  `crate::` and `self::`; each V0001 form; V0103 on a clash; V0105 on a
+  re-export of a non-`pub` item.
 - Type tests: `T` from a `let`, a parameter, a return, a field, through
   `?` and `.await`, and V0207 without; each trailing type, and V0218 for
   a struct, a `Vec`, and a `u64`; V0217 for a variable, a `format!`, and a
@@ -442,8 +449,9 @@ clashes.
 - The language-reference test (M4 §7) covers V0217 and V0218.
 - `docs/language.md` ("Calling Rust" gains the four signature shapes;
   "Modules" gains `pub use`; "Packages" gains the shorthand and points to
-  `varyk-sql`), `docs/design.md`, `docs/open-questions.md`, and
-  `docs/roadmap.md` updated.
+  `varyk-sql`), `docs/design.md`, `docs/open-questions.md`,
+  `docs/roadmap.md`, and AGENTS.md (the second allocation, section 2.2)
+  updated.
 - CI green, including the 1.85 build; no `unwrap`, `expect`, or other
   crash-on-absence call added.
 
@@ -466,8 +474,10 @@ The 5b3 list becomes:
 - `varyk-sql`, in its own repository, on sqlx: SQLite, Postgres, and
   MySQL, each a cargo feature; `connect` and `connect_with`, `migrate`,
   and on a pool or a transaction `one`, `first`, `all`, and `run`, each
-  taking a literal query and its values; rows read into structs by column
-  name.
+  taking the query and its values; rows read into structs by column name;
+  each database's own placeholders, passed through; the query text a
+  literal, so a query built from input is a compile error; no secret in
+  an error message.
 
 The `Serialize` half of the first item moves to 5b4, where the HTTP
 client needs it.
