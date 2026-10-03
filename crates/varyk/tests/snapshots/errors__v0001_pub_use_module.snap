@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0001]: `pub use` of a module is not supported yet
+ --> crates/varyk/tests/fixtures/errors/v0001_pub_use_module/main.vr:3:9
+  |
+3 | pub use shop::cart;
+  |         ^^^^^^^^^^ `pub use` of a module is not supported yet
+  |
+  = note: re-export each item of `shop::cart` with its own `pub use`, or write `shop::cart::..` where it is used

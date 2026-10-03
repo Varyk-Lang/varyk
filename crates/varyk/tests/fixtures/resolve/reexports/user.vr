@@ -1,0 +1,5 @@
+pub fn total() -> i32 {
+    let short: crate::Pool = crate::connect();
+    let long: crate::db::Pool = crate::db::connect();
+    short.size + long.size + crate::item() + crate::facade::item()
+}

@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    let query = "select 1";
+    println!("{}", ext::one(query));
+}

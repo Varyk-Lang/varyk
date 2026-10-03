@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0217]: this argument must be text written in the program
+ --> crates/varyk/tests/fixtures/errors/v0217_query_from_format/main.vr:6:27
+  |
+6 |     println!("{}", db.one(format!("select name from users where id = {}", id)));
+  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this argument must be text written in the program
+  |
+  = note: `one` takes only literal text, so no input can reach it
+  = note: pass the values after the text instead

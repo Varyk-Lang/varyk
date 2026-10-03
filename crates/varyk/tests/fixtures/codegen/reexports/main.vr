@@ -1,0 +1,9 @@
+pub mod db;
+mod app;
+
+pub use db::connect;
+pub use db::Pool;
+
+fn main() {
+    app::run();
+}

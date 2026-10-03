@@ -1,0 +1,16 @@
+pub struct Pool {
+    pub size: i32,
+}
+
+pub enum Mode {
+    Fast,
+    Slow,
+}
+
+pub fn connect() -> Pool {
+    Pool { size: 4 }
+}
+
+pub fn item() -> i32 {
+    7
+}

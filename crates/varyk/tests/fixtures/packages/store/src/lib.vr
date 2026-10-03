@@ -1,0 +1,6 @@
+pub mod kv;
+mod tests;
+
+pub use kv::open;
+pub use kv::Store;
+pub use kv::Batch;

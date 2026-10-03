@@ -1044,6 +1044,263 @@ fn imported_argument_and_return_mismatches_are_v0200() {
     );
 }
 
+/// The fixed and trailing arguments' types of the call `expr`, a free
+/// or method call.
+fn split_tys(expr: &HirExpr) -> (Vec<Ty>, Vec<Ty>) {
+    let (args, trailing) = match &expr.kind {
+        HirExprKind::Call { args, trailing, .. }
+        | HirExprKind::MethodCall { args, trailing, .. } => (args, trailing),
+        other => panic!("expected a call, got {other:?}"),
+    };
+    let tys = |exprs: &[HirExpr]| exprs.iter().map(|e| e.ty.clone()).collect();
+    (tys(args), tys(trailing))
+}
+
+/// Milestone 5b3 spec 2.2: zero or more trailing values of the admitted
+/// types after the fixed arguments, from a free, method, and associated
+/// call; a place as a value checks.
+#[test]
+fn trailing_values_of_each_admitted_type_check() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/trailing_values/main.vr");
+    let program = result.expect("should type-check");
+    assert!(program.uses_std);
+    let main = function(&program, "main");
+    let opt = |ty: Ty| Ty::Option(Box::new(ty));
+    let ints = [
+        IntKind::I8,
+        IntKind::I16,
+        IntKind::I32,
+        IntKind::I64,
+        IntKind::U8,
+        IntKind::U16,
+        IntKind::U32,
+    ];
+    let mut scalars = vec![
+        Ty::Bool,
+        Ty::String,
+        Ty::Float(FloatKind::F32),
+        Ty::Float(FloatKind::F64),
+    ];
+    scalars.extend(ints.iter().map(|kind| Ty::Int(*kind)));
+    let options: Vec<Ty> = scalars.iter().cloned().map(opt).collect();
+    let fixed = vec![Ty::String];
+    assert_eq!(split_tys(stmt_expr(main, 0)), (fixed.clone(), vec![]));
+    assert_eq!(split_tys(stmt_expr(main, 1)), (fixed.clone(), vec![I32]));
+    assert_eq!(
+        split_tys(stmt_expr(main, 2)),
+        (
+            fixed.clone(),
+            vec![Ty::Bool, Ty::String, Ty::Float(FloatKind::F64)]
+        )
+    );
+    assert_eq!(split_tys(stmt_expr(main, 14)), (fixed.clone(), scalars));
+    assert_eq!(split_tys(stmt_expr(main, 26)), (fixed.clone(), options));
+    assert_eq!(
+        split_tys(stmt_expr(main, 29)),
+        (fixed, vec![I64, Ty::String, opt(Ty::String), Ty::String])
+    );
+    assert_eq!(
+        split_tys(stmt_expr(main, 32)),
+        (vec![I64], vec![I64, Ty::String])
+    );
+    assert_eq!(
+        split_tys(stmt_expr(main, 33)),
+        (vec![], vec![I32, I32, I32])
+    );
+    // `Some(x)` is passed as `x` (the same value), so `x` is only read.
+    assert_eq!(
+        split_tys(stmt_expr(main, 34)),
+        (vec![Ty::String], vec![Ty::String, Ty::String, I64])
+    );
+}
+
+/// A struct, a `Vec`, a `HashMap`, and a `u64` are V0218 listing the
+/// admitted types; a bare `None` is V0207; too few fixed arguments is
+/// V0201 saying "at least".
+#[test]
+fn trailing_values_of_other_types_are_refused() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/interop/trailing_values_refused/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let found: Vec<(&str, Span)> = diagnostics.iter().map(|d| (d.code, d.span)).collect();
+    assert_eq!(
+        found,
+        vec![
+            (codes::V0218, part_of(&sources, "\"q\", user)", "user")),
+            (codes::V0218, part_of(&sources, "\"q\", list)", "list")),
+            (codes::V0218, part_of(&sources, "\"q\", counts)", "counts")),
+            (codes::V0218, part_of(&sources, "\"q\", big)", "big")),
+            (
+                codes::V0218,
+                part_of(&sources, "\"q\", big as u64)", "big as u64")
+            ),
+            (
+                codes::V0218,
+                part_of(
+                    &sources,
+                    "\"q\", Some(user.name.len()))",
+                    "Some(user.name.len())"
+                )
+            ),
+            (codes::V0207, part_of(&sources, "\"q\", None)", "None")),
+            (codes::V0201, span_of(&sources, "ext::run()")),
+        ],
+        "{diagnostics:#?}"
+    );
+    for diagnostic in &diagnostics[..6] {
+        assert!(
+            diagnostic.notes.iter().any(|n| n.contains(
+                "`bool`, `string`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, \
+                 or an `Option` of one of those"
+            )),
+            "{diagnostic:#?}"
+        );
+    }
+    assert!(
+        diagnostics[3].notes.iter().any(|n| n.contains("as i64")),
+        "{:#?}",
+        diagnostics[3]
+    );
+    assert!(diagnostics[3].fix_it.is_some(), "{:#?}", diagnostics[3]);
+    // No fix-it that would read `big as u64 as i64` or `Some(..) as i64`.
+    assert!(diagnostics[4].fix_it.is_none(), "{:#?}", diagnostics[4]);
+    assert!(diagnostics[5].fix_it.is_none(), "{:#?}", diagnostics[5]);
+    assert!(
+        diagnostics[5].message.contains("`Option<usize>`"),
+        "{:#?}",
+        diagnostics[5]
+    );
+    assert!(
+        diagnostics[7].message.contains("at least 1 argument"),
+        "{:#?}",
+        diagnostics[7]
+    );
+}
+
+/// The type filled in for the type parameter of the call `expr`, through
+/// `?` and `.await`.
+fn type_arg(expr: &HirExpr) -> Option<Ty> {
+    match &expr.kind {
+        HirExprKind::Call { type_arg, .. } | HirExprKind::MethodCall { type_arg, .. } => {
+            type_arg.clone()
+        }
+        HirExprKind::Await(inner) => type_arg(inner),
+        HirExprKind::Try { operand, .. } => type_arg(operand),
+        other => panic!("expected a call, got {other:?}"),
+    }
+}
+
+/// Milestone 5b3 spec 2.1: `T` is the type the result is used as, from a
+/// `let` with a type, a parameter, a return (a tail and an explicit
+/// `return`), and a struct literal's field, through `?` and `.await`; a
+/// number, `string`, `Option`, `Vec`, `HashMap`, struct, or enum; from a
+/// method, a free, and an associated call. The types it reaches are read
+/// by serde.
+#[test]
+fn a_type_parameter_is_filled_from_where_the_result_goes() {
+    let (result, _) = check_path("crates/varyk/tests/fixtures/interop/typed_results/main.vr");
+    let program = result.expect("should type-check");
+    assert!(program.uses_std);
+    let user = Ty::Struct(crate::resolve::StructId(0));
+    let role = Ty::Enum(crate::resolve::EnumId(0));
+    let load = function(&program, "load");
+    let map = Ty::HashMap(Box::new(Ty::String), Box::new(I64));
+    let filled: Vec<Option<Ty>> = (0..7).map(|at| type_arg(stmt_expr(load, at))).collect();
+    assert_eq!(
+        filled,
+        vec![
+            Some(I64),
+            Some(Ty::String),
+            Some(Ty::Option(Box::new(I64))),
+            Some(user.clone()),
+            Some(map.clone()),
+            Some(role.clone()),
+            Some(user.clone()),
+        ]
+    );
+    assert_eq!(local_ty(load, "maybe"), Ty::Option(Box::new(I64)));
+    assert_eq!(local_ty(load, "users"), Ty::Vec(Box::new(user.clone())));
+    assert_eq!(local_ty(load, "counts"), map);
+    assert_eq!(local_ty(load, "user"), Ty::Option(Box::new(user.clone())));
+    let awaited = Ty::Result(Box::new(user.clone()), Box::new(Ty::Error));
+    assert_eq!(local_ty(load, "awaited"), awaited);
+    // The parameter of `show`, and the field of `Holder`.
+    let HirExprKind::Call { args, .. } = &stmt_expr(load, 7).kind else {
+        panic!("a call of show");
+    };
+    assert_eq!(type_arg(&args[0]), Some(user.clone()));
+    let HirExprKind::StructLit { fields, .. } = &stmt_expr(load, 8).kind else {
+        panic!("a struct literal");
+    };
+    assert_eq!(type_arg(&fields[0].1), Some(user.clone()));
+    // A tail `.await` and an explicit `return`.
+    let tail = function(&program, "tail");
+    let Some(tail_expr) = &tail.body.tail else {
+        panic!("a tail");
+    };
+    assert_eq!(type_arg(tail_expr), Some(user.clone()));
+    let early = function(&program, "early");
+    let early_text = format!("{:?}", early.body);
+    assert!(
+        early_text.contains("type_arg: Some(Struct(StructId(0)))"),
+        "{early_text}"
+    );
+    assert_eq!(
+        program.structs[0].serde,
+        Serde {
+            serialize: false,
+            deserialize: true
+        }
+    );
+    assert_eq!(
+        program.enums[0].serde,
+        Serde {
+            serialize: false,
+            deserialize: true
+        }
+    );
+}
+
+/// Milestone 5b3 spec 2.1: with nothing expected, or started, the call
+/// is V0207 (the started one with a note); a `Result` of another shape
+/// is V0200; a struct from a `.rs` module is V0210; a read struct's
+/// attributes are checked (V0209).
+#[test]
+fn a_type_parameter_with_nowhere_to_come_from_is_refused() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/interop/typed_results_refused/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let found: Vec<(&str, Span)> = diagnostics.iter().map(|d| (d.code, d.span)).collect();
+    assert_eq!(
+        found,
+        vec![
+            (codes::V0207, span_of(&sources, "db.one(\"1\")")),
+            (codes::V0207, span_of(&sources, "db.first(\"2\")")),
+            (codes::V0207, span_of(&sources, "ext::fetch(\"3\")")),
+            (codes::V0200, span_of(&sources, "db.first(\"4\")")),
+            (codes::V0210, span_of(&sources, "ext::read(\"5\")")),
+            (codes::V0209, span_of(&sources, "secret: string")),
+        ],
+        "{diagnostics:#?}"
+    );
+    assert!(
+        diagnostics[0].message.contains(
+            "the type `db.one` reads cannot be worked out here; write the type, as in \
+                       `let u: User = db.one(..).await?;`"
+        ),
+        "{:#?}",
+        diagnostics[0]
+    );
+    let started = "a call that takes its type from where its result goes cannot be started; \
+                   add `.await`";
+    assert!(
+        diagnostics[2].notes.iter().any(|n| n == started),
+        "{:#?}",
+        diagnostics[2]
+    );
+    assert!(!diagnostics[0].notes.iter().any(|n| n == started));
+}
+
 // --- Examples and modes -----------------------------------------------------
 
 fn modes(function: &HirFunction) -> Vec<ParamMode> {

@@ -1,0 +1,9 @@
+pub mod db;
+
+pub use db::connect;
+
+fn connect() {}
+
+fn main() {
+    connect();
+}

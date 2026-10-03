@@ -887,8 +887,12 @@ fn walk_expr(expr: &mut HirExpr, visit: &mut impl FnMut(&mut HirExpr)) {
         | HirExprKind::Bool(_)
         | HirExprKind::String(_)
         | HirExprKind::Local(_) => {}
-        HirExprKind::Call { args, .. }
-        | HirExprKind::VecLit(args)
+        HirExprKind::Call { args, trailing, .. } => {
+            for arg in args.iter_mut().chain(trailing) {
+                walk_expr(arg, visit);
+            }
+        }
+        HirExprKind::VecLit(args)
         | HirExprKind::EnumLit { args, .. }
         | HirExprKind::Println { args, .. }
         | HirExprKind::Log { args, .. }
@@ -897,9 +901,14 @@ fn walk_expr(expr: &mut HirExpr, visit: &mut impl FnMut(&mut HirExpr)) {
                 walk_expr(arg, visit);
             }
         }
-        HirExprKind::MethodCall { receiver, args, .. } => {
+        HirExprKind::MethodCall {
+            receiver,
+            args,
+            trailing,
+            ..
+        } => {
             walk_expr(receiver, visit);
-            for arg in args {
+            for arg in args.iter_mut().chain(trailing) {
                 walk_expr(arg, visit);
             }
         }

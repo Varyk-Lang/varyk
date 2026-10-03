@@ -110,6 +110,14 @@ pub const V0215: &str = "V0215";
 /// `Shared` written anywhere but a parameter's or a `let`'s type
 /// (milestone 5b1 spec 2.6).
 pub const V0216: &str = "V0216";
+/// An argument to a `.rs` parameter of type `&'static str`, which takes
+/// only text written in the program, that is not a string literal
+/// (milestone 5b3 spec 2.3).
+pub const V0217: &str = "V0217";
+/// A value passed after the other arguments to a `.rs` function whose
+/// last parameter is `Vec<varyk_std::Value>`, of a type that cannot be
+/// one (milestone 5b3 spec 2.2).
+pub const V0218: &str = "V0218";
 /// Mutation through a non-`mut` parameter.
 pub const V0300: &str = "V0300";
 /// Assignment to an immutable `let` binding.
@@ -183,8 +191,8 @@ pub const ALL: &[&str] = &[
     V0001, V0002, V0003, V0010, V0011, V0012, V0100, V0101, V0102, V0103, V0104, V0105, V0106,
     V0107, V0108, V0109, V0110, V0111, V0112, V0113, V0114, V0115, V0200, V0201, V0202, V0203,
     V0204, V0205, V0206, V0207, V0208, V0209, V0210, V0211, V0212, V0213, V0214, V0215, V0216,
-    V0300, V0301, V0302, V0303, V0304, V0305, V0306, V0307, V0308, V0309, V0310, V0311, V0400,
-    V0401, V0402, V0403, V0404, V0405, V0406, V0900, V0901,
+    V0217, V0218, V0300, V0301, V0302, V0303, V0304, V0305, V0306, V0307, V0308, V0309, V0310,
+    V0311, V0400, V0401, V0402, V0403, V0404, V0405, V0406, V0900, V0901,
 ];
 
 #[cfg(test)]

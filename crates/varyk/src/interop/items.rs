@@ -7,11 +7,11 @@ use std::ops::Range;
 
 use quote::ToTokens;
 use syn::{
-    Fields, FnArg, ImplItem, Item, ItemImpl, ReceiverKind, ReturnType, Safety, Signature, Type,
-    UseTree, Visibility,
+    Fields, FnArg, GenericParam, ImplItem, Item, ItemImpl, ReceiverKind, ReturnType, Safety,
+    Signature, Type, TypeParamBound, UseTree, Visibility,
 };
 
-use super::signatures::{Names, map_param_type, map_return_type, map_value};
+use super::signatures::{Names, StdItem, map_param_type, map_return_type, map_value, std_item};
 use super::{
     CFG, CFG_PARAM, FieldVis, ImportError, ImportedEnum, ImportedField, ImportedFn, ImportedModule,
     ImportedStruct, ImportedVariant, REEXPORT, RustPath, RustTy, SelfMode, StructKind, TEST,
@@ -419,9 +419,10 @@ fn import_fn(
     }
     let mut receiver = None;
     let mut params = Vec::new();
-    for arg in &sig.inputs {
+    let last = sig.inputs.len().saturating_sub(1);
+    for (at, arg) in sig.inputs.iter().enumerate() {
         match arg {
-            FnArg::Typed(pat_type) => params.push(map_param_type(&pat_type.ty, names)),
+            FnArg::Typed(pat_type) => params.push(map_param_type(&pat_type.ty, names, at == last)),
             // Only `&self` and `&mut self` map (spec 4.2); any other
             // receiver is kept as an opaque first parameter, so the
             // method is never callable.
@@ -438,8 +439,8 @@ fn import_fn(
         }
     }
     let signature = sig.to_token_stream().to_string();
-    let generics = &sig.generics;
-    let generic = !generics.params.is_empty() || generics.where_clause.is_some();
+    let accepted = type_param(sig, names);
+    let generic = !sig.generics.params.is_empty() || sig.generics.where_clause.is_some();
     let is_async = sig.asyncness.is_some();
     // An async function's result outlives the call that starts it, so a
     // reference it returns is never rooted, and stays opaque (milestone
@@ -449,14 +450,17 @@ fn import_fn(
     } else {
         elided_root(sig, receiver, owner.is_some())
     };
-    let ret = if generic {
-        // Varyk cannot name a type argument, so a generic function is
-        // never callable; an opaque return type says so.
-        RustTy::Opaque(signature.clone())
-    } else {
-        match &sig.output {
-            ReturnType::Default => RustTy::Unit,
-            ReturnType::Type(_, ty) => map_return_type(ty, names, root.is_some()),
+    let (ret, type_param, type_param_refused) = match accepted {
+        Ok(Some((name, ret))) => (ret, Some(name), None),
+        // Varyk cannot name any other type argument, so such a function
+        // is never callable; an opaque return type says so.
+        Err(why) => (RustTy::Opaque(signature.clone()), None, Some(why)),
+        Ok(None) => {
+            let ret = match &sig.output {
+                ReturnType::Default => RustTy::Unit,
+                ReturnType::Type(_, ty) => map_return_type(ty, names, root.is_some()),
+            };
+            (ret, None, None)
         }
     };
     let ret_root = root.filter(|_| matches!(ret, RustTy::Str | RustTy::Ref(_)));
@@ -470,6 +474,87 @@ fn import_fn(
         ret_root,
         is_async,
         span: name_range(&sig.ident, text),
+        type_param,
+        type_param_refused,
+    })
+}
+
+/// The type parameter of `sig` and its mapped return type, when it is
+/// the one shape Varyk fills at the call (milestone 5b3 spec 2.1): one
+/// type parameter with the single inline bound `DeserializeOwned` by
+/// full path, no `where` clause and no other generic parameter, in the
+/// return only, as `Result<T, varyk_std::Error>`, `Result<Option<T>, ..>`,
+/// or `Result<Vec<T>, ..>`. `Ok(None)` for a signature with no generics;
+/// `Err` with why for any other generic one.
+fn type_param(sig: &Signature, names: &Names) -> Result<Option<(String, RustTy)>, &'static str> {
+    let generics = &sig.generics;
+    if generics.params.is_empty() && generics.where_clause.is_none() {
+        return Ok(None);
+    }
+    if generics.where_clause.is_some() {
+        return Err("a `where` clause");
+    }
+    let mut params = Vec::new();
+    for param in &generics.params {
+        match param {
+            GenericParam::Type(param) => params.push(param),
+            GenericParam::Lifetime(_) => return Err("a lifetime parameter"),
+            GenericParam::Const(_) => return Err("a const parameter"),
+        }
+    }
+    let [param] = params[..] else {
+        return Err("two or more type parameters");
+    };
+    let bounded = match param.bounds.iter().collect::<Vec<_>>()[..] {
+        [TypeParamBound::Trait(bound)] => {
+            bound.paren_token.is_none()
+                && bound.lifetimes.is_none()
+                && bound.maybe.is_none()
+                && std_item(&bound.path) == Some(StdItem::DeserializeOwned)
+        }
+        _ => false,
+    };
+    let name = ident_name(&param.ident);
+    let in_params = sig.inputs.iter().any(|arg| match arg {
+        FnArg::Typed(typed) => mentions(typed.ty.to_token_stream(), &name),
+        FnArg::Receiver(_) => false,
+    });
+    if in_params {
+        return Err("the type parameter in a parameter");
+    }
+    if !bounded || param.default.is_some() {
+        return Err("no bound, or a bound other than `serde::de::DeserializeOwned`");
+    }
+    let ReturnType::Type(_, ty) = &sig.output else {
+        return Err(ELSEWHERE);
+    };
+    let names = Names {
+        param: Some(name.clone()),
+        ..names.clone()
+    };
+    let ret = map_value(ty, &names);
+    let RustTy::Result(ok, err) = &ret else {
+        return Err(ELSEWHERE);
+    };
+    match (ok.as_ref(), err.as_ref()) {
+        (RustTy::Param, RustTy::Error) => {}
+        (RustTy::Option(inner) | RustTy::Vec(inner), RustTy::Error) if **inner == RustTy::Param => {
+        }
+        _ => return Err(ELSEWHERE),
+    }
+    Ok(Some((name, ret)))
+}
+
+/// Why a type parameter is refused when it is not where Varyk can fill
+/// it, or not in the return at all.
+const ELSEWHERE: &str = "a return that is not one of those three shapes";
+
+/// Whether `tokens` name the identifier `name` anywhere.
+fn mentions(tokens: proc_macro2::TokenStream, name: &str) -> bool {
+    tokens.into_iter().any(|token| match token {
+        proc_macro2::TokenTree::Ident(ident) => ident == name,
+        proc_macro2::TokenTree::Group(group) => mentions(group.stream(), name),
+        _ => false,
     })
 }
 

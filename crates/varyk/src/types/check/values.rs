@@ -14,8 +14,8 @@ use crate::builtins::{self, BuiltinId, Owner};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirExpr, HirExprKind, VariantRef};
 use crate::resolve::{
-    Callee, EnumId, LookupError, UserType, VariantFieldsDef, display_path, no_parent, not_visible,
-    path_text, shared_of_other, split_last,
+    Callee, EnumId, ImportedFnId, LookupError, ResultShape, UserType, VariantFieldsDef,
+    display_path, no_parent, not_visible, path_text, shared_of_other, split_last,
 };
 use crate::types::Ty;
 use crate::types::derives::{self, Direction, Medium};
@@ -241,11 +241,11 @@ impl FnChecker<'_> {
                 return None;
             }
         };
-        let (self_mode, params, ret) = match id {
+        let (self_mode, params, literal, variadic, ret) = match id {
             Callee::Varyk(fn_id) => {
                 let sig = &self.symbols.fns[fn_id.0 as usize];
                 let params: Vec<Ty> = sig.params.iter().map(|p| p.1.clone()).collect();
-                (sig.self_mode, params, sig.ret.clone())
+                (sig.self_mode, params, Vec::new(), false, sig.ret.clone())
             }
             Callee::Imported(imported) => {
                 let sig = &self.symbols.imported[imported.0 as usize];
@@ -254,8 +254,17 @@ impl FnChecker<'_> {
                         .push(unsupported_rust_signature(&full, sig, path_span));
                     return None;
                 }
+                // The call names `varyk-std` (milestone 5b3 spec 2.4).
+                self.uses_std |= sig.names_std;
                 let params: Vec<Ty> = sig.params.iter().map(|p| p.0.clone()).collect();
-                (sig.self_mode, params, sig.ret.clone())
+                let literal = sig.literal.clone();
+                (
+                    sig.self_mode,
+                    params,
+                    literal,
+                    sig.variadic,
+                    sig.ret.clone(),
+                )
             }
             Callee::Builtin(_) => unreachable!("a type's members are never built-ins"),
         };
@@ -279,11 +288,24 @@ impl FnChecker<'_> {
                 }
                 _ => false,
             };
-            let args = self.arguments(&full, &params, args.unwrap_or_default(), span)?;
+            let imported = match id {
+                Callee::Imported(imported) => Some(imported),
+                _ => None,
+            };
+            let filled = self.filled(imported, path_span, started, expected.as_ref(), span)?;
+            let (ret, type_arg) = match filled {
+                Some((ret, t)) => (ret, Some(t)),
+                None => (ret, None),
+            };
+            let args = args.unwrap_or_default();
+            let (args, trailing) =
+                self.arguments(&full, &params, &literal, variadic, args, span)?;
             return Some(HirExpr {
                 kind: HirExprKind::Call {
                     callee: id,
                     args,
+                    trailing,
+                    type_arg,
                     rooted: None,
                     started,
                 },
@@ -398,16 +420,18 @@ impl FnChecker<'_> {
                 };
                 self.type_hole(span, expected.as_ref(), found, what, shape);
             } else {
-                self.arguments(&full, &[], args, span);
+                self.arguments(&full, &[], &[], false, args, span);
             }
             return None;
         };
         let params: Vec<Ty> = entry.params.iter().map(|p| p.ty(&subst)).collect();
-        let args = self.arguments(&full, &params, args, span)?;
+        let (args, _) = self.arguments(&full, &params, &[], false, args, span)?;
         Some(HirExpr {
             kind: HirExprKind::Call {
                 callee: Callee::Builtin(id),
                 args,
+                trailing: Vec::new(),
+                type_arg: None,
                 rooted: None,
                 started,
             },
@@ -427,7 +451,7 @@ impl FnChecker<'_> {
         span: Span,
     ) -> Option<HirExpr> {
         let [value] = args else {
-            self.arguments("Shared::new", &[Ty::Unit], args, span);
+            self.arguments("Shared::new", &[Ty::Unit], &[], false, args, span);
             return None;
         };
         let inner = match expected {
@@ -444,6 +468,8 @@ impl FnChecker<'_> {
             kind: HirExprKind::Call {
                 callee: Callee::Builtin(id),
                 args: vec![value],
+                trailing: Vec::new(),
+                type_arg: None,
                 rooted: None,
                 started: false,
             },
@@ -498,12 +524,17 @@ impl FnChecker<'_> {
         let entry = id.get();
         let full = id.path();
         let (subst, args, ty, direction) = if entry.result == builtins::Shape::ResultOfExpected {
-            let read = self.read_type(&full, expected.as_ref(), span)?;
+            let written = match entry.owner {
+                Owner::Env => "()",
+                _ => "(..)",
+            };
+            let read =
+                self.read_type(&full, written, ResultShape::Plain, expected.as_ref(), span)?;
             let params: &[Ty] = match entry.owner {
                 Owner::Env => &[],
                 _ => &[Ty::String],
             };
-            let args = self.arguments(&full, params, args, span)?;
+            let (args, _) = self.arguments(&full, params, &[], false, args, span)?;
             let subst = builtins::Subst {
                 expected: read.clone(),
                 ..builtins::Subst::default()
@@ -513,7 +544,7 @@ impl FnChecker<'_> {
             let [arg] = args else {
                 // Only the count is reported: the parameter's type is
                 // whatever the argument's is.
-                self.arguments(&full, &[Ty::Unit], args, span);
+                self.arguments(&full, &[Ty::Unit], &[], false, args, span);
                 return None;
             };
             let arg = self.expr(arg, None)?;
@@ -526,44 +557,14 @@ impl FnChecker<'_> {
         };
         // An unfinished chain is V0208, from the walk after checking.
         if !ty.has_chain() {
-            let (structs, enums) = (&self.symbols.structs, &self.symbols.enums);
-            let env = entry.owner == Owner::Env;
-            let medium = if env { Medium::Env } else { Medium::Json };
-            let judged = if env {
-                derives::env_readable(structs, enums, &ty)
-            } else {
-                derives::convertible(structs, enums, &ty)
-            };
-            if let Err(blocked) = judged {
-                let verb = match direction {
-                    Direction::Serialize => "turned into",
-                    Direction::Deserialize => "read from",
-                };
-                let message = format!("`{}` cannot be {verb} {}", self.ty_name(&ty), medium.name());
-                // The part in the way is labelled at the field holding
-                // it, or, when the call's type holds it directly, told.
-                let mut diagnostic = Diagnostic::new(codes::V0210, span, message);
-                diagnostic = match blocked.at {
-                    Some(at) => diagnostic.with_label(at, blocked.label(medium)),
-                    None => diagnostic.with_note(blocked.label(medium)),
-                };
-                for note in blocked.notes(medium) {
-                    diagnostic = diagnostic.with_note(note);
-                }
-                self.diagnostics.push(diagnostic);
-                return None;
-            }
-            let reached = if env {
-                &mut *self.env_reached
-            } else {
-                &mut *self.reached
-            };
-            reached.add(structs, &ty, direction, span);
+            self.converted(&ty, entry.owner == Owner::Env, direction, span)?;
         }
         Some(HirExpr {
             kind: HirExprKind::Call {
                 callee: Callee::Builtin(id),
                 args,
+                trailing: Vec::new(),
+                type_arg: None,
                 rooted: None,
                 started: false,
             },
@@ -572,13 +573,62 @@ impl FnChecker<'_> {
         })
     }
 
-    /// The type `json::parse` or `env::parse` (`call`) reads: what the
-    /// `Result` it is expected to be holds, from where the call goes (M5a
-    /// spec 2.4). With nothing expected it is V0207.
-    fn read_type(&mut self, call: &str, expected: Option<&Ty>, span: Span) -> Option<Ty> {
-        let (args, what, name, binding) = match call {
-            "env::parse" => ("()", "the type `env::parse` reads", "Config", "c: Config"),
-            _ => ("(..)", "the type `json::parse` reads", "User", "u: User"),
+    /// Whether `ty` can go through `json`, or the environment when `env`
+    /// (M5a spec 2.4, 2.5), in `direction`: V0210 at `span` when it
+    /// cannot, else what it reaches is recorded for the derives.
+    fn converted(&mut self, ty: &Ty, env: bool, direction: Direction, span: Span) -> Option<()> {
+        let (structs, enums) = (&self.symbols.structs, &self.symbols.enums);
+        let medium = if env { Medium::Env } else { Medium::Json };
+        let judged = if env {
+            derives::env_readable(structs, enums, ty)
+        } else {
+            derives::convertible(structs, enums, ty)
+        };
+        if let Err(blocked) = judged {
+            let verb = match direction {
+                Direction::Serialize => "turned into",
+                Direction::Deserialize => "read from",
+            };
+            let message = format!("`{}` cannot be {verb} {}", self.ty_name(ty), medium.name());
+            // The part in the way is labelled at the field holding it, or,
+            // when the call's type holds it directly, told.
+            let mut diagnostic = Diagnostic::new(codes::V0210, span, message);
+            diagnostic = match blocked.at {
+                Some(at) => diagnostic.with_label(at, blocked.label(medium)),
+                None => diagnostic.with_note(blocked.label(medium)),
+            };
+            for note in blocked.notes(medium) {
+                diagnostic = diagnostic.with_note(note);
+            }
+            self.diagnostics.push(diagnostic);
+            return None;
+        }
+        let reached = if env {
+            &mut *self.env_reached
+        } else {
+            &mut *self.reached
+        };
+        reached.add(structs, ty, direction, span);
+        Some(())
+    }
+
+    /// The type `call`, written with `args` after it, reads: `json::parse`,
+    /// `env::parse`, or an imported function with a type hole. It is what
+    /// the `Result` it is expected to be holds, from where the call goes
+    /// (M5a spec 2.4). With nothing expected it is V0207.
+    fn read_type(
+        &mut self,
+        call: &str,
+        args: &str,
+        shape: ResultShape,
+        expected: Option<&Ty>,
+        span: Span,
+    ) -> Option<Ty> {
+        let (name, binding) = match (call, shape) {
+            ("env::parse", _) => ("Config".to_string(), "c: Config".to_string()),
+            (_, ResultShape::Plain) => ("User".to_string(), "u: User".to_string()),
+            (_, ResultShape::Option) => ("Option<User>".to_string(), "u: Option<User>".to_string()),
+            (_, ResultShape::Vec) => ("Vec<User>".to_string(), "u: Vec<User>".to_string()),
         };
         match expected {
             Some(Ty::Result(inner, _)) => Some((**inner).clone()),
@@ -592,10 +642,104 @@ impl FnChecker<'_> {
             }
             _ => {
                 let shape = format!("let {binding} = {call}{args}?;");
-                self.type_hole(span, expected, "Result<_, Error>", what, &shape);
+                let what = format!("the type `{call}` reads");
+                self.type_hole(span, expected, "Result<_, Error>", &what, &shape);
                 None
             }
         }
+    }
+
+    /// For a call, at `span`, of the imported function `imported` when it
+    /// has a type hole (milestone 5b3 spec 2.1): the call's type and the
+    /// `T` it fills in, from `expected` ([`FnChecker::result_hole`]);
+    /// `Some(None)` for any other call. `written` is the callee as the
+    /// program writes it, for the help.
+    pub(super) fn filled(
+        &mut self,
+        imported: Option<ImportedFnId>,
+        written: Span,
+        started: bool,
+        expected: Option<&Ty>,
+        span: Span,
+    ) -> Option<Option<(Ty, Ty)>> {
+        let Some(id) = imported else {
+            return Some(None);
+        };
+        let sig = &self.symbols.imported[id.0 as usize];
+        let Some(shape) = sig.result_hole else {
+            return Some(None);
+        };
+        let is_async = sig.is_async;
+        let call = self
+            .sources
+            .get(written.file.0 as usize)
+            .and_then(|source| {
+                source
+                    .text
+                    .get(written.start as usize..written.end as usize)
+            })
+            .unwrap_or(&sig.name)
+            .to_string();
+        self.result_hole(&call, shape, is_async, started, expected, span)
+            .map(Some)
+    }
+
+    /// The type of a call, at `span`, to an imported function whose return
+    /// is `Result<T, Error>` in `shape` (milestone 5b3 spec 2.1), and the
+    /// `T` it fills in: `T` is read from `expected` as `json::parse` reads
+    /// its type, and must be a type JSON can hold (V0210), joining what
+    /// the `json` calls reach. `call` is the callee as written; a
+    /// `started` call has no expected type (V0207).
+    pub(super) fn result_hole(
+        &mut self,
+        call: &str,
+        shape: ResultShape,
+        is_async: bool,
+        started: bool,
+        expected: Option<&Ty>,
+        span: Span,
+    ) -> Option<(Ty, Ty)> {
+        let args = if is_async { "(..).await" } else { "(..)" };
+        if started {
+            let what = format!("the type `{call}` reads");
+            let written = match shape {
+                ResultShape::Plain => "User",
+                ResultShape::Option => "Option<User>",
+                ResultShape::Vec => "Vec<User>",
+            };
+            let example = format!("let u: {written} = {call}{args}?;");
+            let diagnostic = self.hole_diagnostic(span, &what, &example).with_note(
+                "a call that takes its type from where its result goes cannot be started; add \
+                 `.await`",
+            );
+            self.diagnostics.push(diagnostic);
+            return None;
+        }
+        let read = self.read_type(call, args, shape, expected, span)?;
+        let t = match (shape, read) {
+            (ResultShape::Plain, t) => t,
+            (ResultShape::Option, Ty::Option(t)) | (ResultShape::Vec, Ty::Vec(t)) => *t,
+            (ResultShape::Option | ResultShape::Vec, read) => {
+                let found = match shape {
+                    ResultShape::Option => "Result<Option<_>, Error>",
+                    _ => "Result<Vec<_>, Error>",
+                };
+                // `read` came from an expected `Result`, which is named.
+                let wanted = match expected {
+                    Some(expected) => self.ty_name(expected),
+                    None => self.ty_name(&Ty::Result(Box::new(read), Box::new(Ty::Error))),
+                };
+                let message = format!("mismatched types: expected `{wanted}`, found `{found}`");
+                self.diagnostics
+                    .push(Diagnostic::new(codes::V0200, span, message));
+                return None;
+            }
+        };
+        if !t.has_chain() {
+            self.converted(&t, false, Direction::Deserialize, span)?;
+        }
+        let ret = Ty::Result(Box::new(shape.ok(t.clone())), Box::new(Ty::Error));
+        Some((ret, t))
     }
 
     /// The variant `name` of enum `id` (written `path::name`) as a value:
@@ -928,12 +1072,18 @@ impl FnChecker<'_> {
                 .push(Diagnostic::new(codes::V0200, span, message));
             return;
         }
+        let diagnostic = self.hole_diagnostic(span, what, shape);
+        self.diagnostics.push(diagnostic);
+    }
+
+    /// V0207 at `span`: `what` cannot be worked out, with `shape`, a `let`
+    /// that writes the type.
+    fn hole_diagnostic(&self, span: Span, what: &str, shape: &str) -> Diagnostic {
         let message = format!("{what} cannot be worked out here; write the type, as in `{shape}`");
-        let diagnostic = Diagnostic::new(codes::V0207, span, message).with_note(
+        Diagnostic::new(codes::V0207, span, message).with_note(
             "such a value takes its type from where it goes: a `let` with a written type, a \
              parameter, a return value, a field, or a `vec!` element after one whose type is \
              known; in Rust terms, the type cannot be inferred here",
-        );
-        self.diagnostics.push(diagnostic);
+        )
     }
 }

@@ -1,0 +1,4 @@
+fn main() {
+    let book: shelf::Book = shelf::item(3);
+    println!("{} {}", book.pages, shelf::store::item(4).pages);
+}

@@ -118,19 +118,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Enum) => self.parse_enum(start_span, is_pub).map(Item::Enum),
             Some(TokenKind::Impl) if !is_pub => self.parse_impl(start_span).map(Item::Impl),
             Some(TokenKind::Mod) => self.parse_mod(start_span, is_pub).map(Item::Mod),
-            Some(TokenKind::UseKw) => {
-                if is_pub {
-                    let use_span = self.current_span();
-                    let span = self.span_from(start_span, use_span);
-                    self.push_error(
-                        V0001,
-                        span,
-                        "`pub use` is not supported in Varyk yet; a `use` only shortens a name \
-                         inside this package, so write it without `pub`",
-                    );
-                }
-                self.parse_use(start_span).map(Item::Use)
-            }
+            Some(TokenKind::UseKw) => self.parse_use(start_span, is_pub).map(Item::Use),
             Some(TokenKind::ReservedKeyword(word)) => {
                 let word = word.clone();
                 let span = self.current_span();
@@ -527,12 +515,24 @@ impl<'a> Parser<'a> {
     }
 
     /// `use path;` or `use path as name;` (spec 3.3), right after `use` has
-    /// been recognized but not yet consumed.
-    fn parse_use(&mut self, start_span: Span) -> Result<UseDecl, ()> {
+    /// been recognized but not yet consumed; `is_pub` for a `pub use`
+    /// (milestone 5b3 spec 2.5), whose `as` is `V0001`.
+    fn parse_use(&mut self, start_span: Span, is_pub: bool) -> Result<UseDecl, ()> {
         self.bump(); // `use`
         let path = self.parse_use_path()?;
         let alias = if self.bump_if(&TokenKind::As) {
-            Some(self.expect_name_identifier("a name after `as`")?)
+            let alias = self.expect_name_identifier("a name after `as`")?;
+            // A re-export under another name (milestone 5b3 spec 2.5).
+            if is_pub {
+                let span = self.span_from(start_span, alias.span);
+                self.push_error(
+                    V0001,
+                    span,
+                    "`pub use` with `as` is not supported yet; re-export the item under its own \
+                     name, or write a plain `use` to rename it inside this file",
+                );
+            }
+            Some(alias)
         } else {
             None
         };
@@ -540,6 +540,7 @@ impl<'a> Parser<'a> {
         let span = self.span_from(start_span, semi.span);
         Ok(UseDecl {
             attrs: Vec::new(),
+            is_pub,
             path,
             alias,
             span,
@@ -1185,19 +1186,34 @@ mod tests {
     }
 
     #[test]
-    fn pub_use_is_v0001() {
-        let (program, errors) = parse_program("pub use a::B;");
+    fn pub_use_parses_as_a_use_marked_pub() {
+        let program = parse_program_ok("pub use a::b;");
+        let u = only_use(&program);
+        assert!(u.is_pub);
+        assert!(u.alias.is_none());
+        let names: Vec<&str> = u.path.segments.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+        assert!(!only_use(&parse_program_ok("use a::b;")).is_pub);
+    }
+
+    #[test]
+    fn pub_use_with_as_is_v0001() {
+        let (program, errors) = parse_program("pub use a::b as c;");
         let v0001 = errors
             .iter()
             .find(|e| e.code == V0001)
             .expect("expected a V0001");
+        assert!(
+            v0001.message.contains("not supported yet"),
+            "{}",
+            v0001.message
+        );
         assert!(v0001.message.contains("pub use"), "{}", v0001.message);
-        assert!(v0001.message.contains("without `pub`"), "{}", v0001.message);
         // Reported, but the `use` still parses: `V0001` must not stop
         // parsing.
         let u = only_use(&program);
-        let names: Vec<&str> = u.path.segments.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["a", "B"]);
+        assert!(u.is_pub);
+        assert_eq!(u.alias.as_ref().map(|a| a.name.as_str()), Some("c"));
     }
 
     // --- Enums (spec 2.2) --------------------------------------------------

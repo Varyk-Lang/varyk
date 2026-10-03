@@ -148,18 +148,22 @@ stays small, and anything heavy is a package the writer adds.
 
 ### Milestone 5b3: facades and `varyk-sql`
 
-- [ ] A `.rs` function with one type parameter standing for any Varyk data type (serde's `Serialize` or `DeserializeOwned`), chosen from the argument or from where the result goes
-- [ ] A `.rs` function whose last parameter takes any number of data values
-- [ ] A `.rs` parameter of type `&'static str` taking only text written in the program
-- [ ] `varyk_std::Error` in a `.rs` signature
-- [ ] `pub use` in a `.vr` file, and `varyk add` shorthands for official packages
-- [ ] `varyk-sql` on sqlx: SQLite, Postgres, and MySQL, each a cargo feature; `sql::connect(url)`, and on a pool `one`, `first`, `all`, and `run`, each taking the query and its values; rows read into structs by column name; each database's own placeholders, passed through; the query text a literal, so a query built from input is a compile error; no secret in an error message
+- [x] A `.rs` function or method with one type parameter standing for any Varyk data type, chosen from where the result goes
+- [x] A `.rs` function whose last parameter takes any number of scalar values (`varyk_std::Value`)
+- [x] A `.rs` parameter of type `&'static str` taking only text written in the program
+- [x] `varyk_std::Error` as the error type of a `.rs` function's result
+- [x] `pub use` in a `.vr` file, and `varyk add sql`
+- [ ] `varyk-sql`, in its own repository, on sqlx: SQLite, Postgres, and MySQL, each a cargo feature; `connect` and `connect_with`, `migrate`, `begin` and `commit`, and on a pool or a transaction `one`, `first`, `all`, and `run`, each taking the query and its values; rows read into structs by column name; each database's own placeholders, passed through; the query text a literal, so a query built from input is a compile error; no secret in an error message
+
+The `Serialize` half of the type parameter, for sending a Varyk value out,
+moves to 5b4, where the HTTP client needs it.
 
 ### Milestone 5b4: `varyk-http` and the golden path
 
 - [ ] An HTTP server with an explicit route table (`app.get("/users/{id}", get_user)`); a handler's parameters bound by name to the route, by type to the JSON body and to shared state (a `Shared<T>`); the route checked against the handler by `varyk check`; the return value as the response, `None` as 404
 - [ ] `Error` carrying an optional status set by constructors (`http::bad_request(..)`); an error without one is a 500 whose message is logged and not sent
 - [ ] An HTTP client in the same package
+- [ ] A `.rs` function with a type parameter `&T: Serialize` in a parameter, for sending a Varyk value out, which the HTTP client needs (moved from 5b3)
 - [ ] The `users` API on a database, and the fifteen-minute path: `varyk init`, `varyk add http sql`, one file, and `varyk run`
 - [ ] An agent evaluation: the examples written by a model from `docs/language.md` alone, pass rates published, before any page claims that agents write Varyk well
 
@@ -182,7 +186,7 @@ milestone 5b3 makes unnecessary for what a facade needs (moved from 5b2).
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
 
-TOML, beside the rest of the cuts listed under "Not in milestone 5b2" in
+TOML, beside the rest of the cuts listed under "Not in milestone 5b3" in
 [language.md](language.md): nothing on the golden path needs it, and the
 same machinery adds it later.
 

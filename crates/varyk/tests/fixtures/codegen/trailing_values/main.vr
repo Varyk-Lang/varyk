@@ -1,0 +1,23 @@
+mod ext;
+
+struct User {
+    name: string,
+    age: i64,
+}
+
+fn main() {
+    let id: i64 = 7;
+    let name = format!("user {}", id);
+    let maybe: Option<string> = Some("nick");
+    let user = User { name: "Ada", age: 36 };
+    let none = ext::run("delete from users");
+    let three = ext::run("insert into users (id, name, nick) values (?, ?, ?)", id, name, "Ada");
+    let some = ext::run("update users set nick = ? where name = ?", Some("Ada"), Some(name));
+    let db = ext::Db::new();
+    let two = db.exec("update users set nick = ? where age = ?", maybe, user.age);
+    println!("{} {} {} {} {} {}", none, three, some, two, name, user.name);
+    match maybe {
+        Some(nick) => println!("{}", nick),
+        None => println!("none"),
+    }
+}

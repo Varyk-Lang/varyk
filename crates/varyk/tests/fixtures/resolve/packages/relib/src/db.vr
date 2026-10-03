@@ -1,0 +1,7 @@
+pub struct Thing {
+    pub size: i32,
+}
+
+pub fn item() -> Thing {
+    Thing { size: 1 }
+}

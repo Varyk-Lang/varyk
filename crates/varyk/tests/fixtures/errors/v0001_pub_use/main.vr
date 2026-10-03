@@ -1,3 +1,0 @@
-fn main() {}
-
-pub use a::B;

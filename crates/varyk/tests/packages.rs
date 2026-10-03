@@ -712,6 +712,52 @@ fn a_leftover_build_script_and_stub_beside_the_vr_root_are_ignored() {
     );
 }
 
+/// A package whose only use of `varyk-std` is a call to a facade
+/// returning `Result<_, varyk_std::Error>`, opened by a `match` whose
+/// `Err(_)` binds nothing (so no local or return of the program has the
+/// type `Error`), still needs the `varyk-std` line: V0404 says which
+/// (milestone 5b3 spec 2.4, M5a spec 5.1).
+#[test]
+fn a_call_to_a_facade_naming_varyk_std_error_needs_the_varyk_std_line() {
+    let dir = empty_dir("facade_error_without_std");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [[bin]]\nname = \"app\"\npath = \"src/main.vr\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src/ext.rs"),
+        "pub fn load(id: i64) -> Result<i64, varyk_std::Error> {\n    Ok(id)\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src/main.vr"),
+        "mod ext;\n\nfn main() {\n    match ext::load(1) {\n        \
+         Ok(n) => println!(\"{}\", n),\n        Err(_) => println!(\"failed\"),\n    \
+         }\n}\n",
+    )
+    .unwrap();
+
+    let output = varyk_in(&dir, &["check"]);
+
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let stderr = stderr(&output);
+    assert!(stderr.contains("V0404"), "{stderr}");
+    assert!(
+        stderr.contains("needs `varyk-std`, which `Cargo.toml` does not list"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "write `varyk-std = \"{}\"` under `[dependencies]`",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{stderr}"
+    );
+}
+
 /// `varyk add --path ../lib` works in a package `init` made: cargo can
 /// read its manifest, which names the `.vr` root, without a stub.
 #[test]
@@ -1160,6 +1206,45 @@ fn publish_assemble_only_assembles_prints_the_directory_and_runs_no_cargo() {
     assert!(!dest.join("target").exists(), "cargo ran in the assembly");
 }
 
+/// A generated `use` or `pub use` carries only a lint allow clippy accepts
+/// there: `cargo clippy` on the assembled crate has no `useless_attribute`.
+#[test]
+fn an_assembled_crate_with_a_pub_use_passes_clippy() {
+    let dir = empty_dir("pub-use-clippy");
+    fs::create_dir_all(dir.join("src")).expect("create src");
+    fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"pubuse\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+         description = \"pub use\"\nlicense = \"MIT\"\n\n[lib]\npath = \"src/lib.vr\"\n",
+    )
+    .expect("write Cargo.toml");
+    fs::write(dir.join("src/lib.vr"), "pub mod m;\npub use m::one;\n").expect("write lib.vr");
+    fs::write(dir.join("src/m.vr"), "pub fn one() -> i32 {\n    1\n}\n").expect("write m.vr");
+
+    let output = varyk_in(&dir, &["publish", "--assemble-only"]);
+    assert_success(&output);
+    let krate = dir.join(stdout(&output).trim_end());
+    let lib_rs = fs::read_to_string(krate.join("src/lib.rs")).expect("read lib.rs");
+    assert!(
+        lib_rs.contains("#[allow(unused_imports)]\npub use crate::m::one;"),
+        "{lib_rs}"
+    );
+
+    let clippy = Command::new("cargo")
+        .args(["clippy", "--color", "never", "--", "-D", "warnings"])
+        .current_dir(&krate)
+        .output();
+    match clippy {
+        Ok(out) if String::from_utf8_lossy(&out.stderr).contains("no such command") => {}
+        Ok(out) => assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        Err(e) => panic!("cannot run cargo: {e}"),
+    }
+}
+
 #[test]
 fn publish_assemble_makes_a_relative_dev_dependency_path_absolute() {
     let dir = package_dir("lib");
@@ -1485,6 +1570,24 @@ fn a_package_reached_twice_is_checked_once_with_one_type() {
         .filter(|def| def.name == "Meters")
         .count();
     assert_eq!(meters, 1);
+}
+
+/// A program names a package's `pub use` item by the short path (and
+/// still by the item's own), checks, builds, and runs; its generated Rust
+/// writes the item's own path, and the package's root a `pub use` line
+/// (milestone 5b3 spec 2.5, 4).
+#[test]
+fn a_package_item_reexported_with_pub_use_is_named_by_the_short_path() {
+    let dir = package_dir("reexport");
+    assert_success(&varyk_in(&dir, &["check"]));
+    let output = varyk_in(&dir, &["run"]);
+    assert_success(&output);
+    assert_eq!(stdout(&output), "3 4\n");
+    let main = fs::read_to_string(dir.join("target/varyk/reexport/src/main.rs")).unwrap();
+    assert!(main.contains("::shelf::store::item(3)"), "{main}");
+    let lib = fs::read_to_string(dir.join("target/varyk/packages/shelf-0.1.0/src/lib.rs")).unwrap();
+    assert!(lib.contains("pub use crate::store::item;"), "{lib}");
+    assert!(lib.contains("pub use crate::store::Book;"), "{lib}");
 }
 
 /// A copy of `diamond` whose `units` has the `.rs` module `helper.rs`

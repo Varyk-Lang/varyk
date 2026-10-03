@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: app_rs
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+pub fn run() {
+    show(&crate::db::connect(3));
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn show(pool: &crate::db::Pool) {
+    ::std::println!("{}", pool.size);
+}

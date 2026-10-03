@@ -211,7 +211,7 @@ pub fn typecheck(
         .collect();
 
     Ok(HirProgram {
-        uses_std: uses_std || names_error(symbols, &functions),
+        uses_std: uses_std || names_error(symbols, &functions) || own_rust_names_std(symbols),
         logs,
         modules,
         functions,
@@ -221,6 +221,17 @@ pub fn typecheck(
         entry: resolved.entry,
         package_modules,
     })
+}
+
+/// Whether a signature of one of the program's own `.rs` modules names
+/// `varyk-std`, called or not: rustc compiles the module whole
+/// (milestone 5b3 spec 2.4). One reached through a dependency package
+/// counts only where it is called.
+fn own_rust_names_std(symbols: &Symbols) -> bool {
+    symbols
+        .imported
+        .iter()
+        .any(|sig| sig.package.is_none() && sig.names_std)
 }
 
 /// Whether the program names `Error` (M5a spec 1): in a signature, a
@@ -263,6 +274,7 @@ fn hir_use(symbols: &Symbols, module: ModuleId, order: usize, decl: &UseDecl) ->
     HirUse {
         path,
         alias: decl.alias.as_ref().map(|alias| alias.name.clone()),
+        is_pub: decl.is_pub,
         span: decl.span,
     }
 }
@@ -1449,11 +1461,13 @@ impl FnChecker<'_> {
             }
         }
 
-        let (params, ret): (Vec<Ty>, Ty) = match found {
+        let (params, literal, variadic, ret): (Vec<Ty>, Vec<bool>, bool, Ty) = match found {
             Callee::Varyk(id) => {
                 let sig = &self.symbols.fns[id.0 as usize];
                 (
                     sig.params.iter().map(|p| p.1.clone()).collect(),
+                    Vec::new(),
+                    false,
                     sig.ret.clone(),
                 )
             }
@@ -1464,8 +1478,12 @@ impl FnChecker<'_> {
                         .push(unsupported_rust_signature(&path, sig, span));
                     return None;
                 }
+                // The call names `varyk-std` (milestone 5b3 spec 2.4).
+                self.uses_std |= sig.names_std;
                 let found = (
                     sig.params.iter().map(|p| p.0.clone()).collect(),
+                    sig.literal.clone(),
+                    sig.variadic,
                     sig.ret.clone(),
                 );
                 if sig.is_async {
@@ -1476,11 +1494,24 @@ impl FnChecker<'_> {
             Callee::Builtin(_) => unreachable!("a plain name never finds a built-in"),
         };
 
-        let args = self.arguments(&path, &params, args, span)?;
+        // A type hole is filled from where the result goes (milestone 5b3
+        // spec 2.1).
+        let imported = match found {
+            Callee::Imported(id) => Some(id),
+            _ => None,
+        };
+        let (ret, type_arg) =
+            match self.filled(imported, callee.span, started, expected.as_ref(), span)? {
+                Some((ret, t)) => (ret, Some(t)),
+                None => (ret, None),
+            };
+        let (args, trailing) = self.arguments(&path, &params, &literal, variadic, args, span)?;
         Some(HirExpr {
             kind: HirExprKind::Call {
                 callee: found,
                 args,
+                trailing,
+                type_arg,
                 rooted: None,
                 started,
             },
@@ -1517,7 +1548,7 @@ impl FnChecker<'_> {
         }
         let (cond, kind) = if name == "assert" {
             let [cond] = args else {
-                self.arguments(name, &[Ty::Bool], args, span);
+                self.arguments(name, &[Ty::Bool], &[], false, args, span);
                 return None;
             };
             let cond = self
@@ -1560,17 +1591,28 @@ impl FnChecker<'_> {
 
     /// The arguments of a call to `path` (at `span`), each typed against
     /// its parameter type in `params`; V0201 when the count differs.
+    /// `literal` says, per parameter, whether it takes only text written
+    /// in the program (milestone 5b3 spec 2.3): any other argument there
+    /// is V0217. It is empty for a callee with no such parameter.
+    ///
+    /// When `variadic` (milestone 5b3 spec 2.2), the arguments after
+    /// `params` are values, each typed with nothing expected and of a
+    /// type [`is_value_type`] admits (V0218), returned apart from the
+    /// fixed ones; there may be none, and V0201 says "at least".
     fn arguments(
         &mut self,
         path: &str,
         params: &[Ty],
+        literal: &[bool],
+        variadic: bool,
         args: &[Expr],
         span: Span,
-    ) -> Option<Vec<HirExpr>> {
-        if args.len() != params.len() {
+    ) -> Option<(Vec<HirExpr>, Vec<HirExpr>)> {
+        if args.len() < params.len() || (!variadic && args.len() > params.len()) {
             let plural = |n: usize| if n == 1 { "" } else { "s" };
             let message = format!(
-                "`{path}` takes {} argument{} but {} {} given",
+                "`{path}` takes {}{} argument{} but {} {} given",
+                if variadic { "at least " } else { "" },
                 params.len(),
                 plural(params.len()),
                 args.len(),
@@ -1580,14 +1622,83 @@ impl FnChecker<'_> {
                 .push(Diagnostic::new(codes::V0201, span, message));
             return None;
         }
+        let (fixed, values) = args.split_at(params.len());
         let mut checked = Vec::new();
-        for (arg, ty) in args.iter().zip(params) {
+        for (at, (arg, ty)) in fixed.iter().zip(params).enumerate() {
+            if literal.get(at) == Some(&true) && !matches!(arg.kind, ExprKind::String(_)) {
+                self.diagnostics.push(not_literal_text(path, arg));
+                checked.push(None);
+                continue;
+            }
             checked.push(
                 self.expr(arg, Some(ty.clone()))
                     .and_then(|arg| self.expect(arg, ty)),
             );
         }
-        checked.into_iter().collect()
+        let mut trailing = Vec::new();
+        for arg in values {
+            // `Some(x)` is passed as `x`, which `Value::from` turns into
+            // the same value: `x` is read in place, not put into a new
+            // `Option`, which would move or copy it.
+            let inner = some_operand(arg);
+            let value = self.expr(inner.unwrap_or(arg), None);
+            trailing.push(match value {
+                Some(value) if inner.is_some() => {
+                    let ty = Ty::Option(Box::new(value.ty.clone()));
+                    if is_value_type(&ty) {
+                        Some(value)
+                    } else {
+                        let diagnostic = self.not_a_value(path, arg, &ty);
+                        self.diagnostics.push(diagnostic);
+                        None
+                    }
+                }
+                Some(value) if !is_value_type(&value.ty) => {
+                    let diagnostic = self.not_a_value(path, arg, &value.ty);
+                    self.diagnostics.push(diagnostic);
+                    None
+                }
+                value => value,
+            });
+        }
+        let fixed: Option<Vec<HirExpr>> = checked.into_iter().collect();
+        let trailing: Option<Vec<HirExpr>> = trailing.into_iter().collect();
+        Some((fixed?, trailing?))
+    }
+
+    /// V0218 at `arg`, a value of type `ty` passed after the other
+    /// arguments of `path` (milestone 5b3 spec 2.2), listing the types
+    /// that can be; for a `u64` or `usize`, the cast that makes it one.
+    fn not_a_value(&self, path: &str, arg: &Expr, ty: &Ty) -> Diagnostic {
+        let diagnostic = Diagnostic::new(
+            codes::V0218,
+            arg.span,
+            format!(
+                "a value of type `{}` cannot be passed here",
+                self.ty_name(ty)
+            ),
+        )
+        .with_note(format!(
+            "after its other arguments, `{path}` takes values of type `bool`, `string`, `f32`, \
+             `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, or an `Option` of one of \
+             those"
+        ));
+        if !matches!(ty, Ty::Int(IntKind::U64 | IntKind::Usize)) {
+            return diagnostic;
+        }
+        let diagnostic = diagnostic.with_note(format!(
+            "a `{}` can be larger than an `i64` holds; write `as i64` to pass it as an `i64`",
+            self.ty_name(ty)
+        ));
+        match arg.kind {
+            // `as` binds tighter than an operator, and a second cast
+            // would read `x as u64 as i64`.
+            ExprKind::Binary { .. } | ExprKind::Unary { .. } | ExprKind::Cast { .. } => diagnostic,
+            _ => diagnostic.with_fix_it(FixIt {
+                span: Span::new(arg.span.file, arg.span.end, arg.span.end),
+                replacement: " as i64".to_string(),
+            }),
+        }
     }
 
     /// `Name { .. }`, or `path::Name { .. }` for a `pub` struct of the
@@ -2153,8 +2264,11 @@ fn unfinished_chains(expr: &HirExpr, next: bool, out: &mut Vec<Diagnostic>) {
         | HirExprKind::Bool(_)
         | HirExprKind::String(_)
         | HirExprKind::Local(_) => {}
-        HirExprKind::Call { args, .. }
-        | HirExprKind::Println { args, .. }
+        HirExprKind::Call { args, trailing, .. } => {
+            each(args, out);
+            each(trailing, out);
+        }
+        HirExprKind::Println { args, .. }
         | HirExprKind::Log { args, .. }
         | HirExprKind::Format { args, .. }
         | HirExprKind::EnumLit { args, .. }
@@ -2163,12 +2277,14 @@ fn unfinished_chains(expr: &HirExpr, next: bool, out: &mut Vec<Diagnostic>) {
             receiver,
             method,
             args,
+            trailing,
             ..
         } => {
             let on_chain =
                 matches!(method, MethodRef::Builtin(id) if id.get().owner == Owner::Chain);
             unfinished_chains(receiver, on_chain, out);
             each(args, out);
+            each(trailing, out);
         }
         HirExprKind::Field { base, .. } => unfinished_chains(base, false, out),
         HirExprKind::Index { base, index } => {
@@ -2319,6 +2435,52 @@ fn expr_diverges(expr: &HirExpr) -> bool {
 
 fn block_diverges(block: &HirBlock) -> bool {
     block.stmts.iter().any(stmt_diverges) || block.tail.as_deref().is_some_and(expr_diverges)
+}
+
+/// `x` when `arg` is `Some(x)`, the built-in variant.
+fn some_operand(arg: &Expr) -> Option<&Expr> {
+    let ExprKind::Call { callee, args } = &arg.kind else {
+        return None;
+    };
+    match (&callee.kind, args.as_slice()) {
+        (ExprKind::Path { path: None, name }, [inner]) if name.name == "Some" => Some(inner),
+        _ => None,
+    }
+}
+
+/// Whether a value of type `ty` can be passed after the other arguments
+/// to a `Vec<varyk_std::Value>` parameter (milestone 5b3 spec 2.2): a
+/// type `varyk_std::Value::from` takes, which no conversion can fail.
+fn is_value_type(ty: &Ty) -> bool {
+    let scalar = |ty: &Ty| match ty {
+        Ty::Bool | Ty::String | Ty::Float(_) => true,
+        Ty::Int(kind) => !matches!(kind, IntKind::U64 | IntKind::Usize),
+        _ => false,
+    };
+    match ty {
+        Ty::Option(inner) => scalar(inner),
+        other => scalar(other),
+    }
+}
+
+/// V0217 at `arg`, an argument to a parameter of `path` that takes only
+/// text written in the program (milestone 5b3 spec 2.3); for a
+/// `format!`, how to pass its values instead.
+fn not_literal_text(path: &str, arg: &Expr) -> Diagnostic {
+    let diagnostic = Diagnostic::new(
+        codes::V0217,
+        arg.span,
+        "this argument must be text written in the program",
+    )
+    .with_note(format!(
+        "`{path}` takes only literal text, so no input can reach it"
+    ));
+    match &arg.kind {
+        ExprKind::Intrinsic { name, .. } if name.name == "format" => {
+            diagnostic.with_note("pass the values after the text instead")
+        }
+        _ => diagnostic,
+    }
 }
 
 /// V0108 at `span` for a call to the imported `path` whose Rust signature

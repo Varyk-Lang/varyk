@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0103]: the name `connect` is defined more than once
+ --> crates/varyk/tests/fixtures/errors/v0103_pub_use_clash/main.vr:3:13
+  |
+3 | pub use db::connect;
+  |             ^^^^^^^ the name `connect` is defined more than once
+4 |
+5 | fn connect() {}
+  | --------------- `connect` first defined here
