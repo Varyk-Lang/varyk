@@ -54,7 +54,8 @@ and a program write
 let user: User = db.one("select id, name from users where id = ?", id).await?;
 ```
 
-Nothing here is a language feature of Varyk itself: a Varyk function still
+Apart from `pub use`, nothing here is a language feature of Varyk
+itself: a Varyk function still
 has no type parameters, no variadic parameter, and no literal-only
 parameter. These are shapes the importer accepts in a `.rs` signature, and
 rules for calling them. The facade rule stands: a crate is reached through
@@ -128,9 +129,10 @@ let n: i64 = db.one("select count(*) from users").await?;
 
 all fix `T`. With no expected type (`match db.first(...).await? { .. }`,
 or a `let` without a type), the call is V0207, the message `json::parse`
-gives, with the help to write the type on the `let`. A started call
-(M5b1 §2.2) has no expected type either, so such a call is always
-awaited, never started into a task.
+gives, with the help to write the type on the `let`. A call in started
+position (M5b1 §2.2, no `.await`) has no expected type either and is
+refused with V0207 and the note "a call that takes its type from where
+its result goes cannot be started; add `.await`".
 
 `T` may be any type a `json::parse` result may be (M5a §2.9): a number,
 `bool`, `string`, `Option`, `Vec`, or `HashMap` of those, or a struct or
@@ -161,7 +163,7 @@ and `usize` are not accepted, since they do not fit `Int`; write `n as
 i64`. Anything else (a struct, a `Vec`, a `HashMap`, a `Result`) is
 V0218, "a value of this type cannot be passed here", with the list of
 types that can. A `Vec` of `Value` itself cannot be written, since Varyk
-code cannot name `Value` (section 5).
+code cannot name `Value` (section 3).
 
 Each argument is read, not given away, as an argument of `json::stringify`
 is (M5a §2.4): a number is copied, and a string is copied into the
@@ -219,8 +221,9 @@ through; `varyk-sql` therefore puts every call that takes a query in its
 A `.rs` signature may name `varyk_std::Error`, by that full path, as the
 error type of a returned `Result` whose `Ok` type is any type the
 "Calling Rust" table admits (`Result<Pool, varyk_std::Error>`,
-`Result<u64, ..>`, `Result<(), ..>`), or one of the shapes of section
-2.1. Varyk sees it as its own `Error` (M5a §2.3), so `?` works on the call's result in a
+`Result<u64, ..>`, `Result<bool, ..>`), or one of the shapes of section
+2.1. Varyk has no `()`, so `Result<(), ..>` stays V0108 as today; a
+facade returns `bool` or a count where Rust would return nothing. Varyk sees it as its own `Error` (M5a §2.3), so `?` works on the call's result in a
 function returning `Result<_, Error>`, and `match` opens it with `Err(e)`
 and reads `e.message()`.
 
@@ -296,7 +299,9 @@ parameters, a `where` clause, or another bound; `Value` variants for
 `varyk_std::Error` outside a returned `Result`; a Varyk function with a
 literal-only or variadic parameter; `pub use` of a module, with braces,
 globs, or `as`, or across packages; several shorthands in one `varyk
-add`; naming `Value` from Varyk code; everything of 5b4.
+add` (5b4's `varyk add http sql` lifts this, as one `cargo add` run per
+shorthand, since `--rename` takes one crate); naming `Value` from Varyk
+code; everything of 5b4.
 
 ## 3. Safety
 
@@ -332,9 +337,10 @@ add`; naming `Value` from Varyk code; everything of 5b4.
 
 One addition, `varyk_std::Value` (section 2.2), in a new module
 `value.rs`, re-exported at the crate root beside `Error`. `From` impls
-for `bool`, `String`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`,
-`u8`, `u16`, `u32`, for `&str`, and for `Option` of each of those
-(`Option<&str>` included). `Value` derives `Debug`,
+for `bool`, `&str`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`,
+`u16`, `u32`, and for `Option` of each of those (`Option<&str>`
+included): exactly what the backend writes, nothing more. `Value`
+derives `Debug`,
 `Clone`, and `PartialEq`. Nothing else in `varyk-std` changes; no new
 dependency.
 
@@ -386,8 +392,10 @@ Line numbers are approximate.
   with the same V0207, and adds `T` to the read reach set (V0210 for a
   Rust or foreign type).
 - `types/check/asyncs.rs` (`async_call` ~127, `await_expr` ~51): the
-  expected type reaches the call through `.await` and `?`; a test pins
-  it.
+  expected type already reaches the call through `.await` and `?`
+  (`methods.rs` `try_` wraps it in `Result`); a test pins it. A call
+  with a type hole in started position is V0207 with the note of
+  section 2.1.
 - `names_error` (`check.rs` ~230): an imported signature naming `Error`
   counts, for a discarded result (section 2.4).
 - HIR: the call records the chosen `T`, the split between fixed and
@@ -421,7 +429,8 @@ row in `docs/language.md`:
 
 Reused: V0108, with a new note, for a generic shape, a `&'static str`, a
 `Vec<varyk_std::Value>`, or a `varyk_std::Error` where section 2 does not
-admit it; V0207 for a type-parameter call with no expected type; V0210
+admit it; V0207 for a type-parameter call with no expected type, a
+started one included; V0210
 for a `T` that is a Rust or foreign type; V0209 for the attribute checks
 of a read type; V0201 for too few fixed arguments; V0001 for the `pub
 use` forms of section 2.5; V0105 and V0103 for `pub use` visibility and
@@ -435,7 +444,8 @@ clashes.
   `crate::` and `self::`; each V0001 form; V0103 on a clash; V0105 on a
   re-export of a non-`pub` item.
 - Type tests: `T` from a `let`, a parameter, a return, a field, through
-  `?` and `.await`, and V0207 without; each trailing type, and V0218 for
+  `?` and `.await`, and V0207 without and for a started call; each
+  trailing type, and V0218 for
   a struct, a `Vec`, and a `u64`; V0217 for a variable, a `format!`, and a
   parameter.
 - `insta` snapshots of the generated Rust for a call with a turbofish,
@@ -448,9 +458,13 @@ clashes.
   shapes of `varyk-sql`'s `Pool` and `Tx` (a `T`-returning method in each
   of the three return shapes, a `&'static str` parameter, trailing values,
   `Result<_, varyk_std::Error>`, an async method, and a `mut self`
-  method), and `pub use` lines in its `src/lib.vr`; a program that depends
-  on it builds and prints the expected output under `varyk run`, in
-  `tests/packages.rs`.
+  method), and `pub use` lines in its `src/lib.vr`; its facade reads `T`
+  through `serde_json`, listed in its `Cargo.toml` (V0104 otherwise); a
+  program that depends on it builds and prints the expected output under
+  `varyk run`, in `tests/packages.rs`, run as the examples are (M5b2 §9).
+  Both manifests carry a `varyk-std` line, so each gets an `extra-files`
+  entry in `release-please-config.json`, as `route` and `trip` have, or
+  the next release pull request breaks the test.
 - `tests/cli.rs`: the `cargo add` arguments for `varyk add sql`, `varyk
   add sql --features postgres`, the two refusals, and a plain crate name,
   without running cargo.
