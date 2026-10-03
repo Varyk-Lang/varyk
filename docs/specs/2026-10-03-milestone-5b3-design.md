@@ -264,8 +264,9 @@ The rules:
   as in a `use` (M3 §3.3);
 - the item then has two names: its own path, and the module the `pub use`
   is in, so a program using the package writes `sql::connect(url)` and
-  `sql::Pool` (and may still write `sql::db::connect`), and the generated
-  Rust writes `::sql::connect` too;
+  `sql::Pool` (and may still write `sql::db::connect`); the generated
+  Rust keeps writing the item's own path, `::sql::db::connect`, which is
+  valid since every module on it is `pub`;
 - a name already declared or imported in the module is V0103, as for a
   `use`;
 - an item that is not `pub` all the way is V0105, and the visibility rule
@@ -335,8 +336,9 @@ code; everything of 5b4.
 - A literal-only argument is the literal, as any string literal is
   written today.
 - A `pub use` is `pub use crate::db::connect;` in the package's generated
-  root, and a path through the re-export is written through it
-  (`::sql::connect`), so the generated crate's API matches Varyk's view.
+  root, so the generated crate's API matches Varyk's view for Rust
+  users; a Varyk path through the re-export is written as the item's own
+  path (`::sql::db::connect`), as every path is today.
 - The error type needs nothing: `varyk_std::Error` is already the Rust of
   `Error`.
 
@@ -389,8 +391,8 @@ Line numbers are approximate.
 ### 6.3 Types
 
 - `types/check.rs` (`arguments` ~1563) and `types/check/methods.rs`
-  (~119): a literal-text parameter accepts only `ExprKind::Lit` of a
-  string (V0217); a variadic signature accepts any number of trailing
+  (~119): a literal-text parameter accepts only `ExprKind::String`
+  (V0217); a variadic signature accepts any number of trailing
   arguments after the fixed ones, each checked against the type list of
   section 2.2 (V0218); the count error V0201 counts the fixed parameters
   only and says "at least".
@@ -417,7 +419,7 @@ Line numbers are approximate.
   a string argument as `&str` (`Need::Str`, as today), an `Option<string>`
   as `.as_deref()`, and the rest by value (section 2.2).
 - `backend/rust.rs` writes `pub use crate::..;` for each re-export in a
-  module and routes paths through re-exports (section 4).
+  module (section 4); paths are written as today.
 
 ### 6.5 Command line
 
