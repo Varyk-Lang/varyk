@@ -463,7 +463,9 @@ clashes.
   method), and `pub use` lines in its `src/lib.vr`; its facade reads `T`
   through `serde_json`, listed in its `Cargo.toml` (V0104 otherwise); a
   program that depends on it builds and prints the expected output under
-  `varyk run`, in `tests/packages.rs`, run as the examples are (M5b2 §9).
+  `varyk run`, in `tests/examples.rs` beside the example packages, since
+  its `serde_json` and `varyk-std` lines need the registry and
+  `tests/packages.rs` runs without the network.
   Both manifests carry a `varyk-std` line, so each gets an `extra-files`
   entry in `release-please-config.json`, as `route` and `trip` have, or
   the next release pull request breaks the test.
