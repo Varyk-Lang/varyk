@@ -97,4 +97,4 @@ covered by those licenses; see `TRADEMARKS.md`.
 
 Open an issue with the smallest `.vr` program that shows the problem and
 the output of `varyk check` or `varyk build --emit-rust`. For security
-problems, see `SECURITY.md`.
+problems, see the security policy in the repository's Security tab, shared by every Varyk-Lang repository.
