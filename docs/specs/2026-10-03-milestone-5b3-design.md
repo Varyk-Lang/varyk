@@ -234,9 +234,11 @@ package that needs it (section 10). A bare `Error` from a `use` keeps the
 "write the full path" refusal of M3 §4.
 
 A program holding such a result already needs `varyk-std` (`names_error`,
-M5b2 §7.4, counts every local and return); the imported signature itself
-counts too, so a discarded result still needs it. Every package has it
-(M5a §5).
+M5b2 §7.4, counts every local and return). An imported signature naming
+any `varyk_std::` path of this section (`Error`, `Value`, the serde
+bound) counts too, since the facade compiles inside the program's crate:
+a package without the line gets V0404's help (M5a §5.1), and a single
+file's manifest gains it (M5a §5.2).
 
 ### 2.5 `pub use`
 
@@ -398,8 +400,8 @@ Line numbers are approximate.
   (`methods.rs` `try_` wraps it in `Result`); a test pins it. A call
   with a type hole in started position is V0207 with the note of
   section 2.1.
-- `names_error` (`check.rs` ~230): an imported signature naming `Error`
-  counts, for a discarded result (section 2.4).
+- `names_error` (`check.rs` ~230): an imported signature naming any
+  `varyk_std::` path of section 2 counts (section 2.4).
 - HIR: the call records the chosen `T`, the split between fixed and
   trailing arguments, and each trailing argument's scalar type.
 
@@ -415,7 +417,7 @@ Line numbers are approximate.
 
 ### 6.5 Command line
 
-- `cli.rs` (`run_add` ~798): the shorthand table and the two refusals of
+- `cli.rs` (`run_add` ~798): the shorthand table and the refusal of
   section 2.6; the `cargo add` argument list is built by a pure function
   the tests call.
 
@@ -460,18 +462,23 @@ clashes.
   shapes of `varyk-sql`'s `Pool` and `Tx` (a `T`-returning method in each
   of the three return shapes, a `&'static str` parameter, trailing values,
   `Result<_, varyk_std::Error>`, an async method, and a `mut self`
-  method), and `pub use` lines in its `src/lib.vr`; its facade reads `T`
-  through `serde_json`, listed in its `Cargo.toml` (V0104 otherwise); a
-  program that depends on it builds and prints the expected output under
-  `varyk run`, in `tests/examples.rs` beside the example packages, since
-  its `serde_json` and `varyk-std` lines need the registry and
-  `tests/packages.rs` runs without the network.
-  Both manifests carry a `varyk-std` line, so each gets an `extra-files`
-  entry in `release-please-config.json`, as `route` and `trip` have, or
-  the next release pull request breaks the test.
+  method), one `#[test]` function, and `pub use` lines in its
+  `src/lib.vr`; its facade reads `T` through `serde_json`, listed in its
+  `Cargo.toml` (V0104 otherwise). Beside it,
+  `fixtures/packages/store_user/` is a program with `store = { path =
+  "../store" }` that builds and prints the expected output under `varyk
+  run`, and `varyk test` in `store` runs its test, pinning `varyk test`
+  on a library. Both run in `tests/examples.rs` from a copy of the two
+  directories made together (an `example_dir` that takes a root), as the
+  example packages do (M5b2 §9), since their `serde_json` and
+  `varyk-std` lines need the registry and `tests/packages.rs` runs
+  without the network. Both manifests carry a `varyk-std` line, so each
+  gets an `extra-files` entry in `release-please-config.json`, as
+  `route` and `trip` have, or the next release pull request breaks the
+  test.
 - `tests/cli.rs`: the `cargo add` arguments for `varyk add sql`, `varyk
-  add sql --features postgres`, the two refusals, and a plain crate name,
-  without running cargo.
+  add sql --features postgres`, the refusal of a second shorthand, and a
+  plain crate name, without running cargo.
 - The language-reference test (M4 §7) covers V0217 and V0218.
 - `docs/language.md` ("Calling Rust" gains the four signature shapes;
   "Modules" gains `pub use`; "Packages" gains the shorthand and points to
