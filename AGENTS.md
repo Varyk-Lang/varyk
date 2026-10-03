@@ -120,4 +120,5 @@ table are in `CONTRIBUTING.md`.
   `2026-09-26-milestone-3-followups.md`,
   `2026-09-29-milestone-4-followups.md`)
 - `docs/open-questions.md` design questions deliberately not yet answered
-- `SECURITY.md`, `TRADEMARKS.md`, `LICENSE-MIT`, `LICENSE-APACHE`
+- `TRADEMARKS.md`, `LICENSE-MIT`, `LICENSE-APACHE`; the security policy is the
+  organization's shared one, shown in the Security tab
