@@ -225,20 +225,23 @@ error type of a returned `Result` whose `Ok` type is any type the
 "Calling Rust" table admits (`Result<Pool, varyk_std::Error>`,
 `Result<u64, ..>`, `Result<bool, ..>`), or one of the shapes of section
 2.1. Varyk has no `()`, so `Result<(), ..>` stays V0108 as today; a
-facade returns `bool` or a count where Rust would return nothing. Varyk sees it as its own `Error` (M5a §2.3), so `?` works on the call's result in a
-function returning `Result<_, Error>`, and `match` opens it with `Err(e)`
-and reads `e.message()`.
+facade returns `bool` or a count where Rust would return nothing. Varyk
+sees it as its own `Error` (M5a §2.3), so `?` works on the call's result
+in a function returning `Result<_, Error>`, and `match` opens it with
+`Err(e)` and reads `e.message()`.
 
 `varyk_std::Error` in a parameter, a field, or elsewhere waits for a
 package that needs it (section 10). A bare `Error` from a `use` keeps the
 "write the full path" refusal of M3 §4.
 
 A program holding such a result already needs `varyk-std` (`names_error`,
-M5b2 §7.4, counts every local and return). An imported signature naming
-any `varyk_std::` path of this section (`Error`, `Value`, the serde
-bound) counts too, since the facade compiles inside the program's crate:
-a package without the line gets V0404's help (M5a §5.1), and a single
-file's manifest gains it (M5a §5.2).
+M5b2 §7.4, counts every local and return). A call to an imported
+signature naming any `varyk_std::` path of this section (`Error`,
+`Value`, the serde bound) counts too, whether the signature is in the
+program's own `.rs` module or reached through a dependency package,
+because the call site writes `::varyk_std::Value::from` and `T`'s serde
+derive in the program's crate: a package without the line gets V0404's
+help (M5a §5.1), and a single file's manifest gains it (M5a §5.2).
 
 ### 2.5 `pub use`
 
@@ -400,8 +403,9 @@ Line numbers are approximate.
   (`methods.rs` `try_` wraps it in `Result`); a test pins it. A call
   with a type hole in started position is V0207 with the note of
   section 2.1.
-- `names_error` (`check.rs` ~230): an imported signature naming any
-  `varyk_std::` path of section 2 counts (section 2.4).
+- `names_error` (`check.rs` ~230): a call to an imported signature
+  naming any `varyk_std::` path of section 2 counts, through a
+  dependency package as well (section 2.4).
 - HIR: the call records the chosen `T`, the split between fixed and
   trailing arguments, and each trailing argument's scalar type.
 
@@ -464,7 +468,7 @@ clashes.
   `Result<_, varyk_std::Error>`, an async method, and a `mut self`
   method), one `#[test]` function, and `pub use` lines in its
   `src/lib.vr`; its facade reads `T` through `serde_json`, listed in its
-  `Cargo.toml` (V0104 otherwise). Beside it,
+  `Cargo.toml` as M3 requires of any crate a facade uses. Beside it,
   `fixtures/packages/store_user/` is a program with `store = { path =
   "../store" }` that builds and prints the expected output under `varyk
   run`, and `varyk test` in `store` runs its test, pinning `varyk test`
