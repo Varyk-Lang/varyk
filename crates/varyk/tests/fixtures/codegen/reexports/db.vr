@@ -1,0 +1,7 @@
+pub struct Pool {
+    pub size: i32,
+}
+
+pub fn connect(size: i32) -> Pool {
+    Pool { size: size }
+}

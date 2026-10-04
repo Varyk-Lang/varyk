@@ -184,8 +184,21 @@ pub struct ImportedSig {
     /// Empty when not `callable`: an uncallable signature is never
     /// type-checked.
     pub params: Vec<(Ty, ParamMode)>,
-    /// [`Ty::Unit`] when not `callable`.
+    /// One per parameter of `params`: whether it takes only text written
+    /// in the program, a `&'static str` (milestone 5b3 spec 2.3). Empty
+    /// for a Varyk function and when not `callable`.
+    pub literal: Vec<bool>,
+    /// The last Rust parameter is `Vec<varyk_std::Value>`, not in
+    /// `params`: a call passes any number of values after the others
+    /// (milestone 5b3 spec 2.2). False for a Varyk function and when not
+    /// `callable`.
+    pub variadic: bool,
+    /// [`Ty::Unit`] when not `callable`, and when `result_hole` is set.
     pub ret: Ty,
+    /// The return is `Result<T, Error>` in this shape, with `T` filled at
+    /// each call from where its result goes (milestone 5b3 spec 2.1);
+    /// `None` for a Varyk function and for any other signature.
+    pub result_hole: Option<ResultShape>,
     /// The parameter position (0 for `self`, as in [`ImportedSig::modes`])
     /// a borrowed `ret` is part of, when lifetime elision roots it there
     /// (M4 spec 2.12); `None` for an owned return.
@@ -207,6 +220,10 @@ pub struct ImportedSig {
     /// `async fn` (milestone 5b1 spec 2.8): awaited or started, as a
     /// Varyk async function is.
     pub is_async: bool,
+    /// The signature names an item of `varyk-std` (`varyk_std::Error`;
+    /// milestone 5b3 spec 2.4), so a call to it makes the calling
+    /// program use `varyk-std`, wherever the signature is declared.
+    pub names_std: bool,
     /// For a function of a Varyk package declared without `pub`: its
     /// declaration, for the V0105 naming it. `None` for a `pub` one and
     /// for every function of a `.rs` module, which Varyk imports only
@@ -216,6 +233,29 @@ pub struct ImportedSig {
     /// declared (M5b2 spec 4.2); `None` for one of this package's `.rs`
     /// modules.
     pub package: Option<PackageItem>,
+}
+
+/// Where the filled type `T` sits in the `Result` a call with a type
+/// hole returns (milestone 5b3 spec 2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultShape {
+    /// `Result<T, Error>`.
+    Plain,
+    /// `Result<Option<T>, Error>`.
+    Option,
+    /// `Result<Vec<T>, Error>`.
+    Vec,
+}
+
+impl ResultShape {
+    /// The `Ok` type of this shape with `t` filled in.
+    pub fn ok(self, t: Ty) -> Ty {
+        match self {
+            ResultShape::Plain => t,
+            ResultShape::Option => Ty::Option(Box::new(t)),
+            ResultShape::Vec => Ty::Vec(Box::new(t)),
+        }
+    }
 }
 
 impl ImportedSig {
@@ -555,6 +595,15 @@ struct Scope {
     /// namespaces (spec 2.1), so emission (one line per declaration, not
     /// per name) reads its target from here instead.
     use_order: Vec<UseTarget>,
+    /// The functions this module's `pub use` lines re-export (milestone
+    /// 5b3 spec 2.5), by name: the item itself, wherever it is declared.
+    /// Lookups through a path consult it after `fns`, so a path that
+    /// ends here names the item under both its names; kept apart from
+    /// `fns`, which every other reader takes as the module's own items.
+    reexport_fns: HashMap<String, Callee>,
+    /// The structs and enums this module's `pub use` lines re-export, as
+    /// `reexport_fns` and consulted after `types`.
+    reexport_types: HashMap<String, UserType>,
 }
 
 impl Symbols {
@@ -577,10 +626,16 @@ impl Symbols {
             }
         }
         let target = self.target_module(from, module)?;
-        let callee = *self.scopes[target.0 as usize]
-            .fns
-            .get(name)
-            .ok_or(LookupError::Unknown)?;
+        let scope = &self.scopes[target.0 as usize];
+        let Some(&callee) = scope.fns.get(name) else {
+            // A `pub use` here: the item itself, `pub` all the way when it
+            // was registered (milestone 5b3 spec 2.5).
+            let callee = *scope.reexport_fns.get(name).ok_or(LookupError::Unknown)?;
+            return match visibility::check_visible(self, from, target, None) {
+                Some(err) => Err(err),
+                None => Ok(callee),
+            };
+        };
         // An imported Rust function is always `pub`, but its module may
         // not be; a package's function may be neither.
         let private = match callee {
@@ -615,10 +670,15 @@ impl Symbols {
             }
         }
         let target = self.target_module(from, module)?;
-        let found = *self.scopes[target.0 as usize]
-            .types
-            .get(name)
-            .ok_or(LookupError::Unknown)?;
+        let scope = &self.scopes[target.0 as usize];
+        let Some(&found) = scope.types.get(name) else {
+            // A `pub use` here, as in `lookup_fn`.
+            let found = *scope.reexport_types.get(name).ok_or(LookupError::Unknown)?;
+            return match visibility::check_visible(self, from, target, None) {
+                Some(err) => Err(err),
+                None => Ok(found),
+            };
+        };
         let (is_pub, decl, keyword) = match found {
             UserType::Struct(id) => {
                 let def = &self.structs[id.0 as usize];

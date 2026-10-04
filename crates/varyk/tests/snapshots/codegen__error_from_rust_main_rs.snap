@@ -1,0 +1,23 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn twice(id: i64) -> Result<i64, ::varyk_std::Error> {
+    let n = crate::ext::load(id)?;
+    Ok(n)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    match twice(21i64) {
+        Ok(n) => ::std::println!("{}", n),
+        Err(e) => ::std::println!("{}", e.message()),
+    }
+    match crate::ext::load(-1i64) {
+        Ok(n) => ::std::println!("{}", n),
+        Err(e) => ::std::println!("{}", e.message()),
+    }
+}

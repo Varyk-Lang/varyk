@@ -9,4 +9,4 @@ error[V0108]: unsupported Rust signature: `ext::first` cannot be called from Var
   |                    ^^^^^^^^^^^^^ unsupported Rust signature: `ext::first` cannot be called from Varyk
   |
   = note: the Rust signature is `fn first<T>(value: T) -> T`
-  = note: Varyk cannot call a generic function; add a `pub fn` without type parameters to the Rust module that calls it
+  = note: Varyk calls a generic function only with one type parameter `T: serde::de::DeserializeOwned` (or `varyk_std::serde::de::DeserializeOwned`), written inline by that full path, and `T` only in the return, as in `Result<T, varyk_std::Error>`, `Result<Option<T>, varyk_std::Error>`, or `Result<Vec<T>, varyk_std::Error>`; this one has the type parameter in a parameter

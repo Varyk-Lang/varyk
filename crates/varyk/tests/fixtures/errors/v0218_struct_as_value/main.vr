@@ -1,0 +1,11 @@
+mod ext;
+
+struct User {
+    name: string,
+    age: i64,
+}
+
+fn main() {
+    let user = User { name: "Ada", age: 36 };
+    println!("{}", ext::run("insert into users (name, age) values (?, ?)", user));
+}

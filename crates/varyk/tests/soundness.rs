@@ -466,6 +466,9 @@ pub async fn a_bump_tally(t: &mut Tally) { t.total += 1; }
 impl Tally {
     pub async fn a_count(&self) -> i32 { self.total }
 }
+pub fn bind(q: &'static str, values: Vec<varyk_std::Value>) -> usize { q.len() + values.len() }
+pub async fn a_one(q: &'static str) -> usize { q.len() }
+pub async fn a_bind(q: &'static str, values: Vec<varyk_std::Value>) -> usize { q.len() + values.len() }
 ";
 
 /// Every case function's parameters: one of each kind of place.
@@ -598,6 +601,34 @@ const CONTEXTS: &[Context] = &[
         ret: "",
         body: "ext::take_string({v});\n    ext::take_str(if c { mk_p().s } else { \"z\" });",
         values: &["mk_p().s", "{ let a = mk_s(); a }"],
+    },
+    // Trailing values (milestone 5b3 spec 2.2) are read, never moved.
+    Context {
+        name: "trailing value",
+        ret: "",
+        body: "ext::bind(\"q\", {v});",
+        values: &[
+            "ls",
+            "ll",
+            "ps",
+            "ms",
+            "lp.s",
+            "pp.s",
+            "mq.p.s",
+            "lw[0]",
+            "mk_s()",
+            "mk_p().s",
+            "\"lit\"",
+            "li, pi, mi, lp.n, lv[0].n, mk_p().n, lk, c",
+            "1, -2, 2.5, true, \"lit\", li + 1, li as u8",
+            "if c { mk_s() } else { ps }",
+            "if c { ls } else { ps }",
+            "{ let a = mk_p(); a.s }",
+            "match le { E::A(s) => s, _ => \"x\" }",
+            "match pe { E::A(s) => s, _ => ps }",
+            "if c { lk } else { None }",
+            "format!(\"{}\", li)",
+        ],
     },
     // Read in place: printed, compared, discarded, or a field base.
     Context {
@@ -1478,6 +1509,15 @@ const MUST_PASS: &[&str] = &[
     "async: let tl = ext::Tally::new();\n    let a = tl.a_count().await + pt.a_count().await;\n    let t = tl.a_count();\n    let u = ext::Tally::new().a_count();\n    let k = a + t.await + u.await;",
     "async: let mut tl = ext::Tally::new();\n    ext::a_bump_tally(tl).await;\n    read_i(tl.count());",
     "async: let s = Shared::new(mk_cfg());\n    let t1 = a_cfg(s.clone());\n    let t2 = a_cfg(s.clone());\n    let n = t1.await + t2.await;\n    let all = Task::all(vec![a_cfg(s.clone()), a_cfg(s.clone())]).await;\n    let m = s.clone().a_twice();\n    let k = m.await + s.a_twice().await;\n    let t3 = a_cfg(s);\n    read_i(t3.await);",
+    // Trailing values (milestone 5b3 spec 2.2): a string and an
+    // `Option<string>` are read, and usable after the call.
+    "ext::bind(\"q\", ls, ll, li, lp.s, lw[0]);\n    read_s(ls);\n    read_s(ll);\n    read_p(lp);\n    lw.push(mk_s());",
+    "ext::bind(\"q\", Some(\"Ada\"), Some(ls), Some(lp.s), Some(li));\n    read_s(ls);\n    read_p(lp);",
+    "let o: Option<string> = Some(mk_s());\n    let n = ext::bind(\"q\", o, ps) + ext::bind(\"q\", o);\n    match o {\n        Some(t) => read_s(t),\n        None => {}\n    }",
+    // A started call passes literal text as it is, and reads its
+    // trailing values before the task starts.
+    "async: let t = ext::a_one(\"q\");\n    let n = t.await + ext::a_one(\"r\").await;",
+    "async: let t = ext::a_bind(\"q\", ls, li);\n    read_s(ls);\n    let n = t.await + ext::a_bind(\"q\", lp.s).await;\n    read_p(lp);",
     "let b = lp == pp && pp == lp && mp == pp && lp == first_of(pv) && first_of(lv) == mp && lv[0] == pp && lq.p == pp && pp == lq.p && (if c { lp } else { pp }) == mp && pp == { mk_p() } && (if c { mk_p() } else { mk_p() }) == lp;\n    let p2 = pp.clone();\n    read_p(p2);\n    let v2 = pv.clone();\n    read_v(v2);\n    let p3 = first_of(pv).clone();\n    let mut q = Q { p: p3, n: 1, e: pe.clone(), v: mv.clone() };\n    change_q(q);\n    let copies: Vec<P> = lv.iter().map(|p| p.clone()).collect();\n    let same = copies == lv && lv.iter().any(|p| p == pp) && lv.iter().filter(|p| p != mp).count() > 0;\n    lv.push(pp.clone());\n    let last = lv[0].clone();\n    read_p(last);",
 ];
 
@@ -2437,6 +2477,19 @@ fn programs_that_pass_check_compile() {
 /// Programs spread over nested modules (spec 3.1), as (label, files):
 /// each must pass `check` and build.
 const MUST_BUILD_TREES: &[(&str, &[(&str, &str)])] = &[
+    (
+        "a result whose type is filled from where it goes (milestone 5b3 spec 2.1) is a new value the caller owns: changed after `let mut`, moved into a `Vec`",
+        &[
+            (
+                "main.vr",
+                "mod ext;\n\nstruct User {\n    name: string,\n    age: i64,\n}\n\nfn one() -> Result<User, Error> {\n    let mut user: User = ext::one(\"{\\\"name\\\": \\\"ann\\\", \\\"age\\\": 1}\")?;\n    user.age = user.age + 1;\n    user.name = \"bo\";\n    Ok(user)\n}\n\nasync fn all(db: ext::Db) -> Result<Vec<User>, Error> {\n    let mut users: Vec<User> = db.all(\"[]\").await?;\n    let first: User = ext::one(\"{\\\"name\\\": \\\"cy\\\", \\\"age\\\": 2}\")?;\n    users.push(first);\n    users.push(one()?);\n    Ok(users)\n}\n\nasync fn main() {\n    match all(ext::Db::open()).await {\n        Ok(users) => println!(\"{}\", users.len()),\n        Err(e) => println!(\"{}\", e.message()),\n    }\n}\n",
+            ),
+            (
+                "ext.rs",
+                "pub struct Db {\n    pub name: String,\n}\n\nimpl Db {\n    pub fn open() -> Db {\n        Db { name: String::new() }\n    }\n\n    pub async fn all<T: varyk_std::serde::de::DeserializeOwned>(&self, q: &'static str) -> Result<Vec<T>, varyk_std::Error> {\n        varyk_std::json::parse(q)\n    }\n}\n\npub fn one<T: varyk_std::serde::de::DeserializeOwned>(q: &'static str) -> Result<T, varyk_std::Error> {\n    varyk_std::json::parse(q)\n}\n",
+            ),
+        ],
+    ),
     (
         "`env::parse` into a struct of a nested module: a rename, a default, an `Option`, a unit enum, and a skipped field with a default",
         &[

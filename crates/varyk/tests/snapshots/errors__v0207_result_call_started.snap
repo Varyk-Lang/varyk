@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0207]: the type `ext::fetch` reads cannot be worked out here; write the type, as in `let u: User = ext::fetch(..).await?;`
+ --> crates/varyk/tests/fixtures/errors/v0207_result_call_started/main.vr:8:16
+  |
+8 |     let task = ext::fetch("{\"name\": \"ann\"}");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the type `ext::fetch` reads cannot be worked out here; write the type, as in `let u: User = ext::fetch(..).await?;`
+  |
+  = note: such a value takes its type from where it goes: a `let` with a written type, a parameter, a return value, a field, or a `vec!` element after one whose type is known; in Rust terms, the type cannot be inferred here
+  = note: a call that takes its type from where its result goes cannot be started; add `.await`

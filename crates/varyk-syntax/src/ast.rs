@@ -273,9 +273,11 @@ pub struct ModDecl {
 /// `use path;` or `use path as name;` (spec 3.3): introduces a local alias
 /// for whatever `path` names -- a module, a struct, an enum, or a function
 /// -- resolved and checked by the compiler's resolver, never the parser.
+/// `pub use path;` (milestone 5b3 spec 2.5) also re-exports the item.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseDecl {
     pub attrs: Vec<Attribute>,
+    pub is_pub: bool,
     pub path: Path,
     pub alias: Option<Ident>,
     pub span: Span,

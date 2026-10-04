@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: "file(&krate, \"src/main.rs\")"
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let db = crate::ext::Db::open();
+    ::std::println!("{}", crate::ext::Db::one(&db, "a \"b\" c"));
+    ::std::println!("{}", crate::ext::count("select 1"));
+}

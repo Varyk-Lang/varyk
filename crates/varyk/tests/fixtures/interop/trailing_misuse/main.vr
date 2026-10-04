@@ -1,0 +1,16 @@
+mod ext;
+
+fn moved() {
+    let s = "a";
+    ext::keep(s, s);
+}
+
+fn changed() {
+    let mut list: Vec<i64> = vec![1];
+    ext::grow(list, list[0]);
+}
+
+fn main() {
+    moved();
+    changed();
+}

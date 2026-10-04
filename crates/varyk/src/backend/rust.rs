@@ -3,10 +3,10 @@
 //!
 //! The output is deterministic and readable without rustfmt: four-space
 //! indentation, one statement per line, a blank line between items, and a
-//! trailing newline. Every generated `fn`, `struct`, `enum`, `impl`, and
-//! `use` carries [`ALLOW_ITEM`] (spec 2.3); no `mod` line does, so a
-//! copied `.rs` module, wherever it sits in the tree, warns and fails as
-//! Rust normally does.
+//! trailing newline. Every generated `fn`, `struct`, `enum`, and `impl`
+//! carries [`ALLOW_ITEM`] (spec 2.3) and every `use` carries
+//! [`ALLOW_USE`]; no `mod` line carries either, so a copied `.rs` module,
+//! wherever it sits in the tree, warns and fails as Rust normally does.
 
 use super::rust_expr::{FnEmitter, Need, Repr};
 use super::writer::Writer;
@@ -19,12 +19,17 @@ use crate::resolve::{FieldDef, ModuleId, StructId, UserType, VariantFieldsDef};
 use crate::types::{Derives, ParamMode, Serde, Ty};
 use varyk_syntax::Span;
 
-/// The item-level attribute every generated `fn`, `struct`, `enum`,
-/// `impl`, and `use` carries (spec 2.3): the `warnings`
-/// group covers every warn-level lint, and the two deny-by-default lints
-/// are named because a group cannot include them. The program still
-/// panics at run time on overflow or division by zero (M1 §6.4).
+/// The item-level attribute every generated `fn`, `struct`, `enum`, and
+/// `impl` carries (spec 2.3): the `warnings` group covers every
+/// warn-level lint, and the two deny-by-default lints are named because
+/// a group cannot include them. The program still panics at run time on
+/// overflow or division by zero (M1 §6.4).
 const ALLOW_ITEM: &str = "#[allow(warnings, arithmetic_overflow, unconditional_panic)]";
+
+/// The attribute every generated `use` carries instead of [`ALLOW_ITEM`]:
+/// the one lint a plain `use` raises, and one clippy's `useless_attribute`
+/// accepts there.
+const ALLOW_USE: &str = "#[allow(unused_imports)]";
 
 /// Generates a Cargo project whose `src/` mirrors the program's modules.
 pub struct RustBackend;
@@ -102,15 +107,18 @@ fn is_snake_case(name: &str) -> bool {
 
 /// Writes every `use` line of `module` (spec 3.3) as the canonical
 /// `crate::`-rooted path to what it names, with `as alias` kept when the
-/// user wrote one, each carrying [`ALLOW_ITEM`] like every other
-/// generated item. Every use site is written with its full path, so the
-/// alias never affects the generated Rust.
+/// user wrote one and `pub` for a `pub use` (milestone 5b3 spec 4), each
+/// carrying [`ALLOW_USE`], not [`ALLOW_ITEM`]: clippy's
+/// `useless_attribute` (deny by default) rejects any other lint allow on
+/// a `use`. Every use site is written with its full path, so the alias
+/// never affects the generated Rust.
 fn write_use_lines(module: &HirModule, writer: &mut Writer) {
     for use_ in &module.uses {
-        writer.line(0, ALLOW_ITEM, None);
+        writer.line(0, ALLOW_USE, None);
+        let vis = if use_.is_pub { "pub " } else { "" };
         let line = match &use_.alias {
-            Some(alias) => format!("use {} as {alias};", use_.path),
-            None => format!("use {};", use_.path),
+            Some(alias) => format!("{vis}use {} as {alias};", use_.path),
+            None => format!("{vis}use {};", use_.path),
         };
         writer.line(0, &line, Some(use_.span));
     }

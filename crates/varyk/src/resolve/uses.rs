@@ -10,6 +10,11 @@
 //! regardless of file order; [`Symbols::lookup_fn`], [`Symbols::lookup_type`],
 //! and [`Symbols::module_at`] then consult the alias it left behind for
 //! the first segment of a later path.
+//!
+//! A `pub use` (milestone 5b3 spec 2.5) is also entered into its module's
+//! `reexport_fns` or `reexport_types`, which a path ending at that module
+//! consults after the module's own items; [`reexport_problem`] holds its
+//! V0001 and V0105.
 
 use std::collections::HashMap;
 
@@ -17,11 +22,11 @@ use varyk_syntax::{Ident, Item, Path, PathStart, Span, UseDecl};
 
 use crate::diagnostics::{Diagnostic, codes};
 
-use super::visibility::check_visible;
+use super::visibility::{check_visible, not_visible};
 use super::{
     Callee, ENTRY_MODULE_NAME, LookupError, Module, ModuleId, ModuleKind, Symbols, UserType,
-    duplicate, is_std_module, no_parent, not_visible, path_text, reserved_type_name,
-    reserved_value_name, split_last, std_fn_taken, std_module_taken, varyk_prefix_taken,
+    duplicate, is_std_module, no_parent, path_text, reserved_type_name, reserved_value_name,
+    split_last, std_fn_taken, std_module_taken, varyk_prefix_taken,
 };
 
 /// What a `use` name resolves to (spec 3.3): consulted by lookups before
@@ -121,6 +126,7 @@ pub(super) fn register(
     modules: &[Module],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    seed_reexports(symbols, modules);
     for module in modules {
         let ModuleKind::Varyk(program) = &module.kind else {
             continue;
@@ -179,6 +185,12 @@ pub(super) fn register(
                     ),
                 );
                 continue;
+            }
+            if decl.is_pub {
+                if let Some(diagnostic) = reexport_problem(symbols, decl, &targets) {
+                    diagnostics.push(diagnostic);
+                    continue;
+                }
             }
             // The emitted `use` imports every namespace the name occupies
             // in its module (a function and a struct may share a name),
@@ -246,6 +258,171 @@ pub(super) fn register(
             module_scope.use_order.push(targets[0]);
         }
     }
+}
+
+/// Enters every `pub use` of every module that resolves into its module's
+/// re-exports (milestone 5b3 spec 2.5) before any `use` is registered, so
+/// a path through one resolves whichever file comes first: a `pub use` of
+/// a `pub use` waits for the one it names, round after round, until a
+/// round enters nothing. Nothing is reported here; [`register`] reports
+/// every `use` that does not resolve, and the checks of
+/// [`reexport_problem`], whose failing `pub use` it enters nothing for.
+fn seed_reexports(symbols: &mut Symbols, modules: &[Module]) {
+    let mut files = Vec::new();
+    let mut pending = Vec::new();
+    for module in modules {
+        let ModuleKind::Varyk(program) = &module.kind else {
+            continue;
+        };
+        let introduced: HashMap<&str, &Path> = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Use(decl) => Some((use_local(decl).name.as_str(), &decl.path)),
+                _ => None,
+            })
+            .collect();
+        for item in &program.items {
+            if let Item::Use(decl) = item {
+                if decl.is_pub {
+                    pending.push((module.id, decl, files.len()));
+                }
+            }
+        }
+        files.push(introduced);
+    }
+    loop {
+        let before = pending.len();
+        pending.retain(|&(module, decl, file)| {
+            let Some(introduced) = files.get(file) else {
+                return false;
+            };
+            if std_module_use(decl).is_some()
+                || through_alias(symbols, module, decl, introduced).is_some()
+            {
+                return false;
+            }
+            let Ok(targets) = resolve_use_path(symbols, module, decl, introduced) else {
+                return true;
+            };
+            if reexport_problem(symbols, decl, &targets).is_none() {
+                add_reexports(symbols, module, &use_local(decl).name, &targets);
+            }
+            false
+        });
+        if pending.len() == before {
+            break;
+        }
+    }
+}
+
+/// Enters `targets`, what a `pub use` of `module` named `name` resolved
+/// to, into the module's re-exports.
+fn add_reexports(symbols: &mut Symbols, module: ModuleId, name: &str, targets: &[UseTarget]) {
+    let Some(scope) = symbols.scopes.get_mut(module.0 as usize) else {
+        return;
+    };
+    for &target in targets {
+        match target {
+            UseTarget::Fn(callee) => {
+                scope.reexport_fns.insert(name.to_string(), callee);
+            }
+            UseTarget::Type(found) => {
+                scope.reexport_types.insert(name.to_string(), found);
+            }
+            UseTarget::Module(_) => {}
+        }
+    }
+}
+
+/// Why the `pub use` `decl`, resolved to `targets`, cannot re-export
+/// them (milestone 5b3 spec 2.5): V0001 for a module or an item of
+/// another package; V0105 for an item without `pub`, or one in a module
+/// that is not `pub` all the way from the root, since the generated Rust
+/// names it by its own path. `None` when it can.
+fn reexport_problem(
+    symbols: &Symbols,
+    decl: &UseDecl,
+    targets: &[UseTarget],
+) -> Option<Diagnostic> {
+    let path = path_text(&decl.path);
+    let span = decl.path.span;
+    let not_yet = |what: &str, note: String| {
+        Diagnostic::new(
+            codes::V0001,
+            span,
+            format!("`pub use` of {what} is not supported yet"),
+        )
+        .with_note(note)
+    };
+    let other_package = || {
+        not_yet(
+            "an item from another package",
+            format!(
+                "a package can re-export only its own items; a package that uses this one can \
+                 name `{path}` itself by listing that package in its `Cargo.toml`"
+            ),
+        )
+    };
+    if targets
+        .iter()
+        .any(|target| matches!(target, UseTarget::Module(_)))
+    {
+        return Some(not_yet(
+            "a module",
+            format!(
+                "re-export each item of `{path}` with its own `pub use`, or write `{path}::..` \
+                 where it is used"
+            ),
+        ));
+    }
+    for &target in targets {
+        // The item's module, and its declaration without `pub`, if so.
+        let (module, private) = match target {
+            UseTarget::Fn(Callee::Varyk(id)) => {
+                let sig = symbols.fns.get(id.0 as usize)?;
+                (
+                    sig.module,
+                    (!sig.is_pub).then_some(("function", sig.span, "fn")),
+                )
+            }
+            UseTarget::Fn(Callee::Imported(id)) => {
+                let sig = symbols.imported.get(id.0 as usize)?;
+                if sig.package.is_some() {
+                    return Some(other_package());
+                }
+                (sig.module, sig.private.map(|decl| ("function", decl, "fn")))
+            }
+            UseTarget::Type(UserType::Struct(id)) => {
+                let def = symbols.structs.get(id.0 as usize)?;
+                if def.package.is_some() {
+                    return Some(other_package());
+                }
+                (
+                    def.module,
+                    (!def.is_pub).then_some(("struct", def.span, "struct")),
+                )
+            }
+            UseTarget::Type(UserType::Enum(id)) => {
+                let def = symbols.enums.get(id.0 as usize)?;
+                if def.package.is_some() {
+                    return Some(other_package());
+                }
+                (
+                    def.module,
+                    (!def.is_pub).then_some(("enum", def.span, "enum")),
+                )
+            }
+            UseTarget::Fn(Callee::Builtin(_)) | UseTarget::Module(_) => continue,
+        };
+        if let Some((what, decl, keyword)) = private {
+            return Some(not_visible(what, &path, span, decl, keyword));
+        }
+        if let Some(diagnostic) = symbols.reexport_through_private(module, &path, span) {
+            return Some(diagnostic);
+        }
+    }
+    None
 }
 
 /// V0113 for a `use` whose path starts at `json`, `env`, or `log` (M5a

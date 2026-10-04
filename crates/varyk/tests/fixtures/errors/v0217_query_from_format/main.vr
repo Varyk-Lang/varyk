@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let db = ext::Db::open();
+    let id = 7;
+    println!("{}", db.one(format!("select name from users where id = {}", id)));
+}

@@ -1,0 +1,16 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main_rs
+---
+pub mod db;
+mod app;
+
+#[allow(unused_imports)]
+pub use crate::db::connect;
+#[allow(unused_imports)]
+pub use crate::db::Pool;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    crate::app::run();
+}

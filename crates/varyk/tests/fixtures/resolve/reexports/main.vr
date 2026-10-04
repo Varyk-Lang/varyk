@@ -1,0 +1,22 @@
+pub mod db;
+pub mod ext;
+pub mod facade;
+mod user;
+
+pub use db::connect;
+pub use self::db::Pool;
+pub use crate::db::Mode;
+pub use ext::ping;
+pub use ext::Handle;
+pub use facade::item;
+
+fn main() {
+    let pool: Pool = connect();
+    let mode = Mode::Fast;
+    println!("{} {} {}", pool.size, ping(), item());
+    match mode {
+        Mode::Fast => println!("fast"),
+        Mode::Slow => println!("slow"),
+    }
+    println!("{}", user::total());
+}

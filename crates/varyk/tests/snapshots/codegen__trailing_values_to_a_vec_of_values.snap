@@ -1,0 +1,30 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct User {
+    name: String,
+    age: i64,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let id = 7i64;
+    let name = ::std::format!("user {}", id);
+    let maybe: Option<String> = Some("nick".to_string());
+    let user = User { name: "Ada".to_string(), age: 36i64 };
+    let none = crate::ext::run("delete from users", vec![]);
+    let three = crate::ext::run("insert into users (id, name, nick) values (?, ?, ?)", vec![::varyk_std::Value::from(id), ::varyk_std::Value::from(name.as_str()), ::varyk_std::Value::from("Ada")]);
+    let some = crate::ext::run("update users set nick = ? where name = ?", vec![::varyk_std::Value::from("Ada"), ::varyk_std::Value::from(name.as_str())]);
+    let db = crate::ext::Db::new();
+    let two = crate::ext::Db::exec(&db, "update users set nick = ? where age = ?", vec![::varyk_std::Value::from(maybe.as_deref()), ::varyk_std::Value::from(user.age)]);
+    ::std::println!("{} {} {} {} {} {}", none, three, some, two, name, user.name);
+    match &maybe {
+        Some(nick) => ::std::println!("{}", nick),
+        None => ::std::println!("none"),
+    }
+}

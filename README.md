@@ -201,9 +201,10 @@ in the example above.
 ## Status
 
 Varyk is experimental and pre-1.0: anything may change, including any
-syntax, error code, or command-line flag, and a breaking change bumps the
-minor version. This is milestone 5b2: Varyk packages that use Varyk
-packages, on top of milestone 5b1's async functions and tasks, milestone
+syntax, error code, or command-line flag, and a new feature or a breaking
+change bumps the minor version. This is milestone 5b3: facades for packages, on top of
+milestone 5b2's Varyk packages that use Varyk packages, milestone 5b1's
+async functions and tasks, milestone
 5a's data, configuration, logging, and tests and milestone 4's closures,
 iterators, and patterns.
 Structs, enums, and `match`, `for` loops, methods, `Option`, `Result`,
@@ -214,6 +215,14 @@ imported from `.rs` files; the compiler builds and runs every program in
 plain-word message, and, where it can, a suggested fix. HTTP,
 databases, and much more are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
+
+Milestone 5b3 lets a package's `.rs` facade take a type parameter filled
+from where the result goes, any number of plain values after the other
+arguments, and a parameter that takes only text written in the program,
+and adds `pub use` and `varyk add sql`: the compiler side of the database
+package `varyk-sql`, which lives in its own repository and is released with
+this version (`varyk add sql` adds it). See "Calling Rust"
+in [docs/language.md](docs/language.md).
 
 Milestone 5b2 lets a Varyk package use another one by its `Cargo.toml` key
 (`units::length::add(a, b)`), to any depth; `varyk` compiles each from its

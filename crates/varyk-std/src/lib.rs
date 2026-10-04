@@ -10,6 +10,7 @@ mod parse;
 mod runtime;
 mod task;
 pub mod time;
+mod value;
 
 pub use error::Error;
 pub use log::start;
@@ -18,6 +19,7 @@ pub use runtime::run;
 pub use serde;
 pub use task::Task;
 pub use tracing;
+pub use value::Value;
 
 /// Test helper: runs `f` with a silent panic hook so expected panics keep the
 /// test output clean. One lock covers every panic test, since the hook is

@@ -454,7 +454,10 @@ pub(super) fn register(symbols: &mut Symbols, packages: Packages<'_>) -> HashMap
                 owner,
                 self_mode: receiver.map(|param| param.mode),
                 params,
+                literal: Vec::new(),
+                variadic: false,
                 ret: ids.ty(&function.ret),
+                result_hole: None,
                 ret_root: function.ret_root.map(|local| local.0 as usize),
                 signature: String::new(),
                 callable: true,
@@ -462,6 +465,7 @@ pub(super) fn register(symbols: &mut Symbols, packages: Packages<'_>) -> HashMap
                 within: None,
                 redefined_in: None,
                 is_async: function.is_async,
+                names_std: false,
                 private: (!function.is_pub).then_some(function.span),
                 package: Some(item(&None, function.module)),
             };
@@ -484,6 +488,38 @@ pub(super) fn register(symbols: &mut Symbols, packages: Packages<'_>) -> HashMap
                 ..sig.clone()
             };
             add_fn(symbols, sig);
+        }
+        // Its `pub use` lines, each the item of its own module under the
+        // re-exporting module's name too (milestone 5b3 spec 2.5); a
+        // `pub use` always names an item of the package, by its own path.
+        for hir in &program.modules {
+            for reexport in hir.uses.iter().filter(|use_| use_.is_pub) {
+                let mut segments: Vec<&str> = reexport.path.split("::").skip(1).collect();
+                let Some(name) = segments.pop() else {
+                    continue;
+                };
+                let Some(declared) = program
+                    .modules
+                    .iter()
+                    .find(|other| path(other.id) == segments)
+                else {
+                    continue;
+                };
+                let Some(scope) = symbols.scopes.get(module(declared.id).0 as usize) else {
+                    continue;
+                };
+                let callee = scope.fns.get(name).copied();
+                let found = scope.types.get(name).copied();
+                let Some(scope) = symbols.scopes.get_mut(module(hir.id).0 as usize) else {
+                    continue;
+                };
+                if let Some(callee) = callee {
+                    scope.reexport_fns.insert(name.to_string(), callee);
+                }
+                if let Some(found) = found {
+                    scope.reexport_types.insert(name.to_string(), found);
+                }
+            }
         }
     }
     roots

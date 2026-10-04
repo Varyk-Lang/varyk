@@ -168,7 +168,7 @@ impl FnChecker<'_> {
         let [arg] = args else {
             // Only the count is reported: the parameter's type is the
             // argument's.
-            self.arguments(&full, &[Ty::Unit], args, span);
+            self.arguments(&full, &[Ty::Unit], &[], false, args, span);
             return None;
         };
         let arg = self.expr_in(arg, None, TaskPlace::All);
@@ -222,6 +222,8 @@ impl FnChecker<'_> {
             kind: HirExprKind::Call {
                 callee: Callee::Builtin(id),
                 args: vec![arg],
+                trailing: Vec::new(),
+                type_arg: None,
                 rooted: None,
                 started: false,
             },

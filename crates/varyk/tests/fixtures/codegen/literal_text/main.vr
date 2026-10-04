@@ -1,0 +1,7 @@
+mod ext;
+
+fn main() {
+    let db = ext::Db::open();
+    println!("{}", db.one("a \"b\" c"));
+    println!("{}", ext::count("select 1"));
+}
