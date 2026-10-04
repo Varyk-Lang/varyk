@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/Varyk-Lang/varyk/compare/varyk-syntax-v0.5.0...varyk-syntax-v0.6.0) (2026-10-04)
+
+
+### Features
+
+* milestone 5b3, facades for packages ([#28](https://github.com/Varyk-Lang/varyk/issues/28)) ([7dfb049](https://github.com/Varyk-Lang/varyk/commit/7dfb049b76a0803be0f6863ce0bbe69bb2bd6344))
+
 ## [0.5.0](https://github.com/Varyk-Lang/varyk/compare/varyk-syntax-v0.4.0...varyk-syntax-v0.5.0) (2026-10-02)
 
 
