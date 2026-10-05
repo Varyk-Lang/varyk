@@ -2608,8 +2608,8 @@ A package that uses other Varyk packages is built as described under
 `varyk add [cargo add args]` runs `cargo add` with exactly the arguments
 you give, in the package found upward from the current directory (so a
 relative `--path` is relative to the package), and passes cargo's output and
-exit code through; Varyk interprets none of the arguments. Outside a
-package it says "no Varyk package here". Cargo reads the package's
+exit code through; Varyk interprets none of the arguments except the
+shorthand `sql` (below). Outside a package it says "no Varyk package here". Cargo reads the package's
 `Cargo.toml`, which names the `.vr` root, so `varyk add --path ../lib` works
 in any package `varyk init` made.
 

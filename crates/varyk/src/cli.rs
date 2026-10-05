@@ -136,7 +136,8 @@ pub enum Command {
     ///
     /// Runs `cargo add` with the arguments given, in the package found
     /// upward from the current directory, and forwards its output and exit
-    /// code; Varyk interprets none of the arguments.
+    /// code; Varyk interprets none of the arguments except the shorthand
+    /// `sql`, which adds the official package `varyk-sql` as `sql`.
     Add {
         /// Arguments for `cargo add`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
