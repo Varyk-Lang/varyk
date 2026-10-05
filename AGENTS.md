@@ -80,8 +80,13 @@ output; `crates/varyk/tests/examples.rs` checks that.
   list at the end of `docs/language.md`. Messages are written in plain
   words for someone who has never programmed; Rust vocabulary goes in a
   note, not the headline.
-- **Keep the reference in sync.** `docs/language.md` changes in the same
-  pull request as any change to what the compiler accepts.
+- **Keep every document current.** When a change alters what a document
+  describes, update that document in the same pull request: `README.md`
+  (status, milestone, version, install, usage, features, links),
+  `docs/language.md` (any change to what the compiler accepts),
+  `docs/design.md`, `docs/roadmap.md`, `docs/open-questions.md`,
+  `CONTRIBUTING.md`, or any other doc the change touches. Read the docs
+  against the change before every pull request.
 - **Snapshots are reviewed content.** Regenerate with `INSTA_UPDATE=always`
   only for the tests you meant to change, read the new `.snap` files, and
   make sure the gate passes without the variable afterwards.

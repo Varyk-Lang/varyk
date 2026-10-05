@@ -9,7 +9,7 @@ you write Go-like application code, the compiler turns it into readable
 Rust, rustc checks it, and you ship one native binary. Rust's safety, Go's
 simplicity.
 
-- No garbage collector, and no runtime beyond Rust's own.
+- No garbage collector: memory is managed the way Rust manages it.
 - No lifetime annotations, no `&` or `&mut` to choose at a call site, and
   one string type.
 - One native binary to deploy, with no language runtime to install.
@@ -22,20 +22,19 @@ simplicity.
 cargo install varyk
 ```
 
-JSON, configuration from the environment, logging, and `varyk test` are in
-milestone 5a, `async` functions and tasks in 5b1, and Varyk packages that use
-Varyk packages in 5b2; HTTP and databases, as packages, are milestones 5b3
-and 5b4 on the [roadmap](docs/roadmap.md); what works today is under
-[Status](#status).
+JSON, configuration from the environment, logging, tests, `async` functions
+and tasks, and Varyk packages that use Varyk packages work today, and so do
+SQL databases through the [`varyk-sql`](https://github.com/Varyk-Lang/varyk-sql)
+package (`varyk add sql`). HTTP is next, milestone 5b4 on the
+[roadmap](docs/roadmap.md). What works today is under [Status](#status).
 
 ## Use Varyk until you need Rust
 
 A Varyk package is a Cargo package: a `Cargo.toml` and a `src/main.vr` or
 `src/lib.vr`. `varyk init` writes one, `varyk run` builds it, and `varyk
 publish` ships it to crates.io as a plain Rust crate that needs no Varyk
-to use. There is nothing to bootstrap: every
-crate on crates.io is available from the first day, and every Varyk package
-joins them.
+to use. There is nothing to bootstrap: every crate on crates.io is available
+from the first day, and every Varyk package joins them.
 
 | Layer | File | |
 |---|---|---|
@@ -52,7 +51,7 @@ pub struct Matcher {
 }
 
 impl Matcher {
-    pub fn new(pattern: &str) -> Matcher { /* ... */ }
+    pub fn new(pattern: &str) -> Result<Matcher, String> { /* ... */ }
     pub fn is_match(&self, s: &str) -> bool { /* ... */ }
     pub fn count(&self, s: &str) -> usize { /* ... */ }
 }
@@ -63,8 +62,10 @@ impl Matcher {
 mod text;
 
 fn main() {
-    let digits = text::Matcher::new("[0-9]+");
-    println!("{}", digits.count("route 66 or 101"));
+    match text::Matcher::new("[0-9]+") {
+        Ok(digits) => println!("{}", digits.count("route 66 or 101")),
+        Err(e) => println!("not a pattern: {}", e),
+    }
 }
 ```
 
@@ -112,8 +113,8 @@ fn main() {
 
 It prints `Alice`, then `Bob`. This is the generated `src/main.rs` for it,
 as the compiler writes it; `varyk build --emit-rust examples/borrowing.vr`
-prints the same file, additionally passed through rustfmt when rustfmt is
-installed:
+prints the same file after the generated `Cargo.toml`, passed through
+rustfmt when rustfmt is installed:
 
 <!-- emit-rust: examples/borrowing.vr -->
 ```rust
@@ -163,17 +164,19 @@ form, so the agent fixes its own mistakes before a person looks.
 
 ## Try it
 
-You need a stable Rust toolchain installed through
+You need a stable Rust toolchain, 1.85 or newer, installed through
 [rustup](https://rustup.rs). Varyk calls `cargo` to build your program.
 
-Install the compiler from crates.io:
+Install the compiler from crates.io, write a new package, and run it:
 
 ```sh
 cargo install varyk
-varyk run examples/hello.vr
+varyk init hello
+cd hello
+varyk run
 ```
 
-Or build it from this repository and run the first example:
+Or build the compiler from this repository and run the first example:
 
 ```sh
 cargo build -p varyk
@@ -186,14 +189,17 @@ The main commands:
 varyk check [file.vr]    check the program for errors
 varyk build [file.vr]    generate and build the Rust; prints the executable path
 varyk run [file.vr]      build, then run the program, forwarding its exit code
-varyk init [dir]         write a new package
+varyk test [file.vr]     build the program's #[test] functions and run them
+varyk init [dir]         write a new package; --lib writes a library
+varyk add [args]         run cargo add in the package; varyk add sql adds varyk-sql
 varyk publish            publish the package to crates.io as a plain Rust crate
 ```
 
 Without a file, a command works on the package that contains the current
 directory (it searches upward for `Cargo.toml`).
-`build` and `run` accept `--release`. `build` also accepts `--emit-rust`,
-which prints the generated Rust. Every command accepts
+`build` and `run` accept `--release`, and `run` passes the arguments after
+`--` to the program. `build` also accepts `--emit-rust`, which prints the
+generated `Cargo.toml` and Rust. Every command accepts
 `--message-format=json`, which prints errors as JSON, one object per line.
 When running from this repository, put `cargo run -p varyk --` in front, as
 in the example above.
@@ -202,27 +208,27 @@ in the example above.
 
 Varyk is experimental and pre-1.0: anything may change, including any
 syntax, error code, or command-line flag, and a new feature or a breaking
-change bumps the minor version. This is milestone 5b3: facades for packages, on top of
-milestone 5b2's Varyk packages that use Varyk packages, milestone 5b1's
-async functions and tasks, milestone
-5a's data, configuration, logging, and tests and milestone 4's closures,
-iterators, and patterns.
-Structs, enums, and `match`, `for` loops, methods, `Option`, `Result`,
-`Vec`, `?`, and `format!` work, and so do packages with dependencies,
-modules at any depth, `use`, private fields, and Rust structs and enums
-imported from `.rs` files; the compiler builds and runs every program in
-`examples/`, and it reports every error it knows about with a code, a
-plain-word message, and, where it can, a suggested fix. HTTP,
-databases, and much more are not there yet; see
+change bumps the minor version. The current release, 0.6.0, is milestone
+5b3: facades for packages, on top of milestone 5b2's Varyk packages that
+use Varyk packages, milestone 5b1's async functions and tasks, milestone
+5a's data, configuration, logging, and tests, and milestone 4's closures,
+iterators, and patterns. Structs, enums, and `match`, `for` loops, methods,
+`Option`, `Result`, `Vec`, `?`, and `format!` work, and so do packages with
+dependencies, modules at any depth, `use`, private fields, and Rust structs
+and enums imported from `.rs` files; the compiler builds and runs every
+program in `examples/`, and it reports every error it knows about with a
+code, a plain-word message, and, where it can, a suggested fix. An HTTP
+server and client, and much more, are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
 
 Milestone 5b3 lets a package's `.rs` facade take a type parameter filled
 from where the result goes, any number of plain values after the other
 arguments, and a parameter that takes only text written in the program,
-and adds `pub use` and `varyk add sql`: the compiler side of the database
-package `varyk-sql`, which lives in its own repository and is released with
-this version (`varyk add sql` adds it). See "Calling Rust"
-in [docs/language.md](docs/language.md).
+and adds `pub use` and `varyk add sql`. Together they are the compiler side
+of the database package [`varyk-sql`](https://github.com/Varyk-Lang/varyk-sql),
+which lives in its own repository and is published on crates.io: SQLite,
+Postgres, and MySQL through sqlx, with a query's values always passed beside
+its text. See "Calling Rust" in [docs/language.md](docs/language.md).
 
 Milestone 5b2 lets a Varyk package use another one by its `Cargo.toml` key
 (`units::length::add(a, b)`), to any depth; `varyk` compiles each from its
@@ -277,6 +283,11 @@ fn display_name(&self) -> &str {
 - [docs/specs/2026-09-25-milestone-2-design.md](docs/specs/2026-09-25-milestone-2-design.md): milestone 2's additions.
 - [docs/specs/2026-09-26-milestone-3-design.md](docs/specs/2026-09-26-milestone-3-design.md): milestone 3's additions.
 - [docs/specs/2026-09-29-milestone-4-design.md](docs/specs/2026-09-29-milestone-4-design.md): milestone 4's additions.
+- [docs/specs/2026-09-30-milestone-5a-design.md](docs/specs/2026-09-30-milestone-5a-design.md): milestone 5a's additions.
+- [docs/specs/2026-10-01-milestone-5b1-design.md](docs/specs/2026-10-01-milestone-5b1-design.md): milestone 5b1's additions.
+- [docs/specs/2026-10-02-milestone-5b2-design.md](docs/specs/2026-10-02-milestone-5b2-design.md): milestone 5b2's additions.
+- [docs/specs/2026-10-03-milestone-5b3-design.md](docs/specs/2026-10-03-milestone-5b3-design.md): milestone 5b3's additions.
+- [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how to work on the compiler.
 
 ## License
 
