@@ -1929,8 +1929,7 @@ any Unicode.
 
 A service answers requests through `varyk-http`, the official HTTP
 package. It lives in its own repository, `Varyk-Lang/varyk-http`, and is
-not released yet: it ships from there after this compiler release, and
-until then `varyk add http` has nothing to add. Once released, it is added
+released from there, after the compiler release it needs. It is added
 as any package is, with `varyk add http` (see [`varyk add` and
 upgrading](#varyk-add-and-upgrading)), which lists it under the key `http`,
 so code writes `http::App`. Its README is the guide to everything it

@@ -226,10 +226,11 @@ times, and much more are not there yet; see
 
 Milestone 5b4 makes the compiler ready for
 [`varyk-http`](https://github.com/Varyk-Lang/varyk-http), the HTTP
-package, which lives in its own repository and is not released yet. With it
-in a build, `app.get("/users/{id}", get_user)` adds a route, and `varyk
-check` checks the path against `get_user`'s parameters; a handler's
-parameters are filled from the path, the query string, the JSON body, and
+package, which lives in its own repository and is released from there,
+after the compiler release it needs. With it in a build,
+`app.get("/users/{id}", get_user)` adds a route, and `varyk check`
+checks the path against `get_user`'s parameters; a handler's parameters
+are filled from the path, the query string, the JSON body, and
 the app's shared state, and what it returns is the answer, `None` a 404.
 `before`, `before_on`, and `after` hooks run around each request, and
 `app.request` sends one through the app in a test. An `Error` can carry an
