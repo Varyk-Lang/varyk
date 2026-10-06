@@ -1,0 +1,18 @@
+mod ext;
+
+fn check(name: string) -> Result<i64, Error> {
+    if name.is_empty() {
+        return Err(ext::bad("name is empty"));
+    }
+    Ok(1)
+}
+
+fn main() {
+    match check("") {
+        Ok(n) => println!("{}", n),
+        Err(e) => match e.status() {
+            Some(code) => println!("{} {}", code, e.message()),
+            None => println!("no status {}", e.message()),
+        },
+    }
+}

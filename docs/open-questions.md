@@ -124,9 +124,35 @@ Recorded, deliberately unanswered.
   parameter, so a `.vr` wrapper could forward them?
 - Should the facade's type parameter be allowed in parameter position
   (`&T: Serialize`), and in other return shapes (`HashMap<String, T>`)?
-  The first is planned for 5b4.
+  Partly answered in milestone 5b4: yes in parameter position, as one `&T`
+  bounded by `Serialize + ?Sized`; other return shapes are still open.
 - Should `pub use` re-export a module, several names at once, or an item
   of another package? The last reopens V0115 (milestone 5b2).
 - Should `varyk_std::Error` be accepted in parameters and fields, and
-  should a facade be able to carry a status or kind on it? 5b4's
-  `http::bad_request` is the first need.
+  should a facade be able to carry a status or kind on it? Partly answered
+  in milestone 5b4: an `Error` carries an optional HTTP status, set by
+  `Error::with_status` from Varyk (`varyk-http`'s constructors are Varyk
+  over it); a bare `varyk_std::Error` return stays for a facade that
+  makes an error of its own; parameters, fields, and a kind are still
+  open.
+- Should there be a wrapping hook, `app.wrap(f)` with `async fn f(req:
+  http::Request, next: http::Next) -> http::Response`? `Next` would be a
+  facade struct with one async method, so the cost is small; milestone 5b4
+  keeps `before` and `after` until a need shows up that they cannot meet.
+- Should routes be grouped as values (`let admin = app.group("/admin")`),
+  or does `before_on` cover what groups are for?
+- Should a handler be able to bind a header or a cookie by name, as a path
+  parameter binds, without naming `http::Request`?
+- Should a body bind by content type (XML, form data), with `xml::parse`
+  and `xml::stringify` beside `json`? XML goes through `req.body()` and a
+  facade until then.
+- Should the HTTP client take per-request headers, which needs a request
+  builder, or do default headers on `Client` cover a service's needs?
+- Should the compiler write an OpenAPI document from the route table and
+  the types it binds (`varyk openapi`)? It knows everything the document
+  needs.
+- Should routes be added to an app a function received, which needs the
+  state type to travel with it (`http::App<State>` in the surface)?
+- Should the compiler know any package but `varyk-std` and `varyk-http` by
+  name, and should a community package be able to offer route binding?
+  Function values, if they ever come, would answer the second.

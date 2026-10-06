@@ -1,0 +1,14 @@
+struct State {
+    name: string,
+}
+
+async fn home() {}
+
+fn add_routes(mut app: http::App) {
+    app.get("/", home);
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    add_routes(app);
+}

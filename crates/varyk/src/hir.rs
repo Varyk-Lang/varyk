@@ -383,6 +383,170 @@ pub enum HirStmt {
     Continue {
         span: Span,
     },
+    /// `app.get(path, f);` or another route call on a `varyk-http` app
+    /// (milestone 5b4 spec 2.1), a statement of its own.
+    Route(HirRoute),
+    /// `app.before(f);`, `app.before_on(prefix, f);`, or `app.after(f);`
+    /// on a `varyk-http` app (milestone 5b4 spec 2.4), a statement of its
+    /// own.
+    Hook(HirHook),
+}
+
+/// A hook of a `varyk-http` app (milestone 5b4 spec 2.4), checked against
+/// the app's state, its prefix, and its function's signature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirHook {
+    /// The local the app's `App::new` was bound to in this function; the
+    /// call changes it, as a `mut self` method does.
+    pub app: LocalId,
+    pub kind: HookKind,
+    /// The segments of a `before_on` prefix after its leading `/`, every
+    /// one a literal; `None` for `before` and `after`.
+    pub prefix: Option<Vec<Segment>>,
+    /// An async function of this package, its parameters by position: the
+    /// request, then for an `after` hook the response, then the state if
+    /// `state`.
+    pub hook: FnId,
+    /// Whether the hook takes the app's state as its last parameter.
+    pub state: bool,
+    /// The whole hook call.
+    pub span: Span,
+}
+
+impl HirHook {
+    /// The name of its call on an app: `before`, `before_on`, or `after`.
+    pub fn call(&self) -> &'static str {
+        match (self.kind, &self.prefix) {
+            (HookKind::Before, None) => "before",
+            (HookKind::Before, Some(_)) => "before_on",
+            (HookKind::After, _) => "after",
+        }
+    }
+}
+
+/// When a hook runs (milestone 5b4 spec 2.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookKind {
+    /// Before the handler, able to stop the request.
+    Before,
+    /// On the response, the handler's or a `before` hook's.
+    After,
+}
+
+/// A route of a `varyk-http` app (milestone 5b4 spec 2.1 to 2.3), checked
+/// against the app's state, its path, and its handler's signature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirRoute {
+    /// The local the app's `App::new` was bound to in this function; the
+    /// call changes it, as a `mut self` method does.
+    pub app: LocalId,
+    pub method: HttpMethod,
+    /// The path's segments after the leading `/`; none for `"/"`.
+    pub path: Vec<Segment>,
+    /// An async function of this package. Its parameters' types and modes
+    /// are its own; the state type is that of its `Shared` parameter.
+    pub handler: FnId,
+    /// How each of the handler's parameters is bound, in its order.
+    pub params: Vec<Binding>,
+    /// What the handler returns, and so how its response is made.
+    pub ret: ReturnShape,
+    /// The whole route call.
+    pub span: Span,
+}
+
+/// The method a route answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Patch,
+    Delete,
+}
+
+impl HttpMethod {
+    /// The method of the app's call `name`, if it is a route call.
+    pub fn of_call(name: &str) -> Option<HttpMethod> {
+        match name {
+            "get" => Some(HttpMethod::Get),
+            "post" => Some(HttpMethod::Post),
+            "put" => Some(HttpMethod::Put),
+            "patch" => Some(HttpMethod::Patch),
+            "delete" => Some(HttpMethod::Delete),
+            _ => None,
+        }
+    }
+
+    /// The name of its call on an app: `get`, `post`, ...
+    pub fn call(self) -> &'static str {
+        match self {
+            HttpMethod::Get => "get",
+            HttpMethod::Post => "post",
+            HttpMethod::Put => "put",
+            HttpMethod::Patch => "patch",
+            HttpMethod::Delete => "delete",
+        }
+    }
+
+    /// Whether a request of this method has a body a handler may read
+    /// (spec 2.2 rule 4).
+    pub fn has_body(self) -> bool {
+        matches!(self, HttpMethod::Post | HttpMethod::Put | HttpMethod::Patch)
+    }
+}
+
+/// A segment of a route path or prefix (spec 2.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Segment {
+    /// Matched as written.
+    Literal(String),
+    /// `{name}`: any one segment, bound to the handler's parameter `name`.
+    Param(String),
+}
+
+/// `segments` written as a path: `/users/{id}`, or `/` for none.
+pub fn path_text(segments: &[Segment]) -> String {
+    if segments.is_empty() {
+        return "/".to_string();
+    }
+    segments
+        .iter()
+        .map(|segment| match segment {
+            Segment::Literal(text) => format!("/{text}"),
+            Segment::Param(name) => format!("/{{{name}}}"),
+        })
+        .collect()
+}
+
+/// How a handler's parameter gets its value from a request (spec 2.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Binding {
+    /// From the path's `{name}`.
+    Path(String),
+    /// From the query string's key `name`.
+    Query(String),
+    /// The body, read from JSON.
+    Body,
+    /// The app's state, the `Shared` given to `App::new`.
+    State,
+    /// A value of this struct of the package, made for the request
+    /// (`http::Request`).
+    Package(StructId),
+}
+
+/// What a handler returns (spec 2.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReturnShape {
+    /// Nothing: a 204.
+    Nothing,
+    /// A value sent as JSON.
+    Json,
+    /// An `Option` of such a value: JSON, or a 404 for `None`.
+    Option,
+    /// An `http::Response`, sent as built.
+    Response,
+    /// A `Result` of one of the others, `Nothing` aside, with `Error`.
+    Result(Box<ReturnShape>),
 }
 
 /// What a `for` goes over (spec 2.4, 3.2).
@@ -437,6 +601,11 @@ pub enum HirExprKind {
     /// `type_arg` is the type filled in for the type parameter of an
     /// imported function whose return has one (milestone 5b3 spec 2.1),
     /// written as a turbofish; `None` for any other call.
+    ///
+    /// `http::App::new(state)` (milestone 5b4 spec 2.1) is a call of the
+    /// built-in row `App::new` whose one argument is the state, of type
+    /// `Shared<S>` with `S` the app's state type, and whose type is the
+    /// `varyk-http` package's `App`.
     Call {
         callee: Callee,
         args: Vec<HirExpr>,

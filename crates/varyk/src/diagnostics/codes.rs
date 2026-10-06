@@ -88,7 +88,9 @@ pub const V0208: &str = "V0208";
 /// keys that are the same (M5a spec 2.2).
 pub const V0209: &str = "V0209";
 /// A type that cannot go through `json` or `env` at a call, naming the
-/// part in the way (M5a spec 2.9).
+/// part in the way (M5a spec 2.9); also at the argument of a `.rs`
+/// function's `Serialize` parameter (milestone 5b4 spec 2.7), and at a
+/// route whose handler's body or return type cannot (spec 2.2, 2.3).
 pub const V0210: &str = "V0210";
 /// A call to an async function, or `.await`, in an ordinary function;
 /// `.await` in a closure (milestone 5b1 spec 2.2, 2.3).
@@ -100,8 +102,9 @@ pub const V0212: &str = "V0212";
 /// of tasks, that nothing awaits or detaches (milestone 5b1 spec 2.3,
 /// 2.4).
 pub const V0213: &str = "V0213";
-/// Async functions that call each other in a cycle, naming it (milestone
-/// 5b1 spec 2.2).
+/// Async functions that call each other in a cycle, or add one as a
+/// route's handler or hook, naming it (milestone 5b1 spec 2.2, 5b4 spec
+/// 2.1).
 pub const V0214: &str = "V0214";
 /// A task, or a `Vec` of tasks, used other than where it is made allows,
 /// or `Task` written as a type (milestone 5b1 spec 2.4).
@@ -112,12 +115,30 @@ pub const V0215: &str = "V0215";
 pub const V0216: &str = "V0216";
 /// An argument to a `.rs` parameter of type `&'static str`, which takes
 /// only text written in the program, that is not a string literal
-/// (milestone 5b3 spec 2.3).
+/// (milestone 5b3 spec 2.3); or a route's path or a `before_on` prefix
+/// that is not one (milestone 5b4 spec 2.1).
 pub const V0217: &str = "V0217";
 /// A value passed after the other arguments to a `.rs` function whose
 /// last parameter is `Vec<varyk_std::Value>`, of a type that cannot be
 /// one (milestone 5b3 spec 2.2).
 pub const V0218: &str = "V0218";
+/// A route whose path and handler do not fit: a `{name}` with no
+/// parameter, a parameter that binds to nothing, a body where none can
+/// be, two of one kind, or a parameter of the wrong type (milestone 5b4
+/// spec 2.2).
+pub const V0219: &str = "V0219";
+/// A route's handler or a hook of the wrong shape: not an async function
+/// of the current package, a return type outside the list, or a hook
+/// signature outside the list (milestone 5b4 spec 2.2 to 2.4).
+pub const V0220: &str = "V0220";
+/// A route or hook call on an app that is not a local bound to
+/// `App::new` in this function, in a loop, a loop's condition or
+/// `while let` value, or a closure, or not a statement of its own; or an
+/// assignment to any name holding an app (milestone 5b4 spec 2.1).
+pub const V0221: &str = "V0221";
+/// A route path or `before_on` prefix that is not valid, or a route
+/// already taken (milestone 5b4 spec 2.2, 2.4).
+pub const V0222: &str = "V0222";
 /// Mutation through a non-`mut` parameter.
 pub const V0300: &str = "V0300";
 /// Assignment to an immutable `let` binding.
@@ -172,6 +193,10 @@ pub const V0405: &str = "V0405";
 /// A package whose `Cargo.toml` has no `[[bin]]` or `[lib]` naming its
 /// `.vr` root: only `varyk` builds a Varyk package.
 pub const V0406: &str = "V0406";
+/// The `varyk-http` package of the build does not have what this compiler
+/// writes calls to: its `App`, `Request`, or `Response` is not a struct
+/// named at its root (milestone 5b4 spec 6.1).
+pub const V0407: &str = "V0407";
 /// The Rust rustc compiled from a generated file was rejected, at the
 /// Varyk line that produced it; carries rustc's message and code and asks
 /// for a bug report, since Varyk's own checks should have caught this
@@ -181,8 +206,10 @@ pub const V0900: &str = "V0900";
 /// A started call whose task holds a value from Rust code that cannot be
 /// sent to, or shared with, another thread: rustc's "cannot be sent (or
 /// shared) between threads safely" at a generated `Task::start`, at the
-/// Varyk line (milestone 5b1 spec 5). The `.rs` module's choice, not a
-/// bug in Varyk.
+/// Varyk line (milestone 5b1 spec 5); likewise at a route's or hook's
+/// adapter or registration, whose handler holds one, and at
+/// `http::App::new`, whose state does (milestone 5b4 spec 3, 7.5). The
+/// `.rs` module's choice, not a bug in Varyk.
 pub const V0901: &str = "V0901";
 
 /// Every code, the syntax codes first, in order: what the reference test
@@ -191,8 +218,9 @@ pub const ALL: &[&str] = &[
     V0001, V0002, V0003, V0010, V0011, V0012, V0100, V0101, V0102, V0103, V0104, V0105, V0106,
     V0107, V0108, V0109, V0110, V0111, V0112, V0113, V0114, V0115, V0200, V0201, V0202, V0203,
     V0204, V0205, V0206, V0207, V0208, V0209, V0210, V0211, V0212, V0213, V0214, V0215, V0216,
-    V0217, V0218, V0300, V0301, V0302, V0303, V0304, V0305, V0306, V0307, V0308, V0309, V0310,
-    V0311, V0400, V0401, V0402, V0403, V0404, V0405, V0406, V0900, V0901,
+    V0217, V0218, V0219, V0220, V0221, V0222, V0300, V0301, V0302, V0303, V0304, V0305, V0306,
+    V0307, V0308, V0309, V0310, V0311, V0400, V0401, V0402, V0403, V0404, V0405, V0406, V0407,
+    V0900, V0901,
 ];
 
 #[cfg(test)]

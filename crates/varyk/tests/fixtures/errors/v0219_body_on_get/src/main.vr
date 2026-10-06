@@ -1,0 +1,21 @@
+struct State {
+    name: string,
+}
+
+struct User {
+    id: i64,
+    name: string,
+}
+
+struct Filter {
+    name: string,
+}
+
+async fn find(filter: Filter) -> Vec<User> {
+    Vec::new()
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    app.get("/users", find);
+}

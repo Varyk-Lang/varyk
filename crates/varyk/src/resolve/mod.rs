@@ -193,6 +193,13 @@ pub struct ImportedSig {
     /// (milestone 5b3 spec 2.2). False for a Varyk function and when not
     /// `callable`.
     pub variadic: bool,
+    /// The position in `params` of a `&T` parameter with `T: Serialize +
+    /// ?Sized`, filled from its argument, which is lent as a
+    /// `json::stringify` argument is (milestone 5b4 spec 2.7); its entry
+    /// in `params` is [`Ty::Unit`], and [`ParamMode::SharedBorrow`].
+    /// `None` for a Varyk function, for any other signature, and when
+    /// not `callable`.
+    pub serialize_param: Option<usize>,
     /// [`Ty::Unit`] when not `callable`, and when `result_hole` is set.
     pub ret: Ty,
     /// The return is `Result<T, Error>` in this shape, with `T` filled at
@@ -509,6 +516,40 @@ pub(crate) enum DepKind {
     Optional,
 }
 
+/// The `App`, `Request`, and `Response` structs of one `varyk-http`
+/// package of the build (milestone 5b4 spec 2.1, 6.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpItems {
+    pub app: StructId,
+    pub request: StructId,
+    pub response: StructId,
+    /// Every struct named at the package's root, declared there or
+    /// brought there by `pub use`, by the name it has there.
+    pub root: Vec<(String, StructId)>,
+}
+
+impl HttpItems {
+    /// The structs named at the root that a request gives no handler:
+    /// `App`, `Response`, and `Client` (milestone 5b4 spec 2.2 rule 3).
+    pub const UNBOUND: [&'static str; 3] = ["App", "Response", "Client"];
+
+    /// The name `id` has at the package's root, if it is named there.
+    pub fn root_name(&self, id: StructId) -> Option<&str> {
+        self.root
+            .iter()
+            .find(|(_, found)| *found == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Whether a handler's parameter of struct `id` is bound by the
+    /// package (spec 2.2 rule 3): a struct named at its root other than
+    /// those of [`HttpItems::UNBOUND`].
+    pub fn binds(&self, id: StructId) -> bool {
+        self.root_name(id)
+            .is_some_and(|name| !Self::UNBOUND.contains(&name))
+    }
+}
+
 /// Every module's functions, imported functions, structs, and enums, and
 /// every type's methods and associated functions.
 #[derive(Debug, Clone, Default)]
@@ -517,6 +558,10 @@ pub struct Symbols {
     pub imported: Vec<ImportedSig>,
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
+    /// One entry per `varyk-http` package of the build: its `App` is the
+    /// route table, whatever key it is reached through (milestone 5b4
+    /// spec 2.1).
+    pub http: Vec<HttpItems>,
     /// The functions of every type's `impl` blocks, by type then name: a
     /// Varyk function, or an imported one of a `.rs` struct.
     members: HashMap<(UserType, String), Callee>,
@@ -607,6 +652,17 @@ struct Scope {
 }
 
 impl Symbols {
+    /// Whether `id` is the `App` of a `varyk-http` package of the build,
+    /// the route table (milestone 5b4 spec 2.1).
+    pub fn is_app(&self, id: StructId) -> bool {
+        self.http_of(id).is_some()
+    }
+
+    /// The items of the `varyk-http` package whose `App` is `app`.
+    pub fn http_of(&self, app: StructId) -> Option<&HttpItems> {
+        self.http.iter().find(|items| items.app == app)
+    }
+
     /// Looks up `name` (or `path::name`, spec 3.1) as seen from module
     /// `from`. An item of a module that is not `from` or an ancestor must
     /// be `pub`, and so must every module on the way that is not visible
@@ -1211,6 +1267,10 @@ pub struct Packages<'a> {
     /// Every Varyk package of the build, by graph index, as the package
     /// being resolved would list it (for V0115's help); may be empty.
     pub listings: &'a [Listing],
+    /// The `[package]` name of the package being resolved; `None` for a
+    /// single file. A package named `varyk-http` marks its own `App`
+    /// (milestone 5b4 spec 2.1).
+    pub name: Option<&'a str>,
 }
 
 /// Resolves the program rooted at `entry`, a crate root of `kind` (a
@@ -1259,7 +1319,7 @@ pub fn resolve_root(
         return Err(diagnostics);
     }
 
-    let symbols = collect_symbols(
+    let mut symbols = collect_symbols(
         &modules,
         imports,
         kind,
@@ -1267,6 +1327,7 @@ pub fn resolve_root(
         packages,
         &mut diagnostics,
     );
+    diagnostics.extend(package_items::mark_http(&mut symbols, packages, sources));
     check_entry_main(&modules[0], kind, &mut diagnostics);
     rename_help(&symbols, &modules, sources, &mut diagnostics);
 

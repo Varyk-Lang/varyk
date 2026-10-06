@@ -1,0 +1,24 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn check(name: &str) -> Result<i64, ::varyk_std::Error> {
+    if name.is_empty() {
+        return Err(crate::ext::bad("name is empty"));
+    }
+    Ok(1i64)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    match check("") {
+        Ok(n) => ::std::println!("{}", n),
+        Err(e) => match e.status() {
+            Some(code) => ::std::println!("{} {}", code, e.message()),
+            None => ::std::println!("no status {}", e.message()),
+        },
+    }
+}

@@ -119,6 +119,25 @@ pub fn fixture_dir(kind: &str, case: &str) -> PathBuf {
     dest
 }
 
+/// A fresh copy of the error fixture `tests/fixtures/errors/<case>/` beside
+/// a fresh copy of the stub `tests/fixtures/packages/varyk-http/`, both in
+/// one new directory under `CARGO_TARGET_TMPDIR/errors/`, so that the
+/// case's `path = "../varyk-http"` reaches the stub and two cases never
+/// share a half-copied one (milestone 5b4). Returns the case's directory.
+pub fn beside_varyk_http(case: &str) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let parent = run_dir("errors").join(format!("http-{case}-{n}"));
+    let _ = fs::remove_dir_all(&parent);
+    copy_dir(&fixtures.join("errors").join(case), &parent.join(case));
+    copy_dir(
+        &fixtures.join("packages/varyk-http"),
+        &parent.join("varyk-http"),
+    );
+    parent.join(case)
+}
+
 /// A fresh copy of the example package `examples/packages/<name>/` under
 /// `CARGO_TARGET_TMPDIR/examples/<pid>/<n>/<name>/`: [`package_copy`] with
 /// the root `examples/packages`.

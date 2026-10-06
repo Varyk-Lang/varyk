@@ -5,7 +5,9 @@
 use varyk_syntax::{Expr, ExprKind, Ident, Span};
 
 use super::asyncs::{TaskPlace, map_value_spans, started_ty};
-use super::{FnChecker, RANGE_USIZE_NOTE, closures, unsupported_rust_signature, usize_note};
+use super::{
+    ArgRules, FnChecker, RANGE_USIZE_NOTE, closures, unsupported_rust_signature, usize_note,
+};
 use crate::builtins::{self, BuiltinId, ClosureResult, Owner, ResultKind, Subst};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirExpr, HirExprKind, MethodRef, TryKind, VariantRef};
@@ -57,6 +59,23 @@ impl FnChecker<'_> {
         let receiver = self.expr(receiver, None);
         self.task_places.truncate(places);
         let receiver = receiver?;
+        // A route call is a statement of its own (milestone 5b4 spec 2.1).
+        if let Some(diagnostic) = self.route_as_value(&receiver, method, span) {
+            self.diagnostics.push(diagnostic);
+            return None;
+        }
+        self.method_on(receiver, method, args, expected, span)
+    }
+
+    /// [`FnChecker::method_call`] once `receiver` is checked.
+    pub(super) fn method_on(
+        &mut self,
+        receiver: HirExpr,
+        method: &Ident,
+        args: &[Expr],
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Option<HirExpr> {
         if method.name == "clone" && self.derived_clone(&receiver.ty) {
             return self.clone_call(receiver, method, args, span);
         }
@@ -255,16 +274,13 @@ impl FnChecker<'_> {
                 }
             }
         };
-        let (literal, variadic) = match found {
-            MethodRef::Imported(id) => {
-                let sig = &self.symbols.imported[id.0 as usize];
-                (sig.literal.clone(), sig.variadic)
-            }
-            _ => (Vec::new(), false),
+        let rules = match found {
+            MethodRef::Imported(id) => ArgRules::of(&self.symbols.imported[id.0 as usize]),
+            _ => ArgRules::default(),
         };
         let (args, trailing) = match typed {
             Some(args) => (args, Vec::new()),
-            None => self.arguments(&method.name, &params, &literal, variadic, args, span)?,
+            None => self.arguments(&method.name, &params, &rules, args, span)?,
         };
         // A looked-into result holds part of its receiver, unless its
         // payload is Copy, when it is a plain `Option` of a copy (M4 spec
@@ -356,7 +372,7 @@ impl FnChecker<'_> {
             self.blocked(span, headline, blocker, rust);
             return None;
         }
-        let (args, _) = self.arguments(&method.name, &[], &[], false, args, span)?;
+        let (args, _) = self.arguments(&method.name, &[], &ArgRules::default(), args, span)?;
         // The row is always in the table.
         let id = builtins::lookup(Owner::String, "clone", true)?;
         Some(HirExpr {
@@ -393,7 +409,7 @@ impl FnChecker<'_> {
             // The count is all `arguments` looks at here.
             let params = vec![Ty::Unit; entry.params.len()];
             return self
-                .arguments(entry.name, &params, &[], false, args, span)
+                .arguments(entry.name, &params, &ArgRules::default(), args, span)
                 .map(|(args, _)| (args, subst));
         }
         let wanted = match (entry.result, expected) {

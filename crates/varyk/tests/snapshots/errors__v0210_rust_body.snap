@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0210]: `Payload` cannot be read from JSON
+  --> src/main.vr:11:5
+   |
+11 |     app.post("/payloads", add);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `Payload` cannot be read from JSON
+   |
+   = note: `Payload` is a Rust type from a `.rs` module
+   = note: only Varyk's own types go through JSON; copy what is needed into a Varyk struct

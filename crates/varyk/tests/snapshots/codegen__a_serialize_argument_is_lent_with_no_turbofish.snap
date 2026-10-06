@@ -1,0 +1,32 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Serialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct User {
+    name: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn make_name() -> String {
+    "Bo".to_string()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let user = User { name: "Ada".to_string() };
+    let name = make_name();
+    ::std::println!("{}", crate::ext::json(&user));
+    ::std::println!("{}", crate::ext::json(&name));
+    ::std::println!("{}", crate::ext::json("ok"));
+    ::std::println!("{}", ::varyk_std::json::stringify(&user));
+    ::std::println!("{}", ::varyk_std::json::stringify(&name));
+    let client = crate::ext::Client::open();
+    ::std::println!("{}", crate::ext::Client::post(&client, "/users", &user));
+    ::std::println!("{} {}", user.name, name);
+}

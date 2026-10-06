@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0221]: `app` holds an app, and cannot be given another value
+ --> src/main.vr:7:5
+  |
+7 |     app = http::App::new(Shared::new(State { name: "others" }));
+  |     ^^^ `app` holds an app, and cannot be given another value
+  |
+  = note: the routes of an app are checked against the state it was made with; make another app with a `let` of its own

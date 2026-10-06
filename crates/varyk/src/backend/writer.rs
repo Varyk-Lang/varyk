@@ -15,6 +15,19 @@ pub struct GeneratedFile {
     /// from; `None` for a structural line (a brace, a blank line, a `mod`
     /// line, or an attribute).
     pub lines: Vec<Option<Span>>,
+    /// `marks[i]` is what the zero-based generated line `i` belongs to,
+    /// when a rustc error there needs words of its own.
+    pub marks: Vec<Option<Mark>>,
+}
+
+/// What a generated line belongs to, for the words of a thread-safety
+/// error rustc reports there (milestone 5b4 spec 7.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// A route's adapter or the call registering it.
+    Route,
+    /// An `App::new` call, which shares the state between threads.
+    State,
 }
 
 /// Builds a [`GeneratedFile`] one line at a time, so every physical line
@@ -24,6 +37,7 @@ pub struct Writer {
     path: String,
     text: String,
     lines: Vec<Option<Span>>,
+    marks: Vec<Option<Mark>>,
 }
 
 impl Writer {
@@ -34,6 +48,7 @@ impl Writer {
             path: path.into(),
             text: String::new(),
             lines: Vec::new(),
+            marks: Vec::new(),
         }
     }
 
@@ -41,12 +56,24 @@ impl Writer {
     /// `text`, then a newline. `span` is the Varyk node this line came
     /// from, or `None` for a structural line.
     pub fn line(&mut self, indent: usize, text: &str, span: Option<Span>) {
+        self.marked_line(indent, text, span, None);
+    }
+
+    /// [`Writer::line`], the line belonging to `mark`.
+    pub fn marked_line(
+        &mut self,
+        indent: usize,
+        text: &str,
+        span: Option<Span>,
+        mark: Option<Mark>,
+    ) {
         for _ in 0..indent {
             self.text.push_str("    ");
         }
         self.text.push_str(text);
         self.text.push('\n');
         self.lines.push(span);
+        self.marks.push(mark);
     }
 
     /// Consumes the writer, producing the finished file.
@@ -55,6 +82,7 @@ impl Writer {
             path: self.path,
             text: self.text,
             lines: self.lines,
+            marks: self.marks,
         }
     }
 }

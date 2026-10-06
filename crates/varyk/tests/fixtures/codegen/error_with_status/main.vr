@@ -1,0 +1,17 @@
+fn taken(name: string) -> Result<i64, Error> {
+    if name.is_empty() {
+        return Err(Error::with_status(409, name.clone()));
+    }
+    Ok(1)
+}
+
+fn code(e: Error) -> u16 {
+    e.status().unwrap_or(500)
+}
+
+fn main() {
+    match taken("") {
+        Ok(n) => println!("{}", n),
+        Err(e) => println!("{}", code(e)),
+    }
+}

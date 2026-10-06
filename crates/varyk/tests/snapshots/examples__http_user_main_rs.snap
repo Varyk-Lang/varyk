@@ -1,0 +1,369 @@
+---
+source: crates/varyk/tests/examples.rs
+expression: main
+---
+mod admin;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Serialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct User {
+    id: i64,
+    name: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct NewUser {
+    name: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct State {
+    users: Vec<User>,
+    admin_key: String,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn get_user(id: i64, state: &::std::sync::Arc<State>) -> Result<Option<User>, ::varyk_std::Error> {
+    if id < 0i64 {
+        return Err(::varyk_std::Error::new("the user store refused a negative id".to_string()));
+    }
+    for user in &state.users {
+        if user.id == id {
+            return Ok(Some(user.clone()));
+        }
+    }
+    Ok(None)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn find_by_name(name: &str, state: &::std::sync::Arc<State>) -> Option<User> {
+    for user in &state.users {
+        if user.name == name {
+            return Some(user.clone());
+        }
+    }
+    None
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn search(state: &::std::sync::Arc<State>, prefix: &Option<String>, exact: bool) -> Result<Vec<String>, ::varyk_std::Error> {
+    let mut names: Vec<String> = Vec::new();
+    match prefix {
+        Some(p) => {
+            for user in &state.users {
+                if exact && user.name == p.as_str() || !exact && user.name.starts_with(p.as_str()) {
+                    names.push(user.name.clone());
+                }
+            }
+        }
+        None => {
+            if exact {
+                return Err(::http::bad_request("an exact search needs a prefix"));
+            }
+            for user in &state.users {
+                names.push(user.name.clone());
+            }
+        }
+    }
+    Ok(names)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn create_user(user: &NewUser, state: &::std::sync::Arc<State>) -> Result<::http::server::Response, ::varyk_std::Error> {
+    if user.name.is_empty() {
+        return Err(::http::bad_request("a user needs a name"));
+    }
+    let created = User { id: (state.users.len() as i64) + 1i64, name: user.name.clone() };
+    let mut r = ::http::server::Response::json(&created);
+    ::http::server::Response::set_status(&mut r, 201u16);
+    Ok(r)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn rename(id: i64, user: &mut NewUser) -> User {
+    user.name.push_str(" (renamed)");
+    User { id: id, name: user.name.clone() }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn echo(req: &::http::server::Request) -> ::http::server::Response {
+    ::http::server::Response::text(&::std::format!("{} {}", ::http::server::Request::method(req), ::http::server::Request::path(req)))
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn echo_id(req: &::http::server::Request, id: i64) -> ::http::server::Response {
+    ::http::server::Response::text(&::std::format!("{} {} with {}", ::http::server::Request::method(req), ::http::server::Request::path(req), id))
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn ping() {
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn check_key(req: &::http::server::Request) -> Result<bool, ::varyk_std::Error> {
+    match ::http::server::Request::header(req, "x-key") {
+        Some(_) => Ok(true),
+        None => Err(::http::unauthorized("an `x-key` header is needed")),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn admin_only(req: &::http::server::Request, state: &::std::sync::Arc<State>) -> Result<bool, ::varyk_std::Error> {
+    match ::http::server::Request::header(req, "x-key") {
+        Some(key) => Ok(key == state.admin_key),
+        None => Ok(false),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn stamp(req: &::http::server::Request, res: &mut ::http::server::Response, state: &::std::sync::Arc<State>) {
+    ::http::server::Response::set_header(res, "x-users", &::std::format!("{}", state.users.len()));
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn build_app(state: &::std::sync::Arc<State>) -> ::http::server::App {
+    let mut app = ::http::server::App::new(state.clone());
+    app.after(::http::after_hook(varyk_route_0));
+    app.get("/users/{id}", ::http::route(varyk_route_1));
+    app.get("/names/{name}", ::http::route(varyk_route_2));
+    app.get("/search", ::http::route(varyk_route_3));
+    app.post("/users", ::http::route(varyk_route_4));
+    app.put("/users/{id}", ::http::route(varyk_route_5));
+    app.get("/echo", ::http::route(varyk_route_6));
+    app.get("/echo/{id}", ::http::route(varyk_route_7));
+    app.get("/ping", ::http::route(varyk_route_8));
+    app.delete("/ping", ::http::route(varyk_route_9));
+    app.get("/admin/users", ::http::route(varyk_route_10));
+    app.before_on("/admin", ::http::before_hook(varyk_route_11));
+    app.before(::http::before_hook(varyk_route_12));
+    app
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn send(app: &::http::server::App, method: &str, path: &str, body: &str) {
+    send_as(app, "admin", method, path, body).await;
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn send_as(app: &::http::server::App, key: &str, method: &str, path: &str, body: &str) {
+    let mut req = ::http::server::Request::new(method, path);
+    if !key.is_empty() {
+        ::http::server::Request::set_header(&mut req, "x-key", key);
+    }
+    ::http::server::Request::set_body(&mut req, body);
+    let r = ::http::server::App::request(app, req).await;
+    let body = ::http::server::Response::body(&r);
+    if body.is_empty() {
+        ::std::println!("{} {} -> {}", method, path, ::http::server::Response::status(&r));
+    } else {
+        ::std::println!("{} {} -> {} {}", method, path, ::http::server::Response::status(&r), body);
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    ::varyk_std::run(async {
+        ::varyk_std::start();
+        let users: Vec<User> = ::std::vec![User { id: 1i64, name: "Ada".to_string() }, User { id: 2i64, name: "Bo".to_string() }];
+        let app = build_app(&::std::sync::Arc::new(State { users: users, admin_key: "admin".to_string() }));
+        send(&app, "GET", "/users/1", "").await;
+        send(&app, "GET", "/users/9", "").await;
+        send(&app, "GET", "/users/abc", "").await;
+        send(&app, "GET", "/users/-1", "").await;
+        send(&app, "GET", "/names/Bo", "").await;
+        send(&app, "GET", "/search?prefix=A&exact=false", "").await;
+        send(&app, "GET", "/search?prefix=A", "").await;
+        send(&app, "GET", "/search?prefix=Bo&exact=true", "").await;
+        send(&app, "GET", "/search?exact=true", "").await;
+        send(&app, "POST", "/users", "{\"name\": \"Cy\"}").await;
+        send(&app, "POST", "/users", "{\"name\": \"\"}").await;
+        send(&app, "POST", "/users", "{\"nom\": \"Cy\"}").await;
+        send(&app, "PUT", "/users/2", "{\"name\": \"Bo\"}").await;
+        send(&app, "GET", "/echo", "").await;
+        send(&app, "GET", "/echo/7", "").await;
+        send(&app, "GET", "/echo/abc", "").await;
+        send(&app, "GET", "/ping", "").await;
+        send(&app, "DELETE", "/ping", "").await;
+        send(&app, "GET", "/admin/users", "").await;
+        send_as(&app, "", "GET", "/users/1", "").await;
+        send_as(&app, "user", "GET", "/admin/users", "").await;
+        let r = ::http::server::App::request(&app, ::http::server::Request::new("GET", "/nowhere")).await;
+        match ::http::server::Response::header(&r, "x-users") {
+            Some(users) => ::std::println!("GET /nowhere -> {}, with x-users {}", ::http::server::Response::status(&r), users),
+            None => ::std::println!("GET /nowhere -> {}, with no x-users", ::http::server::Response::status(&r)),
+        }
+        let port = 3000u16;
+        if let Err(e) = ::http::server::App::serve(&app, port).await {
+            ::std::println!("cannot serve on port {}: {}", port, e);
+            return;
+        }
+        ::std::println!("served on port {}", port);
+    })
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[test]
+fn a_negative_id_is_a_500() {
+    ::varyk_std::run(async {
+        ::varyk_std::start();
+        let users: Vec<User> = Vec::new();
+        let app = build_app(&::std::sync::Arc::new(State { users: users, admin_key: "admin".to_string() }));
+        let mut req = ::http::server::Request::new("GET", "/users/-1");
+        ::http::server::Request::set_header(&mut req, "x-key", "admin");
+        let r = ::http::server::App::request(&app, req).await;
+        match (&(::http::server::Response::status(&r)), &(500u16)) { (varyk_left, varyk_right) => ::std::assert!(*varyk_left == *varyk_right, "assertion failed at src/main.vr:233: left is {}, right is {}", varyk_left, varyk_right) };
+        match (&(::http::server::Response::body(&r)), &("{\"error\":\"internal error\"}")) { (varyk_left, varyk_right) => ::std::assert!(*varyk_left == *varyk_right, "assertion failed at src/main.vr:234: left is {}, right is {}", varyk_left, varyk_right) };
+    })
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_0(varyk_req: ::http::Request, varyk_res: ::http::Response) -> ::http::Response {
+    let mut varyk_res = varyk_res;
+    let varyk_2 = match varyk_req.state::<State>() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    stamp(&varyk_req, &mut varyk_res, &varyk_2).await;
+    varyk_res
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_1(varyk_req: ::http::Request) -> ::http::Response {
+    let varyk_0 = match varyk_req.param::<i64>("id") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let varyk_1 = match varyk_req.state::<State>() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match get_user(varyk_0, &varyk_1).await {
+        Ok(v) => ::http::respond_option(v),
+        Err(e) => ::http::respond_error(e),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_2(varyk_req: ::http::Request) -> ::http::Response {
+    let varyk_0 = match varyk_req.param::<String>("name") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let varyk_1 = match varyk_req.state::<State>() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    ::http::respond_option(find_by_name(&varyk_0, &varyk_1).await)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_3(varyk_req: ::http::Request) -> ::http::Response {
+    let varyk_0 = match varyk_req.state::<State>() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let varyk_1 = match varyk_req.query::<Option<String>>("prefix") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let varyk_2 = match varyk_req.query::<bool>("exact") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match search(&varyk_0, &varyk_1, varyk_2).await {
+        Ok(v) => ::http::respond_json(&v),
+        Err(e) => ::http::respond_error(e),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_4(varyk_req: ::http::Request) -> ::http::Response {
+    let varyk_0 = match varyk_req.json::<NewUser>("user").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let varyk_1 = match varyk_req.state::<State>() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match create_user(&varyk_0, &varyk_1).await {
+        Ok(v) => v,
+        Err(e) => ::http::respond_error(e),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_5(varyk_req: ::http::Request) -> ::http::Response {
+    let varyk_0 = match varyk_req.param::<i64>("id") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let mut varyk_1 = match varyk_req.json::<NewUser>("user").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    ::http::respond_json(&rename(varyk_0, &mut varyk_1).await)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_6(varyk_req: ::http::Request) -> ::http::Response {
+    let varyk_0 = match varyk_req.bind::<::http::server::Request>().await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    echo(&varyk_0).await
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_7(varyk_req: ::http::Request) -> ::http::Response {
+    let varyk_1 = match varyk_req.param::<i64>("id") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let varyk_0 = match varyk_req.bind::<::http::server::Request>().await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    echo_id(&varyk_0, varyk_1).await
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_8(varyk_req: ::http::Request) -> ::http::Response {
+    ping().await;
+    ::http::respond_empty()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_9(varyk_req: ::http::Request) -> ::http::Response {
+    ping().await;
+    ::http::respond_empty()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_10(varyk_req: ::http::Request) -> ::http::Response {
+    let varyk_0 = match varyk_req.state::<State>() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    ::http::respond_json(&crate::admin::list_users(&varyk_0).await)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_11(varyk_req: ::http::Request) -> Option<::http::Response> {
+    let varyk_1 = match varyk_req.state::<State>() {
+        Ok(v) => v,
+        Err(r) => return Some(r),
+    };
+    ::http::respond_before(admin_only(&varyk_req, &varyk_1).await)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_route_12(varyk_req: ::http::Request) -> Option<::http::Response> {
+    ::http::respond_before(check_key(&varyk_req).await)
+}

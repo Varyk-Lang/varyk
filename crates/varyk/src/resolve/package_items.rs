@@ -14,9 +14,10 @@ use crate::packages::DepTarget;
 use crate::types::Ty;
 
 use super::{
-    Callee, Dep, DepKind, Dependencies, EnumDef, EnumId, FieldDef, ImportedFnId, ImportedSig,
-    LookupError, Module, ModuleId, PackageId, PackageItem, Packages, Scope, StructDef, StructId,
-    Symbols, Unusable, UserType, VariantDef, VariantFieldsDef, is_std_module, reserved_type_name,
+    Callee, Dep, DepKind, Dependencies, EnumDef, EnumId, FieldDef, HttpItems, ImportedFnId,
+    ImportedSig, LookupError, Module, ModuleId, PackageId, PackageItem, Packages, Scope, StructDef,
+    StructId, Symbols, Unusable, UserType, VariantDef, VariantFieldsDef, is_std_module,
+    reserved_type_name,
 };
 
 impl Symbols {
@@ -455,6 +456,7 @@ pub(super) fn register(symbols: &mut Symbols, packages: Packages<'_>) -> HashMap
                 self_mode: receiver.map(|param| param.mode),
                 params,
                 literal: Vec::new(),
+                serialize_param: None,
                 variadic: false,
                 ret: ids.ty(&function.ret),
                 result_hole: None,
@@ -523,6 +525,134 @@ pub(super) fn register(symbols: &mut Symbols, packages: Packages<'_>) -> HashMap
         }
     }
     roots
+}
+
+/// The `[package]` name whose `App` is the route table (milestone 5b4
+/// spec 2.1).
+const HTTP_PACKAGE: &str = "varyk-http";
+
+/// The structs a `varyk-http` package names at its root for this compiler
+/// (milestone 5b4 spec 6.1).
+const HTTP_ITEMS: [&str; 3] = ["App", "Request", "Response"];
+
+/// Marks the route table (milestone 5b4 spec 2.1, 7.2): for each package
+/// of the build named `varyk-http`, and for the package being checked
+/// when it is named so, its `App`, `Request`, and `Response`, looked up
+/// as structs at its root, declared there or brought there by `pub use`,
+/// enter `symbols.http`. A package this one lists that lacks any of them
+/// is V0407, at its `Cargo.toml`; one it does not list cannot be named
+/// here, so it is left as it is, and so is the package's own root, whose
+/// `App`, when it has none, is no route table to call.
+pub(super) fn mark_http(
+    symbols: &mut Symbols,
+    packages: Packages<'_>,
+    sources: &[SourceFile],
+) -> Vec<Diagnostic> {
+    if packages.name == Some(HTTP_PACKAGE) {
+        // The package's own root is the first module.
+        if let Some(Ok(items)) = symbols.scopes.first().map(http_items) {
+            symbols.http.push(items);
+        }
+    }
+    let mut diagnostics = Vec::new();
+    for checked in packages
+        .checked
+        .iter()
+        .filter(|checked| checked.name == HTTP_PACKAGE)
+    {
+        let package = PackageId(checked.graph_index);
+        let root = symbols
+            .scopes
+            .iter()
+            .find(|scope| scope.package == Some(package) && scope.parent.is_none());
+        let missing = match root.map(http_items) {
+            Some(Ok(items)) => {
+                symbols.http.push(items);
+                continue;
+            }
+            Some(Err(missing)) => missing,
+            None => HTTP_ITEMS.iter().map(|name| format!("`{name}`")).collect(),
+        };
+        let listed = packages
+            .keys
+            .iter()
+            .any(|(_, target)| *target == DepTarget::Varyk(checked.graph_index));
+        if listed {
+            diagnostics.push(http_mismatch(checked, &missing, sources));
+        }
+    }
+    diagnostics
+}
+
+/// The `varyk-http` items of the package whose root module is `scope`, or
+/// the names, quoted, of the structs of [`HTTP_ITEMS`] it lacks.
+fn http_items(scope: &Scope) -> Result<HttpItems, Vec<String>> {
+    let found: Vec<Option<StructId>> = HTTP_ITEMS
+        .iter()
+        .map(
+            |name| match scope.types.get(*name).or(scope.reexport_types.get(*name)) {
+                Some(UserType::Struct(id)) => Some(*id),
+                _ => None,
+            },
+        )
+        .collect();
+    let [Some(app), Some(request), Some(response)] = found[..] else {
+        return Err(HTTP_ITEMS
+            .iter()
+            .zip(&found)
+            .filter(|(_, found)| found.is_none())
+            .map(|(name, _)| format!("`{name}`"))
+            .collect());
+    };
+    let mut root: Vec<(String, StructId)> = scope
+        .types
+        .iter()
+        .chain(&scope.reexport_types)
+        .filter_map(|(name, found)| match found {
+            UserType::Struct(id) => Some((name.clone(), *id)),
+            UserType::Enum(_) => None,
+        })
+        .collect();
+    root.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(HttpItems {
+        app,
+        request,
+        response,
+        root,
+    })
+}
+
+/// V0407 for `checked`, a `varyk-http` without the structs `missing`, at
+/// the first line of its `Cargo.toml`.
+fn http_mismatch(
+    checked: &crate::CheckedPackage,
+    missing: &[String],
+    sources: &[SourceFile],
+) -> Diagnostic {
+    let file = checked.manifest_file;
+    let end = sources
+        .get(file.0 as usize)
+        .and_then(|source| source.text.lines().next())
+        .map_or(0, str::len);
+    let missing = match missing {
+        [one] => format!("struct {one}"),
+        [first, last] => format!("structs {first} or {last}"),
+        _ => format!("structs {}", missing.join(", ")),
+    };
+    Diagnostic::new(
+        codes::V0407,
+        Span::new(file, 0, end as u32),
+        "this `varyk-http` does not match this `varyk`",
+    )
+    .with_note(format!(
+        "`varyk-http` {} has no {missing} at its root, which `varyk` {} writes calls to",
+        checked.version,
+        env!("CARGO_PKG_VERSION")
+    ))
+    .with_note(
+        "the version table in `varyk-http`'s README says which `varyk-http` goes with each \
+         `varyk`; use the one it names for this `varyk`",
+    )
 }
 
 /// Adds `sig` to `symbols`: a free function to its module's functions, a

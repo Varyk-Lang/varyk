@@ -1,0 +1,6 @@
+// A handler in another module, registered from `main.vr` as
+// `admin::list_users`.
+
+pub async fn list_users(state: Shared<crate::State>) -> Vec<crate::User> {
+    state.users.clone()
+}

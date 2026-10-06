@@ -1,0 +1,16 @@
+struct State {
+    key: string,
+}
+
+struct Keys {
+    admin: string,
+}
+
+async fn admin_only(req: http::Request, keys: Shared<Keys>) -> Result<bool, Error> {
+    Ok(req.header("x-key") == Some(keys.admin.clone()))
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { key: "k1" }));
+    app.before_on("/admin", admin_only);
+}

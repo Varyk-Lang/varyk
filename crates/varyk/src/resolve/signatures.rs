@@ -70,6 +70,11 @@ impl<'a> Mapper<'a> {
         } else {
             Vec::new()
         };
+        // The importer makes at most one `SerializeParam`.
+        let serialize_param = fixed
+            .iter()
+            .position(|ty| *ty == RustTy::SerializeParam)
+            .filter(|_| callable);
         ImportedSig {
             name: imported.name,
             module: self.module,
@@ -82,6 +87,7 @@ impl<'a> Mapper<'a> {
             params,
             literal,
             variadic: variadic && callable,
+            serialize_param,
             ret,
             result_hole: hole.filter(|_| callable),
             signature: imported.signature,
@@ -113,6 +119,9 @@ impl<'a> Mapper<'a> {
             RustTy::RefMutString => (Ty::String, ParamMode::MutableBorrow),
             RustTy::Ref(inner) => (self.value(inner)?, ParamMode::SharedBorrow),
             RustTy::RefMut(inner) => (self.value(inner)?, ParamMode::MutableBorrow),
+            // Its type is the argument's, found at each call (milestone
+            // 5b4 spec 2.7).
+            RustTy::SerializeParam => (Ty::Unit, ParamMode::SharedBorrow),
             other => (self.value(other)?, ParamMode::Owned),
         })
     }
@@ -128,6 +137,9 @@ impl<'a> Mapper<'a> {
             RustTy::Result(ok, err) if **err == RustTy::Error => {
                 Ok(Ty::Result(Box::new(self.value(ok)?), Box::new(Ty::Error)))
             }
+            // `varyk_std::Error` as the whole return (milestone 5b4 spec
+            // 2.7), which is how a package makes an `Error` with a status.
+            RustTy::Error => Ok(Ty::Error),
             other => self.value(other),
         }
     }
@@ -146,7 +158,7 @@ impl<'a> Mapper<'a> {
             RustTy::Error => {
                 return Err(Some(
                     "`varyk_std::Error` can only be the error of a returned `Result`, as in \
-                     `Result<i64, varyk_std::Error>`"
+                     `Result<i64, varyk_std::Error>`, or the whole return of a function"
                         .to_string(),
                 ));
             }
@@ -266,11 +278,13 @@ fn uncallable_note(imported: &ImportedFn) -> Option<String> {
     }
     if let Some(why) = imported.type_param_refused {
         return Some(format!(
-            "Varyk calls a generic function only with one type parameter `T: \
-             serde::de::DeserializeOwned` (or `varyk_std::serde::de::DeserializeOwned`), written \
-             inline by that full path, and `T` only in the return, as in `Result<T, \
-             varyk_std::Error>`, `Result<Option<T>, varyk_std::Error>`, or `Result<Vec<T>, \
-             varyk_std::Error>`; this one has {why}"
+            "Varyk calls a generic function only with one type parameter, written inline by \
+             full path: `T: serde::de::DeserializeOwned` (or \
+             `varyk_std::serde::de::DeserializeOwned`) with `T` only in the return, as in \
+             `Result<T, varyk_std::Error>`, `Result<Option<T>, varyk_std::Error>`, or \
+             `Result<Vec<T>, varyk_std::Error>`, or `T: serde::Serialize + ?Sized` (or \
+             `varyk_std::serde::Serialize + ?Sized`) with `T` only as `&T` in one parameter; \
+             this one has {why}"
         ));
     }
     match &imported.ret {
@@ -280,6 +294,16 @@ fn uncallable_note(imported: &ImportedFn) -> Option<String> {
                 .to_string(),
         ),
         RustTy::Opaque(text) if names_static_str(text) => Some(LITERAL_NOTE.to_string()),
+        RustTy::Opaque(text) if text.replace(' ', "") == "&varyk_std::Error" => Some(
+            "`varyk_std::Error` can only be the whole return of a function or the error of a \
+             returned `Result`, not borrowed; return it by value"
+                .to_string(),
+        ),
+        RustTy::Opaque(text) if imported.generic && text.starts_with('&') => Some(
+            "Varyk does not import a generic Rust function that returns a reference, even a \
+             `&self` method; return an owned value, such as `String` instead of `&str`"
+                .to_string(),
+        ),
         RustTy::Opaque(text) if text.starts_with('&') => Some(
             "Varyk imports a returned `&str` or `&S` only from a `&self` method, or from a `pub \
              fn` with exactly one `&T` parameter, when the signature writes no lifetime; \
@@ -334,8 +358,9 @@ fn names_std(ty: &RustTy) -> bool {
     match ty {
         // A call writes `::varyk_std::Value::from` for its values, and
         // the serde derive of a filled type parameter (milestone 5b3 spec
-        // 2.4), whichever path its bound is written by.
-        RustTy::Error | RustTy::Values | RustTy::Param => true,
+        // 2.4; milestone 5b4 spec 2.7), whichever path its bound is
+        // written by.
+        RustTy::Error | RustTy::Values | RustTy::Param | RustTy::SerializeParam => true,
         RustTy::Ref(inner) | RustTy::RefMut(inner) | RustTy::Vec(inner) | RustTy::Option(inner) => {
             names_std(inner)
         }

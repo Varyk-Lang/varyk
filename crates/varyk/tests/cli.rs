@@ -289,18 +289,18 @@ fn test_on_a_single_file_with_a_passing_test_exits_zero() {
 }
 
 #[test]
-fn add_with_two_shorthands_is_refused_and_leaves_the_manifest_alone() {
-    let dir = out_dir("add_two_shorthands");
+fn add_with_several_packages_and_other_arguments_is_refused_and_leaves_the_manifest_alone() {
+    let dir = out_dir("add_several_with_arguments");
     fs::create_dir_all(&dir).unwrap();
     assert!(varyk_in(&dir, &["init"]).status.success());
     let before = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
 
-    let output = varyk_in(&dir, &["add", "sql", "sql"]);
+    let output = varyk_in(&dir, &["add", "http", "sql", "--features", "postgres"]);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("add one official package per `varyk add` call"),
+        stderr.contains("pass other arguments with one package at a time"),
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(dir.join("Cargo.toml")).unwrap(), before);

@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{fixture_dir, varyk, varyk_in};
+use common::{beside_varyk_http, fixture_dir, varyk, varyk_in};
 
 /// Runs `varyk check` on the case's entry file and returns its stderr,
 /// after asserting the case failed with exactly one diagnostic, headed
@@ -147,6 +147,34 @@ macro_rules! copied_package_error_case {
     };
 }
 
+/// One test per case whose program uses the stub `varyk-http`
+/// (milestone 5b4): the case is copied beside a copy of the stub, its
+/// manifest naming `http = { path = "../varyk-http", package =
+/// "varyk-http" }`, and checked from there through `src/main.vr`; the
+/// copies' directory is `[dir]` in the snapshot.
+macro_rules! http_error_case {
+    ($name:ident, $code:literal) => {
+        http_error_case!($name, $code, fix_it: false);
+    };
+    ($name:ident, $code:literal, fix_it: $fix_it:literal) => {
+        #[test]
+        fn $name() {
+            let case = stringify!($name);
+            let dir = beside_varyk_http(case);
+            let output = varyk_in(&dir, &["check", "src/main.vr"]);
+            let mut stderr = checked(case, output, $code, $fix_it);
+            if let Some(parent) = dir.parent() {
+                stderr = stderr.replace(&parent.display().to_string(), "[dir]");
+                if let Ok(real) = parent.canonicalize() {
+                    stderr = stderr.replace(&real.display().to_string(), "[dir]");
+                }
+            }
+            // The compiler's version is in V0404's text.
+            insta::assert_snapshot!(without_version(&stderr));
+        }
+    };
+}
+
 error_case!(v0001_unsupported_construct, "V0001", fix_it: false);
 error_case!(v0001_use_grouped_import, "V0001", fix_it: false);
 error_case!(v0001_use_glob_import, "V0001", fix_it: false);
@@ -226,6 +254,7 @@ error_case!(v0105_private_field_in_literal, "V0105", fix_it: true);
 error_case!(v0105_rust_struct_literal_hidden_field, "V0105", fix_it: false);
 error_case!(v0105_rust_fn_pub_crate, "V0105", fix_it: false);
 error_case!(v0105_pub_use_private, "V0105", fix_it: true);
+http_error_case!(v0105_private_handler, "V0105", fix_it: true);
 package_error_case!(
     v0105_library_fn_naming_a_private_module_type,
     "V0105",
@@ -243,6 +272,7 @@ copied_package_error_case!(v0104_rust_crate_dev_dependency, "V0104", "src/main.v
 package_error_case!(v0106_main_in_library, "V0106", "src/lib.vr");
 error_case!(v0106_missing_main, "V0106", fix_it: false);
 error_case!(v0106_async_main_called, "V0106", fix_it: false);
+http_error_case!(v0106_main_as_handler, "V0106");
 error_case!(v0107_rust_string_type, "V0107", fix_it: true);
 error_case!(v0108_unsupported_rust_signature, "V0108", fix_it: false);
 error_case!(v0108_two_reference_parameters, "V0108", fix_it: false);
@@ -252,6 +282,8 @@ error_case!(v0108_rust_macro_defines_names, "V0108", fix_it: false);
 error_case!(v0108_rust_type_through_use, "V0108", fix_it: false);
 error_case!(v0108_rust_type_behind_private_module, "V0108", fix_it: false);
 error_case!(v0108_unit_inside_rust_type, "V0108", fix_it: false);
+error_case!(v0108_error_reference_return, "V0108", fix_it: false);
+error_case!(v0108_generic_method_returns_reference, "V0108", fix_it: false);
 error_case!(v0108_rust_alias_of_a_mapped_name, "V0108", fix_it: false);
 error_case!(v0109_recursive_struct, "V0109", fix_it: false);
 error_case!(v0110_use_crate_std, "V0110", fix_it: false);
@@ -302,6 +334,7 @@ error_case!(v0114_test_with_parameters, "V0114", fix_it: false);
 error_case!(v0114_test_with_return_type, "V0114", fix_it: false);
 error_case!(v0114_test_named_main, "V0114", fix_it: false);
 error_case!(v0114_assert_outside_test, "V0114", fix_it: false);
+http_error_case!(v0114_test_as_handler, "V0114");
 copied_package_error_case!(v0115_value_of_an_unlisted_package, "V0115", "src/main.vr");
 copied_package_error_case!(v0115_another_version_of_a_package, "V0115", "src/main.vr");
 error_case!(v0103_use_name_clash, "V0103", fix_it: false);
@@ -314,6 +347,7 @@ error_case!(v0200_sort_floats, "V0200", fix_it: false);
 error_case!(v0200_all_settled_on_plain_tasks, "V0200", fix_it: false);
 error_case!(v0200_shared_for_struct, "V0200", fix_it: false);
 copied_package_error_case!(v0200_error_in_a_dependency, "V0200", "src/main.vr");
+http_error_case!(v0200_app_new_without_shared, "V0200");
 error_case!(v0201_wrong_argument_count, "V0201", fix_it: false);
 error_case!(v0201_missing_variant_field, "V0201", fix_it: false);
 error_case!(v0201_closure_with_two_parameters, "V0201", fix_it: false);
@@ -375,8 +409,10 @@ error_case!(v0210_env_vec, "V0210", fix_it: false);
 error_case!(v0210_env_map, "V0210", fix_it: false);
 error_case!(v0210_rust_type, "V0210", fix_it: false);
 error_case!(v0210_result_type_from_rust, "V0210", fix_it: false);
+error_case!(v0210_serialize_rust_type, "V0210", fix_it: false);
 error_case!(v0210_shared_in_json, "V0210", fix_it: false);
 error_case!(v0210_shared_in_env, "V0210", fix_it: false);
+http_error_case!(v0210_rust_body, "V0210");
 copied_package_error_case!(v0210_json_on_a_package_type, "V0210", "src/main.vr");
 copied_package_error_case!(
     v0210_json_on_a_type_holding_a_package_type,
@@ -401,6 +437,7 @@ error_case!(v0213_map_without_collect, "V0213", fix_it: true);
 error_case!(v0213_task_never_awaited, "V0213", fix_it: false);
 error_case!(v0213_tasks_never_awaited, "V0213", fix_it: false);
 error_case!(v0214_async_cycle, "V0214", fix_it: false);
+http_error_case!(v0214_route_cycle, "V0214");
 error_case!(v0215_task_passed, "V0215", fix_it: false);
 error_case!(v0215_task_written_as_type, "V0215", fix_it: false);
 error_case!(v0215_await_on_tasks, "V0215", fix_it: false);
@@ -410,20 +447,51 @@ error_case!(v0216_shared_in_field, "V0216", fix_it: false);
 error_case!(v0217_query_from_variable, "V0217", fix_it: false);
 error_case!(v0217_query_from_format, "V0217", fix_it: false);
 error_case!(v0217_query_from_parameter, "V0217", fix_it: false);
+http_error_case!(v0217_route_path_not_literal, "V0217");
 error_case!(v0218_struct_as_value, "V0218", fix_it: false);
 error_case!(v0218_usize_as_value, "V0218", fix_it: true);
+http_error_case!(v0219_segment_without_parameter, "V0219");
+http_error_case!(v0219_parameter_binds_to_nothing, "V0219");
+http_error_case!(v0219_body_on_get, "V0219");
+http_error_case!(v0219_two_bodies, "V0219");
+http_error_case!(v0219_shared_of_another_type, "V0219");
+http_error_case!(v0219_struct_path_parameter, "V0219");
+http_error_case!(v0219_response_parameter, "V0219");
+http_error_case!(v0219_client_parameter, "V0219");
+http_error_case!(v0220_handler_not_async, "V0220");
+http_error_case!(v0220_closure_handler, "V0220");
+http_error_case!(v0220_local_handler, "V0220");
+http_error_case!(v0220_handler_of_another_package, "V0220");
+http_error_case!(v0220_return_request, "V0220");
+http_error_case!(v0220_return_option_of_option, "V0220");
+http_error_case!(v0220_hook_parameters_out_of_order, "V0220");
+http_error_case!(v0220_hook_mut_request, "V0220");
+http_error_case!(v0220_hook_wrong_return, "V0220");
+http_error_case!(v0220_hook_shared_of_another_type, "V0220");
+http_error_case!(v0221_route_on_a_parameter, "V0221");
+http_error_case!(v0221_route_in_a_loop, "V0221");
+http_error_case!(v0221_app_assigned_again, "V0221");
+http_error_case!(v0221_app_assigned_through_a_parameter, "V0221");
+http_error_case!(v0222_empty_segment, "V0222");
+http_error_case!(v0222_trailing_slash, "V0222");
+http_error_case!(v0222_star_in_literal, "V0222");
+http_error_case!(v0222_route_taken, "V0222");
+http_error_case!(v0222_route_in_both_branches, "V0222");
+http_error_case!(v0222_prefix_with_a_name, "V0222");
 error_case!(v0209_rename_not_a_string, "V0209", fix_it: false);
 error_case!(v0300_change_through_param, "V0300", fix_it: true);
 error_case!(v0300_push_on_borrowed, "V0300", fix_it: true);
 error_case!(v0301_assign_immutable_let, "V0301", fix_it: true);
 error_case!(v0301_captured_name_assigned, "V0301", fix_it: false);
 error_case!(v0302_immutable_let_to_mut_param, "V0302", fix_it: true);
+http_error_case!(v0302_route_on_app_without_mut, "V0302", fix_it: true);
 error_case!(v0303_param_to_mut_param, "V0303", fix_it: true);
 error_case!(v0303_drop_payload_to_mut_param, "V0303", fix_it: true);
 error_case!(v0303_drop_unsure_from_macro, "V0303", fix_it: true);
 error_case!(v0303_match_binding_to_mut_param, "V0303", fix_it: true);
 error_case!(v0303_captured_name_to_mut_parameter, "V0303", fix_it: false);
 error_case!(v0304_param_into_struct, "V0304", fix_it: true);
+error_case!(v0304_with_status_borrowed_text, "V0304", fix_it: true);
 error_case!(v0304_drop_binding_kept_by_match, "V0304", fix_it: true);
 error_case!(v0304_unwrap_or_on_stored_result, "V0304", fix_it: false);
 error_case!(v0304_mixed_return, "V0304", fix_it: true);
@@ -473,6 +541,7 @@ package_error_case!(v0404_std_wrong_minor, "V0404", "src/main.vr");
 package_error_case!(v0404_std_stale_lock, "V0404", "src/main.vr");
 package_error_case!(v0404_std_missing_async_main, "V0404", "src/main.vr");
 copied_package_error_case!(v0404_dependency_without_std, "V0404", "src/main.vr");
+http_error_case!(v0404_app_without_std, "V0404");
 copied_package_error_case!(
     v0404_program_without_std_for_a_logging_package,
     "V0404",
@@ -512,5 +581,6 @@ fn v0404_failing_dependency_wrong_std() {
     insta::assert_snapshot!(without_version(&stderr));
 }
 copied_package_error_case!(v0405_missing_path_dependency, "V0405", "src/main.vr");
+copied_package_error_case!(v0407_varyk_http_without_request, "V0407", "src/main.vr");
 build_error_case!(v0901_rc_given_to_a_task, "V0901");
 build_error_case!(v0901_cell_shared_with_a_task, "V0901");

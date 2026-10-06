@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0221]: a route cannot be added inside a loop, which would add it each time around
+  --> src/main.vr:10:9
+   |
+10 |         app.get("/page", page);
+   |         ^^^^^^^^^^^^^^^^^^^^^^ a route cannot be added inside a loop, which would add it each time around
+   |
+   = note: add each route once, outside the loop; a route added twice is refused

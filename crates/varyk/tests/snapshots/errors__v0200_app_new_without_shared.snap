@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0200]: `http::App::new` takes the app's state as a `Shared`, but this is `State`
+ --> src/main.vr:7:30
+  |
+7 |     let app = http::App::new(state);
+  |                              ^^^^^ `http::App::new` takes the app's state as a `Shared`, but this is `State`
+  |
+  = note: share the state first, as in `http::App::new(Shared::new(state))`; the handlers then read it through a `Shared` parameter

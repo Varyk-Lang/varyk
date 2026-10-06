@@ -1,0 +1,8 @@
+struct State {
+    name: string,
+}
+
+fn main() {
+    let state = State { name: "users" };
+    let app = http::App::new(state);
+}

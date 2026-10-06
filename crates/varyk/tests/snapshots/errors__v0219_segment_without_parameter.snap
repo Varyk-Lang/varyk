@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0219]: the path names `{id}`, but `get_user` has no parameter `id`
+  --> src/main.vr:16:5
+   |
+16 |     app.get("/users/{id}", get_user);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the path names `{id}`, but `get_user` has no parameter `id`
+   |
+   = note: add a parameter `id` to `get_user`, of an integer type, `bool`, or `string`

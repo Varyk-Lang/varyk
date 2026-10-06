@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: the request `req` of `tag` cannot be `mut`
+  --> src/main.vr:12:5
+   |
+12 |     app.before(tag);
+   |     ^^^^^^^^^^^^^^^ the request `req` of `tag` cannot be `mut`
+   |
+   = note: a change to the request here does not reach the handler

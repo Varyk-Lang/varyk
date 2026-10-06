@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: the parameter `keys` of `admin_only` is a `Shared<Keys>`, but the app's state is `State`
+  --> src/main.vr:15:5
+   |
+15 |     app.before_on("/admin", admin_only);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the parameter `keys` of `admin_only` is a `Shared<Keys>`, but the app's state is `State`
+   |
+   = note: a hook reads the state given to `App::new`

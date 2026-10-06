@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0407]: this `varyk-http` does not match this `varyk`
+ --> varyk-http/Cargo.toml:1:1
+  |
+1 | [package]
+  | ^^^^^^^^^ this `varyk-http` does not match this `varyk`
+  |
+  = note: `varyk-http` 0.1.0 has no struct `Request` at its root, which `varyk` [version] writes calls to
+  = note: the version table in `varyk-http`'s README says which `varyk-http` goes with each `varyk`; use the one it names for this `varyk`

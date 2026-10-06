@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: `http::respond_empty` is a function of the package `varyk-http`, and a route's handler is a function of this package
+ --> src/main.vr:7:18
+  |
+7 |     app.get("/", http::respond_empty);
+  |                  ^^^^^^^^^^^^^^^^^^^ `http::respond_empty` is a function of the package `varyk-http`, and a route's handler is a function of this package
+  |
+  = note: write an `async fn` in this package that calls it, and name it here

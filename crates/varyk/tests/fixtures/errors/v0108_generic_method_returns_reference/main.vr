@@ -1,0 +1,8 @@
+mod ext;
+
+fn show(namer: ext::Namer) {
+    let text = namer.name("x");
+}
+
+fn main() {
+}

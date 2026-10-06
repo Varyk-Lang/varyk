@@ -21,8 +21,10 @@ milestone 4's in
 [specs/2026-09-29-milestone-4-design.md](specs/2026-09-29-milestone-4-design.md),
 milestone 5b2's (packages) in
 [specs/2026-10-02-milestone-5b2-design.md](specs/2026-10-02-milestone-5b2-design.md),
-and milestone 5b3's (facades for packages) in
-[specs/2026-10-03-milestone-5b3-design.md](specs/2026-10-03-milestone-5b3-design.md).
+milestone 5b3's (facades for packages) in
+[specs/2026-10-03-milestone-5b3-design.md](specs/2026-10-03-milestone-5b3-design.md),
+and milestone 5b4's (`varyk-http` and the golden path) in
+[specs/2026-10-05-milestone-5b4-design.md](specs/2026-10-05-milestone-5b4-design.md).
 
 ## Principles
 
@@ -76,7 +78,9 @@ are named `varyk-*` and community packages `*-varyk` (`TRADEMARKS.md`
 draws the line), with neither `std` nor the crate underneath in the name.
 The mechanism comes first: with packages in place, a battery is written
 once as a package, by this project or by anyone, and needs no work in the
-compiler.
+compiler. The one exception is `varyk-http`, which the compiler knows by
+crate name (milestone 5b4): checking a route against its handler needs a
+function named as an argument, which nothing else in the language has.
 
 Varyk code is built by `varyk`, as Go code is built by `go`. A package is
 `Cargo.toml`, its `.vr` files, and its `.rs` facades; it has no `build.rs`
@@ -213,3 +217,4 @@ generated Rust have no stability guarantee before 1.0.
 | JSON on another package's type (5b2) | refused, V0210; convert it in its own package | serde is derived where a type is declared |
 | A type from a package not depended on (5b2) | refused, V0115 | the generated Rust must be able to name it |
 | Facades for packages (5b3) | a `.rs` signature may take a type parameter filled from where the result goes, a last `Vec<varyk_std::Value>` written as trailing values, literal-only `&'static str` text, and `varyk_std::Error`; `Value` is scalars only, built by the compiler without serde; `varyk-sql` lives in its own repository | a package such as `varyk-sql` is Varyk with a thin layer of Rust, and its users write no Rust; with scalars no conversion can fail, so no failure is hidden as `Null` or turned into a crash; `varyk-sql`'s version follows sqlx and the databases as much as the compiler |
+| HTTP (5b4) | `varyk-http`, in its own repository, on axum with tower-http, its client on reqwest with rustls; the compiler knows it by crate name, under any key: the route and hook calls on its `App` are intrinsics, each route checked against its handler and compiled to one adapter that names only the package's items, never axum; a handler's parameters bound by name to the path and query, by type to the body, the state, and the package's own types; its return value is the response; `Error` gains an optional status, and an error without one is a 500 whose message is logged, not sent | Varyk has no function values, so some part of a route table must be known to the compiler, and knowing one package by name is smaller than a general mechanism; axum is in the top tier of TechEmpower round 23, runs on the tokio runtime `varyk-std` already starts, has the middleware a real API needs, and is maintained by the tokio organisation Varyk already bets on; the compiler writes every adapter with concrete types, so axum's trait errors never reach a writer; with one binding rule for the package's own types, WebSockets, server-sent events, and uploads need no compiler change |

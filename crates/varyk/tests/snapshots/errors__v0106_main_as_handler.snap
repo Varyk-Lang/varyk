@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0106]: `main` is where the program starts and cannot be a route's handler
+ --> src/main.vr:7:18
+  |
+7 |     app.get("/", main);
+  |                  ^^^^ `main` is where the program starts and cannot be a route's handler
+  |
+  = note: put what the route does in an `async fn` of its own, and name that

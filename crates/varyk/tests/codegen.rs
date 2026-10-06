@@ -411,6 +411,43 @@ fn a_filled_type_parameter_is_a_turbofish() {
     insta::assert_snapshot!(main);
 }
 
+/// The argument of a `&T` parameter with `T: Serialize + ?Sized`
+/// (milestone 5b4 spec 2.7, 7.5) is lent as a `json::stringify` argument
+/// is, with no turbofish: rustc infers `T` from it. A
+/// struct it reaches derives `Serialize`.
+#[test]
+fn a_serialize_argument_is_lent_with_no_turbofish() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/serialize_param/main.vr");
+    let main = file(&krate, "src/main.rs");
+    for (lent, written) in [("user", "&user"), ("name", "&name")] {
+        assert!(
+            main.contains(&format!("::varyk_std::json::stringify({written})")),
+            "{lent} in {main}"
+        );
+        assert!(
+            main.contains(&format!("crate::ext::json({written})")),
+            "{lent} in {main}"
+        );
+    }
+    for expected in [
+        "crate::ext::json(\"ok\")",
+        "crate::ext::Client::post(&client, \"/users\", &user)",
+        "::varyk_std::serde::Serialize",
+    ] {
+        assert!(main.contains(expected), "{expected} in {main}");
+    }
+    assert!(
+        !main.contains("json::<") && !main.contains("post::<"),
+        "{main}"
+    );
+    assert!(
+        krate.cargo_toml.contains("varyk-std = "),
+        "{}",
+        krate.cargo_toml
+    );
+    insta::assert_snapshot!(main);
+}
+
 #[test]
 fn borrowed_local_and_literal_to_a_string_parameter() {
     insta::assert_snapshot!(main_rs(
@@ -795,6 +832,36 @@ fn a_result_of_varyk_std_error_from_rust_is_varyks_error() {
         krate.cargo_toml
     );
     insta::assert_snapshot!("error_from_rust_main_rs", main);
+}
+
+/// A facade returning a bare `varyk_std::Error` is a callable `Error`, and
+/// `status()` reads the optional HTTP status (milestone 5b4 spec 2.6, 2.7).
+#[test]
+fn a_bare_varyk_std_error_from_rust_is_varyks_error_with_a_status() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/error_status/main.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(main.contains("crate::ext::bad("), "{main}");
+    assert!(main.contains("e.status()"), "{main}");
+    assert!(
+        krate.cargo_toml.contains("varyk-std = "),
+        "{}",
+        krate.cargo_toml
+    );
+    insta::assert_snapshot!("error_status_main_rs", main);
+}
+
+/// `Error::with_status` writes as `varyk_std`'s own, its text an owned
+/// slot as `Error::new`'s is (milestone 5b4 spec 2.6).
+#[test]
+fn error_with_status_emits_as_varyk_std_s() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/error_with_status/main.vr");
+    let main = file(&krate, "src/main.rs");
+    assert!(
+        main.contains("::varyk_std::Error::with_status(409u16, name.to_string())"),
+        "{main}"
+    );
+    assert!(main.contains("e.status()"), "{main}");
+    insta::assert_snapshot!("error_with_status_main_rs", main);
 }
 
 #[test]
@@ -1566,6 +1633,43 @@ async fn doubles() {
     );
     assert!(!main.contains("start()"), "{main}");
     insta::assert_snapshot!("async_test_main_rs", main);
+}
+
+/// An async test of a program that logs starts logging first inside its
+/// runtime, as `main` does, so a message logged under the test reaches
+/// stderr (milestone 5b4 spec 7.5); a test that is not async starts
+/// nothing.
+#[test]
+fn an_async_test_of_a_program_that_logs_starts_logging() {
+    let main = main_rs(
+        "async fn double(n: i64) -> i64 {
+    log::info(\"doubling {}\", n);
+    n * 2
+}
+
+async fn main() {
+    println!(\"{}\", double(2).await);
+}
+
+#[test]
+async fn doubles() {
+    assert_eq(double(5).await, 10);
+}
+
+#[test]
+fn adds() {
+    assert_eq(1 + 1, 2);
+}
+",
+    );
+    assert!(
+        main.contains(
+            "#[test]\nfn doubles() {\n    ::varyk_std::run(async {\n        ::varyk_std::start();\n"
+        ),
+        "{main}"
+    );
+    assert!(main.contains("#[test]\nfn adds() {\n    match ("), "{main}");
+    assert_eq!(main.matches("::varyk_std::start()").count(), 2, "{main}");
 }
 
 /// A single file whose only use of `varyk-std` is an async `main` depends

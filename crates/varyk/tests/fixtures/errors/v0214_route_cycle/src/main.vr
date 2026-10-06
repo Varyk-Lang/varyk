@@ -1,0 +1,20 @@
+struct State {
+    n: i64,
+}
+
+async fn batch(state: Shared<State>) -> i64 {
+    let app = build_app(state).await;
+    let r = app.request(http::Request::new("GET", "/batch")).await;
+    r.status() as i64
+}
+
+async fn build_app(state: Shared<State>) -> http::App {
+    let mut app = http::App::new(state.clone());
+    app.get("/batch", batch);
+    app
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { n: 1 }));
+    app.get("/batch", batch);
+}

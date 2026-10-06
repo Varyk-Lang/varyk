@@ -3,7 +3,7 @@
 
 use varyk_syntax::{Expr, ExprKind, FixIt, Function, SourceFile, Span};
 
-use super::FnChecker;
+use super::{ArgRules, FnChecker};
 use crate::borrow::returns::components;
 use crate::builtins::BuiltinId;
 use crate::diagnostics::{Diagnostic, codes};
@@ -168,7 +168,7 @@ impl FnChecker<'_> {
         let [arg] = args else {
             // Only the count is reported: the parameter's type is the
             // argument's.
-            self.arguments(&full, &[Ty::Unit], &[], false, args, span);
+            self.arguments(&full, &[Ty::Unit], &ArgRules::default(), args, span);
             return None;
         };
         let arg = self.expr_in(arg, None, TaskPlace::All);

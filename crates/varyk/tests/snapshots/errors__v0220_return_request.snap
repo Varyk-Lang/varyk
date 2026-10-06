@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: `home` returns `Result<Request, Error>`, which a route cannot send
+  --> src/main.vr:11:5
+   |
+11 |     app.get("/", home);
+   |     ^^^^^^^^^^^^^^^^^^ `home` returns `Result<Request, Error>`, which a route cannot send
+   |
+   = note: a handler returns nothing, a value JSON can hold, an `Option` of one, a `Response`, or a `Result` of one of those with `Error`

@@ -1,0 +1,12 @@
+struct State {
+    name: string,
+}
+
+async fn page() {}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    for i in 0..2 {
+        app.get("/page", page);
+    }
+}

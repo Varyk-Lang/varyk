@@ -1,0 +1,14 @@
+struct State {
+    name: string,
+}
+
+struct NewUser {
+    name: string,
+}
+
+async fn add(first: NewUser, second: NewUser) {}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    app.post("/users", add);
+}

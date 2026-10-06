@@ -330,6 +330,9 @@ impl<R: Rule> Walker<'_, R> {
                 let frame = self.loops.last_mut().expect("`continue` is inside a loop");
                 frame.continues = union(frame.continues.take(), marks);
             }
+            // The app is lent to the call as a `mut self` receiver.
+            HirStmt::Route(route) => self.access(route.app, route.span, Access::Change),
+            HirStmt::Hook(hook) => self.access(hook.app, hook.span, Access::Change),
         }
     }
 

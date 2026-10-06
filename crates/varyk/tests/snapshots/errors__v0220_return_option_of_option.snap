@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: `get_user` returns `Option<Option<User>>`, which a route cannot send
+  --> src/main.vr:16:5
+   |
+16 |     app.get("/users/{id}", get_user);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `get_user` returns `Option<Option<User>>`, which a route cannot send
+   |
+   = note: a handler returns nothing, a value JSON can hold, an `Option` of one, a `Response`, or a `Result` of one of those with `Error`

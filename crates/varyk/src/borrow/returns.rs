@@ -876,7 +876,8 @@ fn walk_stmt(stmt: &mut HirStmt, visit: &mut impl FnMut(&mut HirExpr)) {
             }
             walk_block(body, visit);
         }
-        HirStmt::Break { .. } | HirStmt::Continue { .. } => {}
+        HirStmt::Break { .. } | HirStmt::Continue { .. } | HirStmt::Route(_) | HirStmt::Hook(_) => {
+        }
     }
 }
 

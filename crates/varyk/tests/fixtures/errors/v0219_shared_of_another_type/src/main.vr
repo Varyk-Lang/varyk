@@ -1,0 +1,16 @@
+struct State {
+    name: string,
+}
+
+struct Other {
+    n: i64,
+}
+
+async fn count(other: Shared<Other>) -> i64 {
+    other.n
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    app.get("/count", count);
+}

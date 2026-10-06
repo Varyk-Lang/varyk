@@ -417,12 +417,27 @@ fn import_fn(
     if why_not_imported(sig).is_some() {
         return None;
     }
+    let accepted = type_param(sig, names);
+    // A type parameter filled from an argument is `&T` in its parameter.
+    let filled;
+    let param_names = match &accepted {
+        Ok(Some(Generic::Write(name))) => {
+            filled = Names {
+                param: Some(name.clone()),
+                ..names.clone()
+            };
+            &filled
+        }
+        _ => names,
+    };
     let mut receiver = None;
     let mut params = Vec::new();
     let last = sig.inputs.len().saturating_sub(1);
     for (at, arg) in sig.inputs.iter().enumerate() {
         match arg {
-            FnArg::Typed(pat_type) => params.push(map_param_type(&pat_type.ty, names, at == last)),
+            FnArg::Typed(pat_type) => {
+                params.push(map_param_type(&pat_type.ty, param_names, at == last));
+            }
             // Only `&self` and `&mut self` map (spec 4.2); any other
             // receiver is kept as an opaque first parameter, so the
             // method is never callable.
@@ -439,8 +454,15 @@ fn import_fn(
         }
     }
     let signature = sig.to_token_stream().to_string();
-    let accepted = type_param(sig, names);
     let generic = !sig.generics.params.is_empty() || sig.generics.where_clause.is_some();
+    // Only type and const parameters, or a `where` clause, make a
+    // signature generic for the note; a lifetime parameter alone does not.
+    let generic_types = sig
+        .generics
+        .params
+        .iter()
+        .any(|param| !matches!(param, GenericParam::Lifetime(_)))
+        || sig.generics.where_clause.is_some();
     let is_async = sig.asyncness.is_some();
     // An async function's result outlives the call that starts it, so a
     // reference it returns is never rooted, and stays opaque (milestone
@@ -451,11 +473,11 @@ fn import_fn(
         elided_root(sig, receiver, owner.is_some())
     };
     let (ret, type_param, type_param_refused) = match accepted {
-        Ok(Some((name, ret))) => (ret, Some(name), None),
+        Ok(Some(Generic::Read(name, ret))) => (ret, Some(name), None),
         // Varyk cannot name any other type argument, so such a function
         // is never callable; an opaque return type says so.
         Err(why) => (RustTy::Opaque(signature.clone()), None, Some(why)),
-        Ok(None) => {
+        Ok(None | Some(Generic::Write(_))) => {
             let ret = match &sig.output {
                 ReturnType::Default => RustTy::Unit,
                 ReturnType::Type(_, ty) => map_return_type(ty, names, root.is_some()),
@@ -473,20 +495,79 @@ fn import_fn(
         signature,
         ret_root,
         is_async,
+        generic: generic_types,
         span: name_range(&sig.ident, text),
         type_param,
         type_param_refused,
     })
 }
 
-/// The type parameter of `sig` and its mapped return type, when it is
-/// the one shape Varyk fills at the call (milestone 5b3 spec 2.1): one
-/// type parameter with the single inline bound `DeserializeOwned` by
-/// full path, no `where` clause and no other generic parameter, in the
-/// return only, as `Result<T, varyk_std::Error>`, `Result<Option<T>, ..>`,
-/// or `Result<Vec<T>, ..>`. `Ok(None)` for a signature with no generics;
-/// `Err` with why for any other generic one.
-fn type_param(sig: &Signature, names: &Names) -> Result<Option<(String, RustTy)>, &'static str> {
+/// A type parameter Varyk fills at the call.
+enum Generic {
+    /// `T: DeserializeOwned`, filled from where the result goes
+    /// (milestone 5b3 spec 2.1): its name and the mapped return.
+    Read(String, RustTy),
+    /// `T: Serialize + ?Sized`, `&T` in one parameter, filled from the
+    /// argument (milestone 5b4 spec 2.7): its name.
+    Write(String),
+}
+
+/// The bounds of a type parameter, as Varyk tells them apart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Bound {
+    /// `serde::de::DeserializeOwned` alone.
+    Read,
+    /// `serde::Serialize`, with `?Sized` beside it or not.
+    Write { maybe_sized: bool },
+    /// None, or any other.
+    Other,
+}
+
+/// The [`Bound`] of `param`, written inline by full path with no default.
+fn bound(param: &syn::TypeParam) -> Bound {
+    if param.default.is_some() {
+        return Bound::Other;
+    }
+    let (mut read, mut write, mut maybe_sized, mut other) = (0, 0, 0, 0);
+    for bound in &param.bounds {
+        let TypeParamBound::Trait(bound) = bound else {
+            other += 1;
+            continue;
+        };
+        if bound.paren_token.is_some() || bound.lifetimes.is_some() {
+            other += 1;
+        } else if bound.maybe.is_some() {
+            if bound.path.is_ident("Sized") {
+                maybe_sized += 1;
+            } else {
+                other += 1;
+            }
+        } else {
+            match std_item(&bound.path) {
+                Some(StdItem::DeserializeOwned) => read += 1,
+                Some(StdItem::Serialize) => write += 1,
+                _ => other += 1,
+            }
+        }
+    }
+    match (read, write, maybe_sized, other) {
+        (1, 0, 0, 0) => Bound::Read,
+        (0, 1, 0 | 1, 0) => Bound::Write {
+            maybe_sized: maybe_sized == 1,
+        },
+        _ => Bound::Other,
+    }
+}
+
+/// The type parameter of `sig`, when it has one of the two shapes Varyk
+/// fills at the call: one type parameter with an inline bound by full
+/// path, no `where` clause and no other generic parameter, either
+/// `DeserializeOwned` in the return only, as `Result<T,
+/// varyk_std::Error>`, `Result<Option<T>, ..>`, or `Result<Vec<T>, ..>`
+/// (milestone 5b3 spec 2.1), or `Serialize + ?Sized` once, as `&T` in one
+/// parameter (milestone 5b4 spec 2.7). `Ok(None)` for a signature with no
+/// generics; `Err` with why for any other generic one.
+fn type_param(sig: &Signature, names: &Names) -> Result<Option<Generic>, &'static str> {
     let generics = &sig.generics;
     if generics.params.is_empty() && generics.where_clause.is_none() {
         return Ok(None);
@@ -502,28 +583,33 @@ fn type_param(sig: &Signature, names: &Names) -> Result<Option<(String, RustTy)>
             GenericParam::Const(_) => return Err("a const parameter"),
         }
     }
-    let [param] = params[..] else {
-        return Err("two or more type parameters");
-    };
-    let bounded = match param.bounds.iter().collect::<Vec<_>>()[..] {
-        [TypeParamBound::Trait(bound)] => {
-            bound.paren_token.is_none()
-                && bound.lifetimes.is_none()
-                && bound.maybe.is_none()
-                && std_item(&bound.path) == Some(StdItem::DeserializeOwned)
+    let param = match params[..] {
+        [param] => param,
+        [a, b] => {
+            let both = matches!(
+                (bound(a), bound(b)),
+                (Bound::Read, Bound::Write { .. }) | (Bound::Write { .. }, Bound::Read)
+            );
+            return Err(if both {
+                "both a `Serialize` and a `DeserializeOwned` type parameter"
+            } else {
+                "two or more type parameters"
+            });
         }
-        _ => false,
+        _ => return Err("two or more type parameters"),
     };
     let name = ident_name(&param.ident);
+    match bound(param) {
+        Bound::Read => {}
+        Bound::Write { maybe_sized } => return written(sig, name, maybe_sized),
+        Bound::Other => return Err(OTHER_BOUND),
+    }
     let in_params = sig.inputs.iter().any(|arg| match arg {
-        FnArg::Typed(typed) => mentions(typed.ty.to_token_stream(), &name),
+        FnArg::Typed(typed) => occurrences(typed.ty.to_token_stream(), &name) > 0,
         FnArg::Receiver(_) => false,
     });
     if in_params {
         return Err("the type parameter in a parameter");
-    }
-    if !bounded || param.default.is_some() {
-        return Err("no bound, or a bound other than `serde::de::DeserializeOwned`");
     }
     let ReturnType::Type(_, ty) = &sig.output else {
         return Err(ELSEWHERE);
@@ -542,20 +628,77 @@ fn type_param(sig: &Signature, names: &Names) -> Result<Option<(String, RustTy)>
         }
         _ => return Err(ELSEWHERE),
     }
-    Ok(Some((name, ret)))
+    Ok(Some(Generic::Read(name, ret)))
 }
+
+/// The type parameter `name` of `sig`, bounded by `Serialize` (with
+/// `?Sized` when `maybe_sized`), when it is filled from an argument: `&T`,
+/// once, in one parameter, and nowhere else (milestone 5b4 spec 2.7).
+fn written(
+    sig: &Signature,
+    name: String,
+    maybe_sized: bool,
+) -> Result<Option<Generic>, &'static str> {
+    if !maybe_sized {
+        return Err(NOT_UNSIZED);
+    }
+    let mut found = Vec::new();
+    for arg in &sig.inputs {
+        if let FnArg::Typed(typed) = arg {
+            let count = occurrences(typed.ty.to_token_stream(), &name);
+            found.extend(std::iter::repeat_n(typed.ty.as_ref(), count));
+        }
+    }
+    let in_return = match &sig.output {
+        ReturnType::Default => 0,
+        ReturnType::Type(_, ty) => occurrences(ty.to_token_stream(), &name),
+    };
+    let ty = match found[..] {
+        [] => return Err("the type parameter in no parameter"),
+        [ty] if in_return == 0 => ty,
+        _ => return Err("the type parameter in more than one place"),
+    };
+    match ty {
+        Type::Reference(reference)
+            if reference.lifetime.is_none()
+                && reference.mutability.is_none()
+                && is_type_param(&reference.elem, &name) =>
+        {
+            Ok(Some(Generic::Write(name)))
+        }
+        _ if is_type_param(ty, &name) => Err("the type parameter by value, not as `&T`"),
+        _ => Err("the type parameter in a type other than `&T`"),
+    }
+}
+
+/// Whether `ty` is the bare type parameter `name`.
+fn is_type_param(ty: &Type, name: &str) -> bool {
+    matches!(ty, Type::Path(path) if path.qself.is_none() && path.path.is_ident(name))
+}
+
+/// Why a `Serialize` type parameter is refused without `?Sized`.
+const NOT_UNSIZED: &str = "a `Serialize` bound without `?Sized`: add `?Sized`, as in `T: \
+                           serde::Serialize + ?Sized`, so that a string can be lent as `&str`";
+
+/// Why a type parameter is refused when its bound is neither of the two
+/// Varyk fills.
+const OTHER_BOUND: &str = "no bound, or a bound other than `serde::de::DeserializeOwned` or \
+                           `serde::Serialize + ?Sized`";
 
 /// Why a type parameter is refused when it is not where Varyk can fill
 /// it, or not in the return at all.
 const ELSEWHERE: &str = "a return that is not one of those three shapes";
 
-/// Whether `tokens` name the identifier `name` anywhere.
-fn mentions(tokens: proc_macro2::TokenStream, name: &str) -> bool {
-    tokens.into_iter().any(|token| match token {
-        proc_macro2::TokenTree::Ident(ident) => ident == name,
-        proc_macro2::TokenTree::Group(group) => mentions(group.stream(), name),
-        _ => false,
-    })
+/// How many times `tokens` name the identifier `name`.
+fn occurrences(tokens: proc_macro2::TokenStream, name: &str) -> usize {
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            proc_macro2::TokenTree::Ident(ident) => usize::from(ident == name),
+            proc_macro2::TokenTree::Group(group) => occurrences(group.stream(), name),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// The parameter position (0 for `self`) a reference return is rooted at

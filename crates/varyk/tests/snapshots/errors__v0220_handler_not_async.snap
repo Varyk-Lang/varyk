@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: `home` is not an async function, and a route's handler is one
+ --> src/main.vr:9:18
+  |
+9 |     app.get("/", home);
+  |                  ^^^^ `home` is not an async function, and a route's handler is one
+  |
+  = note: declare it `async fn home`

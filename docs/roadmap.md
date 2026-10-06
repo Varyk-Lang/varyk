@@ -103,11 +103,11 @@ section 7 of the spec.
 
 ## Milestone 5: batteries for services
 
-Milestone 5 is five milestones. The bar for the whole of it is one golden
+Milestone 5 is six milestones. The bar for the whole of it is one golden
 path: a users API on a database is `varyk init`, `varyk add http sql`, one file,
 and `varyk run` away, within fifteen minutes of `cargo install varyk`, and
-`varyk build --release` leaves an ordinary native executable. It is met at
-the end of 5b4, and promotion waits for it.
+`varyk build --release` leaves an ordinary native executable. It is met
+when 5b4 and 5c are done, and promotion waits for it.
 
 ### Milestone 5a: data, configuration, logging, and tests
 
@@ -160,14 +160,40 @@ moves to 5b4, where the HTTP client needs it.
 
 ### Milestone 5b4: `varyk-http` and the golden path
 
-- [ ] An HTTP server with an explicit route table (`app.get("/users/{id}", get_user)`); a handler's parameters bound by name to the route, by type to the JSON body and to shared state (a `Shared<T>`); the route checked against the handler by `varyk check`; the return value as the response, `None` as 404
-- [ ] `Error` carrying an optional status set by constructors (`http::bad_request(..)`); an error without one is a 500 whose message is logged and not sent
-- [ ] An HTTP client in the same package
-- [ ] A `.rs` function with a type parameter `&T: Serialize` in a parameter, for sending a Varyk value out, which the HTTP client needs (moved from 5b3)
-- [ ] The `users` API on a database, and the fifteen-minute path: `varyk init`, `varyk add http sql`, one file, and `varyk run`
+Design: [specs/2026-10-05-milestone-5b4-design.md](specs/2026-10-05-milestone-5b4-design.md).
+
+The compiler:
+
+- [x] A route table: `http::App` of the `varyk-http` package known to the compiler; `get`, `post`, `put`, `patch`, and `delete` routes with `{name}` segments; handlers' parameters bound by name to the path and the query string, by type to the JSON body, to the state (a `Shared<T>`), and to the package's own types; the return value as the response, `None` as 404, `http::Response` for a custom status and headers; every route checked against its handler by `varyk check`
+- [x] `before`, `before_on`, and `after` hooks, and `app.request` for tests
+- [x] `Error` carrying an optional status, set by `Error::with_status` and the `http::` constructors written over it; an error without one is a 500 whose message is logged and not sent
+- [x] A `.rs` function with a type parameter `&T: Serialize` in a parameter (moved from 5b3), and a `.rs` function returning `varyk_std::Error`
+- [x] `varyk add http sql`, several official packages in one call, by shorthand or full name
+- [x] The fixture packages, and the docs
+
+`varyk-http`, in its own repository, each item checked at the release that
+ships it:
+
+- [ ] The server on axum and tower-http: the compiler's contract, `Request` and `Response`, tracing, body limit, timeout, panic containment, and graceful shutdown on by default; CORS, compression, metrics, address (`127.0.0.1` unless set), the limits, and a maximum of requests in flight by one call; cookies with secure defaults; `Response::file`
+- [ ] The client on reqwest with rustls: `Client` with default headers and a timeout, `get`, `post`, `put`, `patch`, `delete`, a `Response` for any status
+- [ ] The `users` API on `varyk-sql` as its demo, and the fifteen-minute path in its README: `varyk init`, `varyk add http sql`, one file, and `varyk run`
+- [ ] WebSockets, server-sent events, and multipart uploads as bound types, text and files until a bytes type exists
+
+Its own work, in its own repository:
+
 - [ ] An agent evaluation: the examples written by a model from `docs/language.md` alone, pass rates published, before any page claims that agents write Varyk well
 
 After 5b4, `varyk-mongo` and `varyk-redis` are the next packages.
+
+### Milestone 5c: time, ids, and bytes
+
+To be designed in its own spec after 5b4's. What a production API needs
+that the language lacks, so that the users API does not ship `created_at`
+as a string. Milestone 5 is met when 5b4 and 5c are done.
+
+- [ ] A date-time type with `now()`, ISO 8601 in JSON, and native columns in `varyk-sql`
+- [ ] A UUID type
+- [ ] A bytes type, which lets `varyk-http` read uploads and binary bodies
 
 ## Milestone 6: tooling and beyond
 
@@ -186,7 +212,7 @@ milestone 5b3 makes unnecessary for what a facade needs (moved from 5b2).
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
 
-TOML, beside the rest of the cuts listed under "Not in milestone 5b3" in
+TOML, beside the rest of the cuts listed under "Not in milestone 5b4" in
 [language.md](language.md): nothing on the golden path needs it, and the
 same machinery adds it later.
 
@@ -194,6 +220,10 @@ same machinery adds it later.
 cannot hold, and
 the rest of the milestone-4 cut list (spec section 2.13): a character type,
 closures as values, tuples, `HashSet`, and the remaining iterator adapters.
+
+JWT verification and password hashing: facades over `jsonwebtoken` and
+`argon2` in the service that needs them, to become packages if people keep
+writing the same facade.
 
 Using a crate directly from Varyk code, with no facade `.rs` module in
 between. Milestone 3 reaches every crate through a facade, because most

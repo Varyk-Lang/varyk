@@ -180,7 +180,10 @@ impl FnChecker<'_> {
         body: &Block,
         span: Span,
     ) -> Option<HirStmt> {
+        // The value runs each time around, as the body does.
+        self.loop_heads += 1;
         let head = self.let_head(value, "while let");
+        self.loop_heads -= 1;
         self.scopes.push(Scope::new());
         let lowered = match &head {
             Some(head) => self.lower_pattern(pattern, &head.ty),

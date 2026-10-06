@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0222]: `app` already has the route `get "/users"`
+  --> src/main.vr:11:5
+   |
+ 9 |     app.get("/users", list);
+   |     ----------------------- first added here
+10 |     app.post("/users", list);
+11 |     app.get("/users", list);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^ `app` already has the route `get "/users"`
+   |
+   = note: each method and path is added once; a second route would never be reached

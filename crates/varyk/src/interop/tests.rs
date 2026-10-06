@@ -667,6 +667,14 @@ fn imports_async_fn() {
 }
 
 #[test]
+fn marks_a_generic_fn() {
+    assert!(!one("pub fn f() {}").generic);
+    assert!(one("pub fn f<T: Clone>(x: &T) {}").generic);
+    assert!(one("pub fn f<T>(x: &T) where T: Clone {}").generic);
+    assert!(!one("pub fn f<'a>(x: &'a str) -> &'a str { x }").generic);
+}
+
+#[test]
 fn imports_async_method() {
     let f = method_sig("async fn load(&mut self, n: i32) -> i32");
     assert!(f.is_async);
@@ -1678,6 +1686,11 @@ fn std_item_knows_error_value_and_the_serde_bound() {
         item("varyk_std::serde::de::DeserializeOwned"),
         Some(StdItem::DeserializeOwned)
     );
+    assert_eq!(item("serde::Serialize"), Some(StdItem::Serialize));
+    assert_eq!(
+        item("::varyk_std::serde::Serialize"),
+        Some(StdItem::Serialize)
+    );
     for other in [
         "Error",
         "varyk_std::Task",
@@ -1686,6 +1699,9 @@ fn std_item_knows_error_value_and_the_serde_bound() {
         "varyk_std::Error<i32>",
         "serde::DeserializeOwned",
         "varyk_std::serde::Deserialize",
+        "Serialize",
+        "serde::ser::Serialize",
+        "varyk_std::Serialize",
     ] {
         assert_eq!(item(other), None, "{other}");
     }
@@ -1776,19 +1792,19 @@ fn any_other_generic_shape_is_opaque_with_its_reason() {
         ),
         (
             "pub fn f<T: Default>() -> Result<T, varyk_std::Error> { todo!() }",
-            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+            OTHER_BOUND,
         ),
         (
             "pub fn f<T: serde::de::DeserializeOwned + Clone>() -> Result<T, varyk_std::Error> { todo!() }",
-            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+            OTHER_BOUND,
         ),
         (
             "pub fn f<T>() -> Result<T, varyk_std::Error> { todo!() }",
-            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+            OTHER_BOUND,
         ),
         (
             "pub fn f<T: DeserializeOwned>() -> Result<T, varyk_std::Error> { todo!() }",
-            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+            OTHER_BOUND,
         ),
         (
             "pub fn f<'a, T: serde::de::DeserializeOwned>(s: &'a str) -> Result<T, varyk_std::Error> { todo!() }",
@@ -1798,10 +1814,7 @@ fn any_other_generic_shape_is_opaque_with_its_reason() {
             "pub fn f<T: serde::de::DeserializeOwned>(t: T) -> Result<T, varyk_std::Error> { todo!() }",
             "the type parameter in a parameter",
         ),
-        (
-            "pub fn f<T>(v: Vec<T>) -> i64 { todo!() }",
-            "the type parameter in a parameter",
-        ),
+        ("pub fn f<T>(v: Vec<T>) -> i64 { todo!() }", OTHER_BOUND),
         (
             "pub fn f<T: serde::de::DeserializeOwned>(t: Vec<T>) -> Result<i64, varyk_std::Error> { todo!() }",
             "the type parameter in a parameter",
@@ -1829,6 +1842,110 @@ fn any_other_generic_shape_is_opaque_with_its_reason() {
             "{text}: {f:?}"
         );
         assert_eq!(f.type_param, None, "{text}");
+        assert_eq!(f.type_param_refused, Some(reason), "{text}");
+    }
+}
+
+/// The reason for a type parameter whose bound is neither of the two
+/// Varyk fills.
+const OTHER_BOUND: &str = "no bound, or a bound other than `serde::de::DeserializeOwned` or \
+                           `serde::Serialize + ?Sized`";
+
+// --- A type parameter in a parameter (milestone 5b4 spec 2.7) -----------
+
+#[test]
+fn a_serialize_type_parameter_as_a_reference_parameter_is_imported() {
+    for text in [
+        "pub fn json<T: varyk_std::serde::Serialize + ?Sized>(value: &T) -> i64 { todo!() }",
+        "pub fn json<T: serde::Serialize + ?Sized>(value: &T) -> i64 { todo!() }",
+        "pub fn json<Body: ?Sized + ::serde::Serialize>(value: &Body) -> i64 { todo!() }",
+    ] {
+        let f = one(text);
+        assert_eq!(f.params, vec![RustTy::SerializeParam], "{text}");
+        assert_eq!(f.ret, RustTy::I64, "{text}");
+        assert_eq!(f.type_param, None, "{text}");
+        assert_eq!(f.type_param_refused, None, "{text}");
+    }
+    let m = method_sig(
+        "async fn post<T: serde::Serialize + ?Sized>(&self, url: &str, body: &T) -> Result<i64, varyk_std::Error>",
+    );
+    assert_eq!(m.receiver, Some(SelfMode::Shared));
+    assert_eq!(m.params, vec![RustTy::Str, RustTy::SerializeParam]);
+    assert_eq!(
+        m.ret,
+        RustTy::Result(Box::new(RustTy::I64), Box::new(RustTy::Error))
+    );
+    assert_eq!(m.type_param_refused, None);
+    assert_eq!(RustTy::SerializeParam.text(), "&T");
+}
+
+#[test]
+fn any_other_serialize_shape_is_opaque_with_its_reason() {
+    for (text, reason) in [
+        (
+            "pub fn f<T: serde::Serialize>(v: &T) -> i64 { todo!() }",
+            "a `Serialize` bound without `?Sized`: add `?Sized`, as in `T: serde::Serialize + \
+             ?Sized`, so that a string can be lent as `&str`",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>(a: &T, b: &T) -> i64 { todo!() }",
+            "the type parameter in more than one place",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>(a: &T) -> Option<Box<T>> { todo!() }",
+            "the type parameter in more than one place",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>(v: T) -> i64 { todo!() }",
+            "the type parameter by value, not as `&T`",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>(v: &Vec<T>) -> i64 { todo!() }",
+            "the type parameter in a type other than `&T`",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>(v: Vec<T>) -> i64 { todo!() }",
+            "the type parameter in a type other than `&T`",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>(v: &mut T) -> i64 { todo!() }",
+            "the type parameter in a type other than `&T`",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>() -> i64 { todo!() }",
+            "the type parameter in no parameter",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>() -> Box<T> { todo!() }",
+            "the type parameter in no parameter",
+        ),
+        (
+            "pub fn f<T>(v: &T) -> i64 where T: serde::Serialize + ?Sized { todo!() }",
+            "a `where` clause",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized + Clone>(v: &T) -> i64 { todo!() }",
+            OTHER_BOUND,
+        ),
+        (
+            "pub fn f<T: Serialize + ?Sized>(v: &T) -> i64 { todo!() }",
+            OTHER_BOUND,
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized, U: serde::de::DeserializeOwned>(v: &T) -> Result<U, varyk_std::Error> { todo!() }",
+            "both a `Serialize` and a `DeserializeOwned` type parameter",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized, U: serde::Serialize + ?Sized>(a: &T, b: &U) -> i64 { todo!() }",
+            "two or more type parameters",
+        ),
+    ] {
+        let f = one(text);
+        assert!(
+            matches!(&f.ret, RustTy::Opaque(ret) if *ret == f.signature),
+            "{text}: {f:?}"
+        );
+        assert!(!f.params.contains(&RustTy::SerializeParam), "{text}");
         assert_eq!(f.type_param_refused, Some(reason), "{text}");
     }
 }

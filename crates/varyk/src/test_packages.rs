@@ -74,14 +74,14 @@ impl Build {
         keys
     }
 
-    /// Resolves `entry`, a root of `kind` whose package has `deps`, with
-    /// the packages checked so far.
+    /// Resolves `entry`, a root of `kind` whose package, named `name`
+    /// when it is a library, has `deps`, with the packages checked so far.
     fn resolve_entry(
         &mut self,
         entry: SourceFile,
         kind: Kind,
         deps: &[(&str, Dep<'_>)],
-        dependency: bool,
+        name: Option<&str>,
     ) -> Result<Resolved, Vec<Diagnostic>> {
         let keys = self.keys(deps);
         let dependencies = Dependencies {
@@ -92,8 +92,9 @@ impl Build {
         let packages = Packages {
             keys: &keys.keys,
             checked: &self.checked,
-            dependency,
+            dependency: name.is_some(),
             listings: &[],
+            name,
         };
         resolve_root(entry, kind, Some(dependencies), packages, &mut self.sources)
     }
@@ -106,14 +107,31 @@ impl Build {
     /// Checks the package fixture `name`, a library whose package has
     /// `deps`, as a dependency of the build, and adds it.
     pub(crate) fn add(&mut self, name: &str, deps: &[(&str, Dep<'_>)]) {
-        let entry = self.entry(fixture(name).join("src/lib.vr"));
-        let program = self
-            .resolve_entry(entry, Kind::Library, deps, true)
-            .and_then(|resolved| typecheck(resolved, &self.sources))
-            .and_then(|hir| analyze(hir, &self.sources))
+        self.add_dir(name, fixture(name), deps);
+    }
+
+    /// Checks the library package `name` in `dir`, whose package has
+    /// `deps`, as a dependency of the build, and adds it.
+    pub(crate) fn add_dir(&mut self, name: &str, dir: PathBuf, deps: &[(&str, Dep<'_>)]) {
+        self.try_add_dir(name, dir, deps)
             .unwrap_or_else(|diagnostics| panic!("`{name}` should check: {diagnostics:#?}"));
+    }
+
+    /// [`Build::add_dir`], giving the package's diagnostics when it does
+    /// not check, and nothing added.
+    pub(crate) fn try_add_dir(
+        &mut self,
+        name: &str,
+        dir: PathBuf,
+        deps: &[(&str, Dep<'_>)],
+    ) -> Result<(), Vec<Diagnostic>> {
+        let entry = self.entry(dir.join("src/lib.vr"));
+        let program = self
+            .resolve_entry(entry, Kind::Library, deps, Some(name))
+            .and_then(|resolved| typecheck(resolved, &self.sources))
+            .and_then(|hir| analyze(hir, &self.sources))?;
         self.checked.push(CheckedPackage {
-            dir: fixture(name),
+            dir,
             graph_index: self.checked.len(),
             name: name.to_string(),
             version: "0.1.0".to_string(),
@@ -121,6 +139,7 @@ impl Build {
             manifest_file: FileId(0),
             program,
         });
+        Ok(())
     }
 
     /// Resolves `text` as the `src/main.vr` of a program with `deps`.
@@ -130,7 +149,7 @@ impl Build {
         deps: &[(&str, Dep<'_>)],
     ) -> Result<Resolved, Vec<Diagnostic>> {
         let entry = SourceFile::new(FileId(self.sources.len() as u32), "dummy/src/main.vr", text);
-        self.resolve_entry(entry, Kind::Binary, deps, false)
+        self.resolve_entry(entry, Kind::Binary, deps, None)
     }
 
     /// Resolves the program fixture `name` (its `src/main.vr`) with `deps`.
@@ -140,7 +159,7 @@ impl Build {
         deps: &[(&str, Dep<'_>)],
     ) -> Result<Resolved, Vec<Diagnostic>> {
         let entry = self.entry(fixture(name).join("src/main.vr"));
-        self.resolve_entry(entry, Kind::Binary, deps, false)
+        self.resolve_entry(entry, Kind::Binary, deps, None)
     }
 
     /// Checks `text` as the `src/main.vr` of a program with `deps`,
@@ -161,5 +180,14 @@ pub(crate) fn units_and_route() -> Build {
     let mut build = Build::default();
     build.add("units", &[]);
     build.add("route", &[("units", Dep::Package("units"))]);
+    build
+}
+
+/// A build holding the stub `varyk-http` of `tests/fixtures/packages/`
+/// (milestone 5b4 spec 6), which depends on `varyk-std`.
+pub(crate) fn varyk_http() -> Build {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/varyk-http");
+    let mut build = Build::default();
+    build.add_dir("varyk-http", dir, &[("varyk-std", Dep::Rust)]);
     build
 }

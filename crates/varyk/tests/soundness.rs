@@ -469,6 +469,11 @@ impl Tally {
 pub fn bind(q: &'static str, values: Vec<varyk_std::Value>) -> usize { q.len() + values.len() }
 pub async fn a_one(q: &'static str) -> usize { q.len() }
 pub async fn a_bind(q: &'static str, values: Vec<varyk_std::Value>) -> usize { q.len() + values.len() }
+pub fn send<T: varyk_std::serde::Serialize + ?Sized>(value: &T) -> usize { varyk_std::json::stringify(value).len() }
+pub async fn a_send<T: varyk_std::serde::Serialize + ?Sized>(value: &T) -> usize { varyk_std::json::stringify(value).len() }
+impl Tally {
+    pub fn send<T: varyk_std::serde::Serialize + ?Sized>(&self, value: &T) -> usize { varyk_std::json::stringify(value).len() }
+}
 ";
 
 /// Every case function's parameters: one of each kind of place.
@@ -1518,6 +1523,12 @@ const MUST_PASS: &[&str] = &[
     // trailing values before the task starts.
     "async: let t = ext::a_one(\"q\");\n    let n = t.await + ext::a_one(\"r\").await;",
     "async: let t = ext::a_bind(\"q\", ls, li);\n    read_s(ls);\n    let n = t.await + ext::a_bind(\"q\", lp.s).await;\n    read_p(lp);",
+    // A `&T: Serialize` parameter (milestone 5b4 spec 2.7) lends its
+    // argument as `json::stringify` does: a struct passed is changed
+    // through `let mut` afterwards, and every other kind of value is
+    // usable after the call; a started call takes a new value.
+    "let mut u = mk_p();\n    let a = ext::send(u) + pt.send(u) + ext::send(lp) + ext::send(pp) + ext::send(mp) + ext::send(lp.s) + ext::send(ls) + ext::send(ll) + ext::send(ps) + ext::send(\"lit\") + ext::send(li) + ext::send(lk) + ext::send(lv) + ext::send(lv[0]) + ext::send(mk_p()) + ext::send(if c { lp } else { pp }) + pt.send(ps);\n    u.n = u.n + 1;\n    u.s = \"x\";\n    read_p(u);\n    read_p(lp);\n    read_s(ls);\n    lv.push(mk_p());",
+    "async: let t = ext::a_send(mk_p());\n    let n = t.await + ext::a_send(\"q\").await + ext::a_send(lp).await;\n    read_p(lp);",
     "let b = lp == pp && pp == lp && mp == pp && lp == first_of(pv) && first_of(lv) == mp && lv[0] == pp && lq.p == pp && pp == lq.p && (if c { lp } else { pp }) == mp && pp == { mk_p() } && (if c { mk_p() } else { mk_p() }) == lp;\n    let p2 = pp.clone();\n    read_p(p2);\n    let v2 = pv.clone();\n    read_v(v2);\n    let p3 = first_of(pv).clone();\n    let mut q = Q { p: p3, n: 1, e: pe.clone(), v: mv.clone() };\n    change_q(q);\n    let copies: Vec<P> = lv.iter().map(|p| p.clone()).collect();\n    let same = copies == lv && lv.iter().any(|p| p == pp) && lv.iter().filter(|p| p != mp).count() > 0;\n    lv.push(pp.clone());\n    let last = lv[0].clone();\n    read_p(last);",
 ];
 
@@ -3033,6 +3044,51 @@ const MUST_RUN_TREES: &[(&str, Files, &str)] = &[
             ),
         ],
         "ada\n6 12 18\nrect 6\ndot\n8 10\n",
+    ),
+    (
+        "the state handle usable after a route call, the handler reading the same state \
+         (milestone 5b4 spec 2.1, 4)",
+        &[
+            (
+                "app/Cargo.toml",
+                concat!(
+                    "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n",
+                    "[[bin]]\nname = \"app\"\npath = \"src/main.vr\"\n\n",
+                    "[dependencies]\nhttp = { path = \"../varyk-http\", package = \"varyk-http\" }\n",
+                    "varyk-std = \"",
+                    env!("CARGO_PKG_VERSION"),
+                    "\"\n",
+                ),
+            ),
+            (
+                "app/src/main.vr",
+                "struct State {\n    name: string,\n    n: i64,\n}\n\n\
+                 async fn get_n(state: Shared<State>) -> i64 {\n    state.n\n}\n\n\
+                 async fn main() {\n    let state = Shared::new(State { name: \"s\", n: 7 });\n    \
+                 let mut app = http::App::new(state.clone());\n    app.get(\"/n\", get_n);\n    \
+                 println!(\"{} {}\", state.name, state.n);\n    \
+                 let r = app.request(http::Request::new(\"GET\", \"/n\")).await;\n    \
+                 println!(\"{} {}\", r.status(), r.body());\n    \
+                 println!(\"{} {}\", state.name, state.n);\n}\n",
+            ),
+            (
+                "varyk-http/Cargo.toml",
+                include_str!("fixtures/packages/varyk-http/Cargo.toml"),
+            ),
+            (
+                "varyk-http/src/lib.vr",
+                include_str!("fixtures/packages/varyk-http/src/lib.vr"),
+            ),
+            (
+                "varyk-http/src/server.rs",
+                include_str!("fixtures/packages/varyk-http/src/server.rs"),
+            ),
+            (
+                "varyk-http/src/tests.vr",
+                include_str!("fixtures/packages/varyk-http/src/tests.vr"),
+            ),
+        ],
+        "s 7\n200 7\ns 7\n",
     ),
 ];
 

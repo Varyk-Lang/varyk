@@ -58,6 +58,17 @@ output; `crates/varyk/tests/examples.rs` checks that.
   cargo's verdict is the same under `varyk build` and `varyk publish`, and
   a manifest cargo rejects is a bug in that manifest. Do not chase further
   ways cargo can reject a manifest.
+- **The compiler knows `varyk-http` by crate name.** Varyk code reaches a
+  crate only through a `.rs` facade in the same package, and the compiler
+  knows no package by name but `varyk-std` and one other: when a build
+  holds the package whose crate name is `varyk-http`, under any key, or
+  when the package being checked is that package, the route and hook calls
+  on its `App` are intrinsics, checked against their handlers and compiled
+  to adapters that name only the package's items, never axum. What the
+  compiler names and checks of the package is section 6 of
+  `docs/specs/2026-10-05-milestone-5b4-design.md`; a change there is a
+  change to both repositories. Do not extend this to another package
+  without a spec.
 - **No hidden allocation.** The compiler inserts exactly two allocations:
   a string literal placed into an owned slot, and a string passed as a
   trailing value of a facade's `Vec<varyk_std::Value>` parameter, which
@@ -126,7 +137,8 @@ table are in `CONTRIBUTING.md`.
   the follow-ups left from each milestone
   (`2026-09-23-milestone-1-followups.md`,
   `2026-09-26-milestone-3-followups.md`,
-  `2026-09-29-milestone-4-followups.md`)
+  `2026-09-29-milestone-4-followups.md`,
+  `2026-10-05-milestone-5b4-followups.md`)
 - `docs/open-questions.md` design questions deliberately not yet answered
 - `TRADEMARKS.md`, `LICENSE-MIT`, `LICENSE-APACHE`; the security policy is the
   organization's shared one, shown in the Security tab

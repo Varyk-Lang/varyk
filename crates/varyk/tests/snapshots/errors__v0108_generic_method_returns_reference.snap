@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: unsupported Rust signature: `Namer::name` cannot be called from Varyk
+ --> crates/varyk/tests/fixtures/errors/v0108_generic_method_returns_reference/main.vr:4:22
+  |
+4 |     let text = namer.name("x");
+  |                      ^^^^ unsupported Rust signature: `Namer::name` cannot be called from Varyk
+  |
+  = note: the Rust signature is `fn name<T: varyk_std::serde::Serialize + ? Sized>(&self, value: &T) -> &str`
+  = note: Varyk does not import a generic Rust function that returns a reference, even a `&self` method; return an owned value, such as `String` instead of `&str`
