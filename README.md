@@ -25,10 +25,10 @@ cargo install varyk
 JSON, configuration from the environment, logging, tests, `async` functions
 and tasks, and Varyk packages that use Varyk packages work today, and so do
 SQL databases through the [`varyk-sql`](https://github.com/Varyk-Lang/varyk-sql)
-package (`varyk add sql`). The compiler's side of HTTP is in place, with
-every route checked against its handler before anything runs; the HTTP
-package itself, `varyk-http`, comes next (see the
-[roadmap](docs/roadmap.md)). What works today is under [Status](#status).
+package (`varyk add sql`), and HTTP services through the
+[`varyk-http`](https://github.com/Varyk-Lang/varyk-http) package
+(`varyk add http`), with every route checked against its handler before
+anything runs. What works today is under [Status](#status).
 
 ## Use Varyk until you need Rust
 
@@ -220,16 +220,17 @@ and `format!` work, and so do packages with dependencies, modules at any
 depth, `use`, private fields, and Rust structs and enums imported from
 `.rs` files; the compiler builds and runs every program in `examples/`,
 and it reports every error it knows about with a code, a plain-word
-message, and, where it can, a suggested fix. The HTTP package, dates and
-times, and much more are not there yet; see
+message, and, where it can, a suggested fix. Dates and times, and much
+more, are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
 
 Milestone 5b4 makes the compiler ready for
 [`varyk-http`](https://github.com/Varyk-Lang/varyk-http), the HTTP
-package, which lives in its own repository and is not released yet. With it
-in a build, `app.get("/users/{id}", get_user)` adds a route, and `varyk
-check` checks the path against `get_user`'s parameters; a handler's
-parameters are filled from the path, the query string, the JSON body, and
+package, which lives in its own repository and is published on
+crates.io. With it in a build,
+`app.get("/users/{id}", get_user)` adds a route, and `varyk check`
+checks the path against `get_user`'s parameters; a handler's parameters
+are filled from the path, the query string, the JSON body, and
 the app's shared state, and what it returns is the answer, `None` a 404.
 `before`, `before_on`, and `after` hooks run around each request, and
 `app.request` sends one through the app in a test. An `Error` can carry an
@@ -237,8 +238,8 @@ HTTP status (`Error::with_status(404, "...")` in the language,
 `http::bad_request("...")` in the package); one without a status is a 500
 whose message is logged and never sent to the client. A `.rs` facade can
 also take any value JSON can write (`&T: Serialize`), and `varyk add`
-takes several official packages at once (`varyk add http sql`, once
-`varyk-http` is published). See "HTTP" in
+takes several official packages at once (`varyk add http sql`). See
+"HTTP" in
 [docs/language.md](docs/language.md).
 
 Milestone 5b3 lets a package's `.rs` facade take a type parameter filled

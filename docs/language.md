@@ -1929,11 +1929,9 @@ any Unicode.
 
 A service answers requests through `varyk-http`, the official HTTP
 package. It lives in its own repository, `Varyk-Lang/varyk-http`, and is
-not released yet: it ships from there after this compiler release, and
-until then `varyk add http` has nothing to add. Once released, it is added
-as any package is, with `varyk add http` (see [`varyk add` and
-upgrading](#varyk-add-and-upgrading)), which lists it under the key `http`,
-so code writes `http::App`. Its README is the guide to everything it
+published on crates.io. It is added as any package is, with `varyk add
+http` (see [`varyk add` and upgrading](#varyk-add-and-upgrading)), which
+lists it under the key `http`, so code writes `http::App`. Its README is the guide to everything it
 offers: the server's settings and their defaults, cookies, files, the
 client, and which release of the package goes with which `varyk`. This
 section is what the compiler does with it.
@@ -2000,7 +1998,7 @@ if let Err(e) = app.serve(port).await {
 `GET /users/1` is answered with a 200 and `{"id":1,"name":"Ada"}`,
 `GET /users/2` with a 404, and `GET /users/abc` with a 400 saying that the
 path parameter `id` cannot be read from `abc`; `get_user` is not called
-for either. `POST /users` with `{"name": "Bo"}` is answered with a 201.
+for that one. `POST /users` with `{"name": "Bo"}` is answered with a 201.
 
 ### The route table
 
@@ -2008,7 +2006,7 @@ for either. `POST /users` with `{"name": "Bo"}` is answered with a 201.
 |---|---|
 | `http::App::new(state)` | a new app; `state` is a `Shared` of the struct every handler may read (see [Shared](#shared)), given away as `Shared::new` gives its struct |
 | `app.get(path, f)`, `app.post(path, f)`, `app.put(path, f)`, `app.patch(path, f)`, `app.delete(path, f)` | a route: a request with that method whose path fits `path` calls the function `f`, its *handler* |
-| `app.before(f)`, `app.before_on(prefix, f)` | a hook run before every request a route matches, or before those whose route's path starts with `prefix` |
+| `app.before(f)`, `app.before_on(prefix, f)` | a hook run before every request a route matches, or before those whose route's path is `prefix` or lies under it, on whole parts (`/admin` covers `/admin/users`, not `/administrators`) |
 | `app.after(f)` | a hook run on every response the router makes |
 | `app.serve(port).await` | answers requests on `port`, a `u16`, until the program is stopped (ctrl-c, or the platform's SIGTERM, which lets the requests in progress finish), and logs the address it listens on once it binds; gives `Result<bool, Error>`, an `Err` when the port cannot be used |
 | `app.request(req).await` | sends one request through the app, without a port, and gives the `http::Response` (see [Requests in a test](#requests-in-a-test)) |
