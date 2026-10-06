@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/Varyk-Lang/varyk/compare/varyk-std-v0.6.0...varyk-std-v0.7.0) (2026-10-06)
+
+
+### Features
+
+* milestone 5b4, the compiler side of varyk-http ([4f12606](https://github.com/Varyk-Lang/varyk/commit/4f12606567fbc35a5a89e53b66e530cac9ca8814))
+
 ## [0.6.0](https://github.com/Varyk-Lang/varyk/compare/varyk-std-v0.5.0...varyk-std-v0.6.0) (2026-10-04)
 
 
