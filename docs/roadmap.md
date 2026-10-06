@@ -171,13 +171,12 @@ The compiler:
 - [x] `varyk add http sql`, several official packages in one call, by shorthand or full name
 - [x] The fixture packages, and the docs
 
-`varyk-http`, in its own repository, each item checked at the release that
-ships it:
+`varyk-http`, in its own repository:
 
-- [ ] The server on axum and tower-http: the compiler's contract, `Request` and `Response`, tracing, body limit, timeout, panic containment, and graceful shutdown on by default; CORS, compression, metrics, address (`127.0.0.1` unless set), the limits, and a maximum of requests in flight by one call; cookies with secure defaults; `Response::file`
-- [ ] The client on reqwest with rustls: `Client` with default headers and a timeout, `get`, `post`, `put`, `patch`, `delete`, a `Response` for any status
-- [ ] The `users` API on `varyk-sql` as its demo, and the fifteen-minute path in its README: `varyk init`, `varyk add http sql`, one file, and `varyk run`
-- [ ] WebSockets, server-sent events, and multipart uploads as bound types, text and files until a bytes type exists
+- [x] The server on axum and tower-http: the compiler's contract, `Request` and `Response`, tracing, body limit, timeout, panic containment, and graceful shutdown on by default; CORS, compression, metrics, address (`127.0.0.1` unless set), the limits, and a maximum of requests in flight by one call; cookies with secure defaults; `Response::file`
+- [x] The client on reqwest with rustls: `Client` with default headers and a timeout, `get`, `post`, `put`, `patch`, `delete`, a `Response` for any status
+- [x] The `users` API on `varyk-sql` as its demo, and the fifteen-minute path in its README: `varyk init`, `varyk add http sql`, one file, and `varyk run`
+- [x] WebSockets, server-sent events, and multipart uploads as bound types, text and files until a bytes type exists
 
 Its own work, in its own repository:
 
