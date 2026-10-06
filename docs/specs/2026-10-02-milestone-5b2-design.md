@@ -461,7 +461,8 @@ A cargo user builds the shipped Rust. A `varyk` user's compiler reads the
 
 `varyk init` writes `Cargo.toml`, with the target table of section 1.2,
 `.gitignore`, and `src/main.vr` (or `src/lib.vr`); no `build.rs` and no
-stub. Its message says to run `varyk run` (or `varyk build` for a
+stub. (Since milestone 5b4's follow-up, it also writes `.dockerignore`,
+with `target` and `.env`.) Its message says to run `varyk run` (or `varyk build` for a
 library), no longer `cargo run`. `varyk add` stays a plain pass-through to
 `cargo add`.
 
@@ -700,7 +701,7 @@ as its help.
     redacted);
   - `varyk build` after `varyk add --path ../units`, before any code
     names `units`, builds;
-  - `varyk init` writes three files, and `varyk add --path ../units`
+  - `varyk init` writes its files, and `varyk add --path ../units`
     works in `route`.
 - Fixtures, each run from a temporary copy as the examples are, since
   asking cargo for the graph writes under the package, and none with a

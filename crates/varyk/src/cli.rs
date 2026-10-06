@@ -123,7 +123,8 @@ pub enum Command {
     },
     /// Write a new package.
     ///
-    /// Writes `Cargo.toml`, `.gitignore`, and the root `.vr` file. Refuses
+    /// Writes `Cargo.toml`, `.gitignore`, `.dockerignore`, and the root
+    /// `.vr` file. Refuses
     /// if any file it would write already exists.
     Init {
         /// Where to write the package; without one, the current directory.

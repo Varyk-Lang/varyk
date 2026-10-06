@@ -2911,9 +2911,10 @@ is reported as V0900 at the Varyk line responsible (see "Calling Rust").
 ### `varyk init` and the target table
 
 `varyk init [dir]` writes a new package in `dir` (the current directory
-if you leave it out), named after that directory: three files,
+if you leave it out), named after that directory: four files,
 `Cargo.toml`, `.gitignore` (`/target` and `.env`, so a local secrets file is
-never committed), and `src/main.vr` (a hello-world program). The
+never committed), `.dockerignore` (`target` and `.env`, so neither is
+copied into a container build), and `src/main.vr` (a hello-world program). The
 `Cargo.toml` names the package's root, `[[bin]]` with `name` the package's
 name and `path = "src/main.vr"`, and lists `varyk-std = "X.Y.Z"` under
 `[dependencies]`, the compiler's own version, since a program that uses
@@ -2926,7 +2927,7 @@ another character a shell treats specially). The name is the directory's
 name made a valid crate name (`my app` becomes `my_app`). It refuses to
 run, and writes nothing, if the other kind's root file exists there
 (`src/main.vr` for `--lib`, `src/lib.vr` otherwise), since a package has
-only one, or else if any of these three files already exists there,
+only one, or else if any of these four files already exists there,
 listing them; when the directory is already a Varyk package, it says so
 instead.
 

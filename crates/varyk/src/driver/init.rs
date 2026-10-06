@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use super::sanitize_name;
 
 const GITIGNORE: &str = include_str!("templates/gitignore.txt");
+const DOCKERIGNORE: &str = include_str!("templates/dockerignore.txt");
 const MAIN_VR: &str = include_str!("templates/main.vr.txt");
 const LIB_VR: &str = include_str!("templates/lib.vr.txt");
 
@@ -25,7 +26,7 @@ pub enum InitError {
     Io(io::Error),
 }
 
-/// The three files `init` writes (spec 2.5), as tree-relative paths and
+/// The four files `init` writes (spec 2.5, and `.dockerignore`), as tree-relative paths and
 /// their content: `name` is the package's (from the target directory) and
 /// `lib` selects `src/lib.vr` over `src/main.vr`. Pure, so a
 /// fixture example can be checked against a fresh `init` for equality.
@@ -33,6 +34,7 @@ pub fn files(name: &str, lib: bool) -> Vec<(PathBuf, String)> {
     let mut files = vec![
         (PathBuf::from("Cargo.toml"), cargo_toml(name, lib)),
         (PathBuf::from(".gitignore"), GITIGNORE.to_string()),
+        (PathBuf::from(".dockerignore"), DOCKERIGNORE.to_string()),
     ];
     if lib {
         files.push((PathBuf::from("src/lib.vr"), LIB_VR.to_string()));
@@ -80,7 +82,7 @@ pub fn package_name(dir: &Path) -> String {
     sanitize_name(&name)
 }
 
-/// Writes the three files of spec 2.5 under `dir` (created if it does not
+/// Writes the four files of [`files`] under `dir` (created if it does not
 /// exist), refusing if anything is already at any of their paths, a
 /// file, a directory, or a link: nothing is written, and every path that
 /// is taken is reported (spec 2.5's "there is no merge"). It refuses too when the root file of the other kind of
@@ -162,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn files_of_a_binary_are_the_three_of_spec_2_5() {
+    fn files_of_a_binary_are_the_four_init_writes() {
         let entries = files("greeting", false);
 
         let paths: Vec<&Path> = entries.iter().map(|(path, _)| path.as_path()).collect();
@@ -171,6 +173,7 @@ mod tests {
             vec![
                 Path::new("Cargo.toml"),
                 Path::new(".gitignore"),
+                Path::new(".dockerignore"),
                 Path::new("src/main.vr"),
             ]
         );
@@ -191,6 +194,7 @@ mod tests {
             vec![
                 Path::new("Cargo.toml"),
                 Path::new(".gitignore"),
+                Path::new(".dockerignore"),
                 Path::new("src/lib.vr"),
             ]
         );
@@ -198,13 +202,13 @@ mod tests {
     }
 
     #[test]
-    fn write_creates_a_fresh_directory_with_the_three_files() {
+    fn write_creates_a_fresh_directory_with_the_four_files() {
         let dir = TempDir::new("fresh");
         let target = dir.0.join("greeting");
 
         let written = write(&target, false).expect("writes");
 
-        assert_eq!(written.len(), 3);
+        assert_eq!(written.len(), 4);
         for path in &written {
             assert!(path.is_file(), "{path:?}");
         }
