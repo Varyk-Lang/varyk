@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.1](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.7.0...varyk-v0.7.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* varyk init writes a .dockerignore, and a plainer V0219 note ([4327889](https://github.com/Varyk-Lang/varyk/commit/432788903f0034467e98d81ad83fc77b083f6af0))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * varyk-syntax bumped from 0.7.0 to 0.7.1
+
 ## [0.7.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.6.0...varyk-v0.7.0) (2026-10-06)
 
 
