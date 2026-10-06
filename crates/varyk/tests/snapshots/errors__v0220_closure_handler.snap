@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: a route's handler is named here, not written as a closure
+ --> src/main.vr:7:18
+  |
+7 |     app.get("/", |n| n);
+  |                  ^^^^^ a route's handler is named here, not written as a closure
+  |
+  = note: move its code into an `async fn` and name that function here

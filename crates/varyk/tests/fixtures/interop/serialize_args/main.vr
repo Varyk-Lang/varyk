@@ -1,0 +1,25 @@
+mod ext;
+
+struct User {
+    name: string,
+    #[rename("years")]
+    age: i64,
+}
+
+fn main() {
+    let user = User { name: "Ada", age: 36 };
+    let users = vec![User { name: "Bo", age: 1 }];
+    let name = "Cy";
+    let n: i64 = 7;
+    let maybe: Option<string> = Some("x");
+    let a = ext::json(user);
+    let b = ext::json(users);
+    let c = ext::json(name);
+    let d = ext::json("ok");
+    let e = ext::json(n);
+    let f = ext::json(maybe);
+    let client = ext::Client::open();
+    let g = client.post("/users", user);
+    println!("{} {} {} {} {} {} {}", a, b, c, d, e, f, g);
+    println!("{} {} {} {} {}", user.name, users.len(), name, n, maybe.is_some());
+}

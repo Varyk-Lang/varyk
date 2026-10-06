@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0219]: the parameter `other` of `count` is a `Shared<Other>`, but the app's state is `State`
+  --> src/main.vr:15:5
+   |
+15 |     app.get("/count", count);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ the parameter `other` of `count` is a `Shared<Other>`, but the app's state is `State`
+   |
+   = note: a handler reads the state given to `App::new`

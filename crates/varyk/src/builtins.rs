@@ -35,6 +35,9 @@ pub enum Owner {
     /// `Shared<T>` (milestone 5b1 spec 2.6): std's `Arc`, not a
     /// `varyk-std` call.
     Shared,
+    /// The `App` struct of the build's `varyk-http` package, the route
+    /// table (milestone 5b4 spec 2.1): `App::new(state)`.
+    App,
 }
 
 impl Owner {
@@ -55,6 +58,7 @@ impl Owner {
             Owner::Test => "test",
             Owner::Task => "Task",
             Owner::Shared => "Shared",
+            Owner::App => "App",
         }
     }
 
@@ -157,6 +161,10 @@ pub enum Shape {
     Usize,
     /// `u64` (`time::sleep`'s milliseconds).
     U64,
+    /// `u16` (`Error::with_status`'s status, milestone 5b4 spec 2.6).
+    U16,
+    /// `Option<u16>` (`Error`'s status, milestone 5b4 spec 2.6).
+    OptionOfU16,
     String,
     Unit,
     Bool,
@@ -269,6 +277,8 @@ impl Shape {
             Shape::OptionOfT => Ty::Option(boxed(&subst.t)),
             Shape::Usize => Ty::Int(IntKind::Usize),
             Shape::U64 => Ty::Int(IntKind::U64),
+            Shape::U16 => Ty::Int(IntKind::U16),
+            Shape::OptionOfU16 => Ty::Option(Box::new(Ty::Int(IntKind::U16))),
             Shape::String | Shape::ReadString => Ty::String,
             Shape::Unit => Ty::Unit,
             Shape::Bool => Ty::Bool,
@@ -628,7 +638,19 @@ pub const TABLE: &[Builtin] = &[
         &[Shape::String],
         Shape::Error,
     ),
+    // So does `Error::with_status`, beside a `u16` status (milestone 5b4
+    // spec 2.6).
+    row(
+        Owner::Error,
+        "with_status",
+        Receiver::None,
+        &[Shape::U16, Shape::String],
+        Shape::Error,
+    ),
     borrowed_row(Owner::Error, "message", Shape::String),
+    // The status is Copy, so it is a value of its own (milestone 5b4 spec
+    // 2.6).
+    row(Owner::Error, "status", Reads, &[], Shape::OptionOfU16),
     // `json::parse` reads its text and makes the type expected of it;
     // `json::stringify` reads its value (M5a spec 2.4, 3).
     row(
@@ -707,6 +729,16 @@ pub const TABLE: &[Builtin] = &[
         Shape::SharedOfT,
     ),
     row(Owner::Shared, "clone", Reads, &[], Shape::SharedOfT),
+    // `http::App::new(state)` takes its state as `Shared::new` takes its
+    // struct, and gives the package's `App`, which the checker types
+    // itself (milestone 5b4 spec 2.1).
+    row(
+        Owner::App,
+        "new",
+        Receiver::None,
+        &[Shape::SharedOfT],
+        Shape::Unit,
+    ),
 ];
 
 /// `Task::all` or `Task::all_settled`: async, taking a `Vec` of tasks.
@@ -726,11 +758,19 @@ const fn task_all_row(name: &'static str) -> Builtin {
 impl Builtin {
     /// Whether the call is a `varyk-std` call (M5a spec 1): a row of
     /// `Error`, `json`, `env`, `log`, `time`, or `Task` (milestone 5b1 spec
-    /// 4), or `parse`, whose `Error` `varyk-std` makes.
+    /// 4), `App::new`, whose adapters derive serde through `varyk-std`
+    /// (milestone 5b4 spec 2.8), or `parse`, whose `Error` `varyk-std`
+    /// makes.
     pub fn uses_std(&self) -> bool {
         matches!(
             self.owner,
-            Owner::Error | Owner::Json | Owner::Env | Owner::Log | Owner::Time | Owner::Task
+            Owner::Error
+                | Owner::Json
+                | Owner::Env
+                | Owner::Log
+                | Owner::Time
+                | Owner::Task
+                | Owner::App
         ) || (self.owner == Owner::String && self.name == "parse")
     }
 }
@@ -1213,6 +1253,16 @@ mod tests {
     }
 
     #[test]
+    fn error_with_status_takes_a_u16_and_an_owned_string() {
+        let with_status = lookup(Owner::Error, "with_status", false).expect("Error::with_status");
+        assert_eq!(with_status.path(), "Error::with_status");
+        assert_eq!(with_status.get().params, [Shape::U16, Shape::String]);
+        assert_eq!(with_status.get().result, Shape::Error);
+        assert_eq!(with_status.modes(), [ParamMode::Owned, ParamMode::Owned]);
+        assert_eq!(Shape::U16.ty(&Subst::default()), Ty::Int(IntKind::U16));
+    }
+
+    #[test]
     fn the_error_rows_of_m5a_spec_2_3() {
         let new = lookup(Owner::Error, "new", false).expect("Error::new");
         assert_eq!(new.path(), "Error::new");
@@ -1222,12 +1272,21 @@ mod tests {
         let message = row(Owner::Error, "message", true);
         assert_eq!(message.result, Shape::String);
         assert_eq!(message.result_kind, ResultKind::Borrowed);
-        assert_eq!(names(Owner::Error, true), ["message"]);
-        assert_eq!(names(Owner::Error, false), ["new"]);
+        assert_eq!(names(Owner::Error, true), ["message", "status"]);
+        assert_eq!(names(Owner::Error, false), ["new", "with_status"]);
         let (owner, _) = Owner::of(&Ty::Error).expect("`Error` has rows");
         assert_eq!(owner, Owner::Error);
+        let status = row(Owner::Error, "status", true);
+        assert_eq!(status.result, Shape::OptionOfU16);
+        assert_eq!(status.result_kind, ResultKind::Value);
+        assert!(status.params.is_empty());
+        assert_eq!(
+            status.result.ty(&Subst::default()),
+            Ty::Option(Box::new(Ty::Int(IntKind::U16)))
+        );
         assert!(new.get().uses_std());
         assert!(message.uses_std());
+        assert!(status.uses_std());
         assert!(row(Owner::String, "parse", true).uses_std());
         assert!(!row(Owner::String, "trim", true).uses_std());
     }
@@ -1278,6 +1337,17 @@ mod tests {
             // `Shared` is std's `Arc`.
             assert!(!id.get().uses_std() && !id.get().is_async);
         }
+    }
+
+    #[test]
+    fn the_app_row_of_milestone_5b4_spec_2_1() {
+        assert_eq!(names(Owner::App, false), ["new"]);
+        assert!(names(Owner::App, true).is_empty());
+        let new = lookup(Owner::App, "new", false).expect("App::new");
+        // Its state is an owned slot, as `Shared::new`'s struct is.
+        assert_eq!(new.modes(), [ParamMode::Owned]);
+        assert_eq!(new.get().params, [Shape::SharedOfT]);
+        assert!(new.get().uses_std() && !new.get().is_async);
     }
 
     #[test]

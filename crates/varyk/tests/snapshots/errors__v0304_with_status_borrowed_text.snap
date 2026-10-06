@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `text` belongs to the caller of this function, so it cannot be given to `Error::with_status`, which keeps what it is given
+ --> crates/varyk/tests/fixtures/errors/v0304_with_status_borrowed_text/main.vr:2:29
+  |
+2 |     Error::with_status(400, text)
+  |                             ^^^^ `text` belongs to the caller of this function, so it cannot be given to `Error::with_status`, which keeps what it is given
+  |
+  = note: this function can read `text` but not keep it; make a new value here instead, or keep it where the caller made it
+  = note: in Rust terms, a borrowed value cannot move into a place that owns it
+help: insert `.clone()` after `text`

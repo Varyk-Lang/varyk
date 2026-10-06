@@ -1,0 +1,24 @@
+#[test]
+fn an_empty_response_is_a_204() {
+    let r = crate::Response::empty();
+    assert_eq(r.status(), 204);
+}
+
+struct Greeting {
+    word: string,
+}
+
+async fn greet(name: string, state: Shared<Greeting>) -> string {
+    format!("{} {}", state.word, name)
+}
+
+// The package's own `App` is the route table too (milestone 5b4 spec
+// 2.1), so its tests add routes and send requests.
+#[test]
+async fn a_route_answers_a_request() {
+    let mut app = crate::App::new(Shared::new(Greeting { word: "hello" }));
+    app.get("/greet/{name}", greet);
+    let r = app.request(crate::Request::new("GET", "/greet/Ada")).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"hello Ada\"");
+}

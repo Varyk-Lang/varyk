@@ -1,0 +1,22 @@
+mod ext;
+
+struct User {
+    name: string,
+}
+
+fn make_name() -> string {
+    "Bo"
+}
+
+fn main() {
+    let user = User { name: "Ada" };
+    let name = make_name();
+    println!("{}", ext::json(user));
+    println!("{}", ext::json(name));
+    println!("{}", ext::json("ok"));
+    println!("{}", json::stringify(user));
+    println!("{}", json::stringify(name));
+    let client = ext::Client::open();
+    println!("{}", client.post("/users", user));
+    println!("{} {}", user.name, name);
+}

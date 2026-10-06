@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0219]: the parameter `client` of `home` is a `Client`, which a request does not give
+ --> src/main.vr:9:5
+  |
+9 |     app.get("/", home);
+  |     ^^^^^^^^^^^^^^^^^^ the parameter `client` of `home` is a `Client`, which a request does not give
+  |
+  = note: make a client in the handler with `Client::new()`, or keep one in the state

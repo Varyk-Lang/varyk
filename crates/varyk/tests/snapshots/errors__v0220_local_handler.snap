@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: `home` is a variable here, and a route's handler is a function named by its path
+ --> src/main.vr:8:18
+  |
+8 |     app.get("/", home);
+  |                  ^^^^ `home` is a variable here, and a route's handler is a function named by its path
+  |
+  = note: name an `async fn` of this package here

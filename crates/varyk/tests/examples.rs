@@ -1521,6 +1521,93 @@ fn store_user_runs_and_store_s_test_passes() {
     assert!(stdout.contains("1 passed"), "{stdout}");
 }
 
+/// The stub `varyk-http` (milestone 5b4 spec 6), which every HTTP test
+/// builds on, checks and passes its own tests, so rustc compiles its whole
+/// facade here and not first under a program's routes; one adds a route to
+/// its own `App` and sends a request (spec 2.1).
+#[test]
+fn the_varyk_http_stub_s_test_passes() {
+    let dir = common::package_copy("tests/fixtures/packages", "varyk-http");
+    let output = varyk_logged(&dir, &["test"]);
+    assert_ok(&output);
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("test tests::an_empty_response_is_a_204 ... ok"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("test tests::a_route_answers_a_request ... ok"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("2 passed"), "{stdout}");
+}
+
+/// What `http_user` prints (its `src/main.vr` says the same).
+const HTTP_USER_OUTPUT: &str = "GET /users/1 -> 200 {\"id\":1,\"name\":\"Ada\"}\n\
+     GET /users/9 -> 404 {\"error\":\"not found\"}\n\
+     GET /users/abc -> 400 {\"error\":\"the path parameter `id` cannot be read from `abc`\"}\n\
+     GET /users/-1 -> 500 {\"error\":\"internal error\"}\n\
+     GET /names/Bo -> 200 {\"id\":2,\"name\":\"Bo\"}\n\
+     GET /search?prefix=A&exact=false -> 200 [\"Ada\"]\n\
+     GET /search?prefix=A -> 400 {\"error\":\"the query parameter `exact` is missing\"}\n\
+     GET /search?prefix=Bo&exact=true -> 200 [\"Bo\"]\n\
+     GET /search?exact=true -> 400 {\"error\":\"an exact search needs a prefix\"}\n\
+     POST /users -> 201 {\"id\":3,\"name\":\"Cy\"}\n\
+     POST /users -> 400 {\"error\":\"a user needs a name\"}\n\
+     POST /users -> 400 {\"error\":\"the body `user` is not valid: missing field `name` at line 1 column 13\"}\n\
+     PUT /users/2 -> 200 {\"id\":2,\"name\":\"Bo (renamed)\"}\n\
+     GET /echo -> 200 GET /echo\n\
+     GET /echo/7 -> 200 GET /echo/7 with 7\n\
+     GET /echo/abc -> 400 {\"error\":\"the path parameter `id` cannot be read from `abc`\"}\n\
+     GET /ping -> 204\n\
+     DELETE /ping -> 204\n\
+     GET /admin/users -> 200 [{\"id\":1,\"name\":\"Ada\"},{\"id\":2,\"name\":\"Bo\"}]\n\
+     GET /users/1 -> 401 {\"error\":\"an `x-key` header is needed\"}\n\
+     GET /admin/users -> 403 {\"error\":\"forbidden\"}\n\
+     GET /nowhere -> 404, with x-users 2\n\
+     served on port 3000\n";
+
+/// `http_user` runs under `varyk run` beside the stub `varyk-http`
+/// (milestone 5b4 spec 4, 9): one adapter per route, lending the
+/// handler's parameters by mode and answering by its return shape, every
+/// request sent through `app.request`, and `serve` the stub's `Ok(true)`.
+/// The message of an error with no status reaches the log, not the
+/// client, under `varyk run` and under `varyk test`. Its generated
+/// `main.rs` is the adapters' snapshot.
+#[test]
+fn http_user_answers_requests_through_its_routes() {
+    let dir = common::package_copy("tests/fixtures/packages", "http_user");
+    let output = varyk_logged(&dir, &["run"]);
+    assert_ok(&output);
+    assert_eq!(stdout_of(&output), HTTP_USER_OUTPUT);
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("the user store refused a negative id"),
+        "stderr: {stderr}"
+    );
+
+    let main = fs::read_to_string(dir.join("target/varyk/http_user/src/main.rs"))
+        .expect("the generated main.rs");
+    assert!(!main.contains("axum"), "{main}");
+    insta::assert_snapshot!("http_user_main_rs", main);
+
+    // Its async test starts logging too, so the 500's message reaches
+    // stderr under `varyk test` (milestone 5b4 spec 7.5).
+    let output = varyk_logged(&dir, &["test"]);
+    assert_ok(&output);
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("test a_negative_id_is_a_500 ... ok"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("1 passed"), "{stdout}");
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("the user store refused a negative id"),
+        "stderr: {stderr}"
+    );
+}
+
 /// A program that calls a facade method of `store` whose signature names
 /// `varyk_std::` needs `varyk-std` itself, since the call site writes
 /// `::varyk_std::Value::from` in the program's crate; one that only names

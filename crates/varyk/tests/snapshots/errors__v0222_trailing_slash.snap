@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0222]: `"/users/"` is not a valid route path
+ --> src/main.vr:9:13
+  |
+9 |     app.get("/users/", list);
+  |             ^^^^^^^^^ `"/users/"` is not a valid route path
+  |
+  = note: a path does not end with `/`, except `"/"` itself

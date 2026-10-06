@@ -1,0 +1,13 @@
+struct State {
+    key: string,
+}
+
+async fn tag(mut req: http::Request) -> Result<bool, Error> {
+    req.set_header("x-seen", "yes");
+    Ok(true)
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { key: "k1" }));
+    app.before(tag);
+}

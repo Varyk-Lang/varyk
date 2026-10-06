@@ -1,0 +1,11 @@
+// A package with a struct called `App` that is not `varyk-http`'s: an
+// ordinary struct, whose `new` is its own (milestone 5b4 spec 2.1).
+pub struct App {
+    pub port: i32,
+}
+
+impl App {
+    pub fn new() -> App {
+        App { port: 8080 }
+    }
+}

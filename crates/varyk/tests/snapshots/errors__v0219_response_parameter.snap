@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0219]: the parameter `res` of `home` is a `Response`, which a request does not give
+ --> src/main.vr:9:5
+  |
+9 |     app.get("/", home);
+  |     ^^^^^^^^^^^^^^^^^^ the parameter `res` of `home` is a `Response`, which a request does not give
+  |
+  = note: a handler returns its response rather than taking one

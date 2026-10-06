@@ -1,0 +1,8 @@
+fn refuse(text: string) -> Error {
+    Error::with_status(400, text)
+}
+
+fn main() {
+    let e = refuse("no");
+    println!("{}", e);
+}

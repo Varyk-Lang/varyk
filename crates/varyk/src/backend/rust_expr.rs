@@ -6,16 +6,18 @@
 //! relying on Rust's reborrowing and deref coercion where a reference
 //! already has the right shape.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
-use varyk_syntax::{BinaryOp, UnaryOp};
+use varyk_syntax::{BinaryOp, Span, UnaryOp};
 
 use super::rust::{item_path, rust_type, struct_path};
+use super::writer::Mark;
 use crate::builtins::{Owner, Receiver, ResultKind, Shape};
 use crate::hir::{
-    AssertKind, HirArm, HirBlock, HirExpr, HirExprKind, HirFunction, HirLiteral, HirPattern,
-    HirProgram, LocalId, LocalKind, MethodRef, StringRepr, VariantRef, declared_inside, field_root,
-    is_block_like, is_looked_into, leaves, matched_in_place, rooted_argument,
+    AssertKind, HirArm, HirBlock, HirExpr, HirExprKind, HirFunction, HirHook, HirLiteral,
+    HirPattern, HirProgram, HirRoute, LocalId, LocalKind, MethodRef, StringRepr, VariantRef,
+    declared_inside, field_root, is_block_like, is_looked_into, leaves, matched_in_place,
+    rooted_argument,
 };
 use crate::resolve::{Callee, ModuleId, UserType, VariantFieldsDef};
 use crate::types::{FloatKind, IntKind, ParamMode, Ty};
@@ -77,15 +79,58 @@ pub(super) struct FnEmitter<'a> {
     /// unsuffixed literal from the cast target, through blocks and `-`
     /// (`{ 300 } as u8`, `- -1 as u8`).
     in_cast: Cell<u32>,
+    /// The adapters the module's functions have asked for so far, shared
+    /// by every function of the module and written after them (milestone
+    /// 5b4 spec 4).
+    pub(super) adapters: &'a RefCell<Vec<Adapter>>,
+    /// What the statement being written belongs to, for the source map:
+    /// set by a route call and by `App::new` (milestone 5b4 spec 7.5).
+    pub(super) mark: Cell<Option<Mark>>,
+}
+
+/// An adapter a function of the module asked for (milestone 5b4 spec 4):
+/// the `N` of its `varyk_route_N` is its index in the module's list, one
+/// count for routes and hooks alike.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Adapter {
+    /// The path to the `varyk-http` package from this crate, through its
+    /// key: `::http`.
+    pub(super) package: String,
+    pub(super) of: Adapted,
+}
+
+/// What an adapter adapts.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Adapted {
+    /// A route's handler.
+    Route(HirRoute),
+    /// A `before` or `after` hook.
+    Hook(HirHook),
+}
+
+impl Adapted {
+    /// The call that asked for the adapter, which every line of it maps to.
+    pub(super) fn span(&self) -> Span {
+        match self {
+            Adapted::Route(route) => route.span,
+            Adapted::Hook(hook) => hook.span,
+        }
+    }
 }
 
 impl<'a> FnEmitter<'a> {
-    pub(super) fn new(program: &'a HirProgram, function: &'a HirFunction) -> Self {
+    pub(super) fn new(
+        program: &'a HirProgram,
+        function: &'a HirFunction,
+        adapters: &'a RefCell<Vec<Adapter>>,
+    ) -> Self {
         FnEmitter {
             program,
             module: function.module,
             function,
             in_cast: Cell::new(0),
+            adapters,
+            mark: Cell::new(None),
         }
     }
 
@@ -421,6 +466,14 @@ impl<'a> FnEmitter<'a> {
                             _ => "all",
                         };
                         path = format!("::varyk_std::Task::{name}");
+                    }
+                    // `http::App::new(state)` is the package's own `new`,
+                    // reached as every path to the package is (milestone
+                    // 5b4 spec 4); the state is the `Arc` a `Shared` is.
+                    if id.get().owner == Owner::App {
+                        self.mark.set(Some(Mark::State));
+                        let app = rust_type(self.program, &expr.ty, self.module);
+                        path = format!("{app}::new");
                     }
                 }
                 let mut args = self.args(args, &modes, indent);
@@ -846,7 +899,10 @@ impl<'a> FnEmitter<'a> {
         Some(format!("vec![{}]", values.join(", ")))
     }
 
-    /// Call arguments, each as its parameter's mode requires.
+    /// Call arguments, each as its parameter's mode requires. The
+    /// argument of an imported `&T` parameter with `T: Serialize + ?Sized`
+    /// is a shared one, lent as `json::stringify`'s is, and rustc infers
+    /// `T` from it, so no turbofish is written (milestone 5b4 spec 7.5).
     fn args(&self, args: &[HirExpr], modes: &[ParamMode], indent: usize) -> String {
         let args: Vec<String> = args
             .iter()

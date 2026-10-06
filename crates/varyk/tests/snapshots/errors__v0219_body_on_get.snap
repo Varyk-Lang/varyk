@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0219]: a `get` request has no body, so the parameter `filter` of `find` gets no value
+  --> src/main.vr:20:5
+   |
+20 |     app.get("/users", find);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^ a `get` request has no body, so the parameter `filter` of `find` gets no value
+   |
+   = note: a body is read on `post`, `put`, and `patch`

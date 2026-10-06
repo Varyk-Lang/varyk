@@ -1,0 +1,7 @@
+struct State {
+    name: string,
+}
+
+fn main() {
+    let app = http::App::new(Shared::new(State { name: "users" }));
+}

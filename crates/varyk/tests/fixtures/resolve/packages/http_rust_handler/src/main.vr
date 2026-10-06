@@ -1,0 +1,10 @@
+mod ext;
+
+struct State {
+    name: string,
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "a" }));
+    app.get("/", ext::home);
+}

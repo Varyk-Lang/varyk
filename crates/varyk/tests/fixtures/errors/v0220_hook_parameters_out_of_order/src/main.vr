@@ -1,0 +1,12 @@
+struct State {
+    key: string,
+}
+
+async fn check_key(state: Shared<State>, req: http::Request) -> Result<bool, Error> {
+    Ok(req.header("x-key") == Some(state.key.clone()))
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { key: "k1" }));
+    app.before(check_key);
+}

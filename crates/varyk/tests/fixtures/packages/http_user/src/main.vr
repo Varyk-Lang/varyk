@@ -1,0 +1,235 @@
+// expected output:
+// GET /users/1 -> 200 {"id":1,"name":"Ada"}
+// GET /users/9 -> 404 {"error":"not found"}
+// GET /users/abc -> 400 {"error":"the path parameter `id` cannot be read from `abc`"}
+// GET /users/-1 -> 500 {"error":"internal error"}
+// GET /names/Bo -> 200 {"id":2,"name":"Bo"}
+// GET /search?prefix=A&exact=false -> 200 ["Ada"]
+// GET /search?prefix=A -> 400 {"error":"the query parameter `exact` is missing"}
+// GET /search?prefix=Bo&exact=true -> 200 ["Bo"]
+// GET /search?exact=true -> 400 {"error":"an exact search needs a prefix"}
+// POST /users -> 201 {"id":3,"name":"Cy"}
+// POST /users -> 400 {"error":"a user needs a name"}
+// POST /users -> 400 {"error":"the body `user` is not valid: missing field `name` at line 1 column 13"}
+// PUT /users/2 -> 200 {"id":2,"name":"Bo (renamed)"}
+// GET /echo -> 200 GET /echo
+// GET /echo/7 -> 200 GET /echo/7 with 7
+// GET /echo/abc -> 400 {"error":"the path parameter `id` cannot be read from `abc`"}
+// GET /ping -> 204
+// DELETE /ping -> 204
+// GET /admin/users -> 200 [{"id":1,"name":"Ada"},{"id":2,"name":"Bo"}]
+// GET /users/1 -> 401 {"error":"an `x-key` header is needed"}
+// GET /admin/users -> 403 {"error":"forbidden"}
+// GET /nowhere -> 404, with x-users 2
+// served on port 3000
+//
+// The message of the 500 is logged, never sent; the test at the end
+// checks the same under `varyk test`.
+
+mod admin;
+
+struct User {
+    id: i64,
+    name: string,
+}
+
+struct NewUser {
+    name: string,
+}
+
+struct State {
+    users: Vec<User>,
+    admin_key: string,
+}
+
+// A path parameter and the state; an id below zero is an error with no
+// status, which the client sees only as a 500.
+async fn get_user(id: i64, state: Shared<State>) -> Result<Option<User>, Error> {
+    if id < 0 {
+        return Err(Error::new("the user store refused a negative id"));
+    }
+    for user in state.users {
+        if user.id == id {
+            return Ok(Some(user.clone()));
+        }
+    }
+    Ok(None)
+}
+
+// A `string` path parameter.
+async fn find_by_name(name: string, state: Shared<State>) -> Option<User> {
+    for user in state.users {
+        if user.name == name {
+            return Some(user.clone());
+        }
+    }
+    None
+}
+
+// Two query parameters, an `Option<string>` and a `bool`.
+async fn search(state: Shared<State>, prefix: Option<string>, exact: bool) -> Result<Vec<string>, Error> {
+    let mut names: Vec<string> = Vec::new();
+    match prefix {
+        Some(p) => {
+            for user in state.users {
+                if (exact && user.name == p) || (!exact && user.name.starts_with(p)) {
+                    names.push(user.name.clone());
+                }
+            }
+        }
+        None => {
+            if exact {
+                return Err(http::bad_request("an exact search needs a prefix"));
+            }
+            for user in state.users {
+                names.push(user.name.clone());
+            }
+        }
+    }
+    Ok(names)
+}
+
+// A body, answered with a 201.
+async fn create_user(user: NewUser, state: Shared<State>) -> Result<http::Response, Error> {
+    if user.name.is_empty() {
+        return Err(http::bad_request("a user needs a name"));
+    }
+    let created = User { id: state.users.len() as i64 + 1, name: user.name.clone() };
+    let mut r = http::Response::json(created);
+    r.set_status(201);
+    Ok(r)
+}
+
+// A `mut` body, which the handler changes before it answers.
+async fn rename(id: i64, mut user: NewUser) -> User {
+    user.name.push_str(" (renamed)");
+    User { id: id, name: user.name.clone() }
+}
+
+// The request itself, under the name `req`.
+async fn echo(req: http::Request) -> http::Response {
+    http::Response::text(format!("{} {}", req.method(), req.path()))
+}
+
+// The request before a path parameter: the adapter binds the path
+// parameter first, so the handler is called with its parameters in its own
+// order all the same.
+async fn echo_id(req: http::Request, id: i64) -> http::Response {
+    http::Response::text(format!("{} {} with {}", req.method(), req.path(), id))
+}
+
+// Nothing to send: a 204, on two routes.
+async fn ping() {}
+
+// A `before` hook on every request a route matches: one without an
+// `x-key` header is refused with the error's 401.
+async fn check_key(req: http::Request) -> Result<bool, Error> {
+    match req.header("x-key") {
+        Some(_) => Ok(true),
+        None => Err(http::unauthorized("an `x-key` header is needed")),
+    }
+}
+
+// A `before` hook under `/admin`, reading the state: `Ok(false)` is the
+// package's 403.
+async fn admin_only(req: http::Request, state: Shared<State>) -> Result<bool, Error> {
+    match req.header("x-key") {
+        Some(key) => Ok(key == state.admin_key),
+        None => Ok(false),
+    }
+}
+
+// An `after` hook on every response, a hook's refusal included, changing
+// it through its `mut` parameter.
+async fn stamp(req: http::Request, mut res: http::Response, state: Shared<State>) {
+    res.set_header("x-users", format!("{}", state.users.len()));
+}
+
+fn build_app(state: Shared<State>) -> http::App {
+    let mut app = http::App::new(state.clone());
+    app.after(stamp);
+    app.get("/users/{id}", get_user);
+    app.get("/names/{name}", find_by_name);
+    app.get("/search", search);
+    app.post("/users", create_user);
+    app.put("/users/{id}", rename);
+    app.get("/echo", echo);
+    app.get("/echo/{id}", echo_id);
+    app.get("/ping", ping);
+    app.delete("/ping", ping);
+    app.get("/admin/users", admin::list_users);
+    app.before_on("/admin", admin_only);
+    // Registered after the routes, and still run before each of them.
+    app.before(check_key);
+    app
+}
+
+async fn send(app: http::App, method: string, path: string, body: string) {
+    send_as(app, "admin", method, path, body).await;
+}
+
+// A request with the key `key`, or with no key when it is empty.
+async fn send_as(app: http::App, key: string, method: string, path: string, body: string) {
+    let mut req = http::Request::new(method, path);
+    if !key.is_empty() {
+        req.set_header("x-key", key);
+    }
+    req.set_body(body);
+    let r = app.request(req).await;
+    let body = r.body();
+    if body.is_empty() {
+        println!("{} {} -> {}", method, path, r.status());
+    } else {
+        println!("{} {} -> {} {}", method, path, r.status(), body);
+    }
+}
+
+async fn main() {
+    let users = vec![User { id: 1, name: "Ada" }, User { id: 2, name: "Bo" }];
+    let app = build_app(Shared::new(State { users: users, admin_key: "admin" }));
+    send(app, "GET", "/users/1", "").await;
+    send(app, "GET", "/users/9", "").await;
+    send(app, "GET", "/users/abc", "").await;
+    send(app, "GET", "/users/-1", "").await;
+    send(app, "GET", "/names/Bo", "").await;
+    send(app, "GET", "/search?prefix=A&exact=false", "").await;
+    send(app, "GET", "/search?prefix=A", "").await;
+    send(app, "GET", "/search?prefix=Bo&exact=true", "").await;
+    send(app, "GET", "/search?exact=true", "").await;
+    send(app, "POST", "/users", "{\"name\": \"Cy\"}").await;
+    send(app, "POST", "/users", "{\"name\": \"\"}").await;
+    send(app, "POST", "/users", "{\"nom\": \"Cy\"}").await;
+    send(app, "PUT", "/users/2", "{\"name\": \"Bo\"}").await;
+    send(app, "GET", "/echo", "").await;
+    send(app, "GET", "/echo/7", "").await;
+    send(app, "GET", "/echo/abc", "").await;
+    send(app, "GET", "/ping", "").await;
+    send(app, "DELETE", "/ping", "").await;
+    send(app, "GET", "/admin/users", "").await;
+    send_as(app, "", "GET", "/users/1", "").await;
+    send_as(app, "user", "GET", "/admin/users", "").await;
+    let r = app.request(http::Request::new("GET", "/nowhere")).await;
+    match r.header("x-users") {
+        Some(users) => println!("GET /nowhere -> {}, with x-users {}", r.status(), users),
+        None => println!("GET /nowhere -> {}, with no x-users", r.status()),
+    }
+    let port: u16 = 3000;
+    if let Err(e) = app.serve(port).await {
+        println!("cannot serve on port {}: {}", port, e);
+        return;
+    }
+    println!("served on port {}", port);
+}
+
+// Under `varyk test`: the error with no status is a 500 with the fixed
+// body, and its message goes to the log.
+#[test]
+async fn a_negative_id_is_a_500() {
+    let users: Vec<User> = Vec::new();
+    let app = build_app(Shared::new(State { users: users, admin_key: "admin" }));
+    let mut req = http::Request::new("GET", "/users/-1");
+    req.set_header("x-key", "admin");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+}

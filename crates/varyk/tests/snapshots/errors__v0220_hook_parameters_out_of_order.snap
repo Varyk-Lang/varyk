@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: the parameter `state` of `check_key` is `Shared<State>`, and the first parameter of a `before` hook is the request, a `Request`
+  --> src/main.vr:11:5
+   |
+11 |     app.before(check_key);
+   |     ^^^^^^^^^^^^^^^^^^^^^ the parameter `state` of `check_key` is `Shared<State>`, and the first parameter of a `before` hook is the request, a `Request`
+   |
+   = note: a `before` hook is `async fn f(req: Request) -> Result<bool, Error>`, with a second parameter `state: Shared<State>` when it reads the state

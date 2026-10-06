@@ -8,12 +8,15 @@
 //! [`ALLOW_USE`]; no `mod` line carries either, so a copied `.rs` module,
 //! wherever it sits in the tree, warns and fails as Rust normally does.
 
-use super::rust_expr::{FnEmitter, Need, Repr};
-use super::writer::Writer;
+use std::cell::RefCell;
+
+use super::rust_expr::{Adapted, Adapter, FnEmitter, Need, Repr};
+use super::writer::{Mark, Writer};
 use super::{Backend, CrateInfo, GeneratedCrate};
 use crate::hir::{
-    HirBlock, HirDefault, HirEnum, HirExprKind, HirForHead, HirFunction, HirModule, HirModuleKind,
-    HirParam, HirProgram, HirStmt, HirStruct, is_place_or_rooted,
+    Binding, HirBlock, HirDefault, HirEnum, HirExprKind, HirForHead, HirFunction, HirHook,
+    HirModule, HirModuleKind, HirParam, HirProgram, HirRoute, HirStmt, HirStruct, HookKind,
+    LocalId, ReturnShape, is_place_or_rooted, path_text,
 };
 use crate::resolve::{FieldDef, ModuleId, StructId, UserType, VariantFieldsDef};
 use crate::types::{Derives, ParamMode, Serde, Ty};
@@ -169,6 +172,8 @@ fn write_module_items(program: &HirProgram, module: ModuleId, writer: &mut Write
     }
     items.sort_by_key(|(start, _)| *start);
 
+    let adapters = RefCell::new(Vec::new());
+
     for (index, (_, item)) in items.into_iter().enumerate() {
         if index > 0 {
             writer.line(0, "", None);
@@ -178,7 +183,7 @@ fn write_module_items(program: &HirProgram, module: ModuleId, writer: &mut Write
             Item::Enum(e) => emit_enum(program, e, writer),
             Item::Fn(f) => {
                 writer.line(0, ALLOW_ITEM, None);
-                FnEmitter::new(program, f).function(writer, 0);
+                FnEmitter::new(program, f, &adapters).function(writer, 0);
             }
             Item::Impl(owner, fns) => {
                 let name = match owner {
@@ -191,11 +196,268 @@ fn write_module_items(program: &HirProgram, module: ModuleId, writer: &mut Write
                     if index > 0 {
                         writer.line(0, "", None);
                     }
-                    FnEmitter::new(program, f).function(writer, 1);
+                    FnEmitter::new(program, f, &adapters).function(writer, 1);
                 }
                 writer.line(0, "}", None);
             }
         }
+    }
+    write_adapters(program, module, &adapters.into_inner(), writer);
+}
+
+/// Writes the adapters the module's functions asked for (milestone 5b4
+/// spec 4), after its items, each `varyk_route_N` with `N` its place in
+/// `adapters`, and every line of it carrying the span of the call that
+/// asked for it, marked [`Mark::Route`], so a rustc error inside is
+/// reported at that call.
+fn write_adapters(
+    program: &HirProgram,
+    module: ModuleId,
+    adapters: &[Adapter],
+    writer: &mut Writer,
+) {
+    for (number, adapter) in adapters.iter().enumerate() {
+        writer.line(0, "", None);
+        let mut lines = AdapterLines {
+            writer: &mut *writer,
+            span: adapter.of.span(),
+        };
+        lines.line(0, ALLOW_ITEM);
+        match &adapter.of {
+            Adapted::Route(route) => {
+                route_adapter(program, module, &adapter.package, number, route, &mut lines)
+            }
+            Adapted::Hook(hook) => {
+                hook_adapter(program, module, &adapter.package, number, hook, &mut lines)
+            }
+        }
+    }
+}
+
+/// The lines of one adapter, each carrying `span` and [`Mark::Route`].
+pub(super) struct AdapterLines<'w> {
+    writer: &'w mut Writer,
+    span: Span,
+}
+
+impl AdapterLines<'_> {
+    pub(super) fn line(&mut self, indent: usize, text: &str) {
+        self.writer
+            .marked_line(indent, text, Some(self.span), Some(Mark::Route));
+    }
+}
+
+/// A route's adapter (milestone 5b4 spec 4): it takes the request and
+/// binds each of the handler's parameters from it as the route's
+/// [`Binding`] says (the package's own types last), returning the
+/// package's response at once when one cannot be bound. It then calls the
+/// handler, lending each parameter as its mode says, and makes the
+/// response from what the handler returns.
+fn route_adapter(
+    program: &HirProgram,
+    module: ModuleId,
+    package: &str,
+    number: usize,
+    route: &HirRoute,
+    lines: &mut AdapterLines,
+) {
+    lines.line(
+        0,
+        &format!(
+            "async fn varyk_route_{number}(varyk_req: {package}::Request) -> {package}::Response {{"
+        ),
+    );
+    let handler = program.function(route.handler);
+    // The path, query, body, and state first, then the package's own
+    // types, so a 400 comes before a live handler's early response; the
+    // call below keeps the handler's order.
+    let mut lent = vec![String::new(); route.params.len()];
+    for package_types in [false, true] {
+        for (index, (binding, param)) in route.params.iter().zip(&handler.params).enumerate() {
+            if matches!(binding, Binding::Package(_)) == package_types {
+                lent[index] = bind(program, module, binding, param, index, "r", lines);
+            }
+        }
+    }
+    let call = format!(
+        "{}({}).await",
+        item_path(program, handler.module, module, &handler.name),
+        lent.join(", ")
+    );
+    match &route.ret {
+        ReturnShape::Nothing => {
+            lines.line(1, &format!("{call};"));
+            lines.line(1, &format!("{package}::respond_empty()"));
+        }
+        ReturnShape::Result(ok) => {
+            lines.line(1, &format!("match {call} {{"));
+            lines.line(2, &format!("Ok(v) => {},", response(package, ok, "v")));
+            lines.line(2, &format!("Err(e) => {package}::respond_error(e),"));
+            lines.line(1, "}");
+        }
+        shape => lines.line(1, &response(package, shape, &call)),
+    }
+    lines.line(0, "}");
+}
+
+/// A hook's adapter (milestone 5b4 spec 4). A `before` adapter takes the
+/// request, binds the state if the hook reads it, lends the hook the
+/// request, and gives `None` to let the request through or `Some` with the
+/// response that stops it, made by the package from the hook's result. An
+/// `after` adapter takes the request and the response, which it rebinds
+/// `mut` and lends the hook as the hook's parameter says, and gives the
+/// response on.
+fn hook_adapter(
+    program: &HirProgram,
+    module: ModuleId,
+    package: &str,
+    number: usize,
+    hook: &HirHook,
+    lines: &mut AdapterLines,
+) {
+    let (head, stop) = match hook.kind {
+        HookKind::Before => (
+            format!(
+                "async fn varyk_route_{number}(varyk_req: {package}::Request) -> \
+                 Option<{package}::Response> {{"
+            ),
+            "Some(r)",
+        ),
+        HookKind::After => (
+            format!(
+                "async fn varyk_route_{number}(varyk_req: {package}::Request, varyk_res: \
+                 {package}::Response) -> {package}::Response {{"
+            ),
+            // The package's response on, as a route does (spec 4); the
+            // state of an accepted hook always binds, so this is never
+            // reached and `varyk_res` is not lost.
+            "r",
+        ),
+    };
+    lines.line(0, &head);
+    let function = program.function(hook.hook);
+    // The request, then for an `after` hook the response; the hook's
+    // request is never `mut` (spec 2.4).
+    let mut lent = vec!["&varyk_req".to_string()];
+    if hook.kind == HookKind::After {
+        lines.line(1, "let mut varyk_res = varyk_res;");
+        let res = match function.params.get(1).map(|param| param.mode) {
+            Some(ParamMode::MutableBorrow) => "&mut varyk_res",
+            _ => "&varyk_res",
+        };
+        lent.push(res.to_string());
+    }
+    if hook.state {
+        let index = lent.len();
+        if let Some(param) = function.params.get(index) {
+            lent.push(bind(
+                program,
+                module,
+                &Binding::State,
+                param,
+                index,
+                stop,
+                lines,
+            ));
+        }
+    }
+    let call = format!(
+        "{}({}).await",
+        item_path(program, function.module, module, &function.name),
+        lent.join(", ")
+    );
+    match hook.kind {
+        HookKind::Before => lines.line(1, &format!("{package}::respond_before({call})")),
+        HookKind::After => {
+            lines.line(1, &format!("{call};"));
+            lines.line(1, "varyk_res");
+        }
+    }
+    lines.line(0, "}");
+}
+
+/// Binds the handler's parameter `param`, the `index`th, from
+/// `varyk_req` as `binding` says, into `varyk_<index>`, returning `stop`
+/// with the package's response `r` when it cannot be (`r` for a route,
+/// `Some(r)` for a `before` hook); gives how the handler is lent it: a
+/// number or `bool` by value, `&mut` for a `mut` parameter, and `&`
+/// otherwise, as a started call lends its arguments (milestone 5b4 spec
+/// 2.2, 4).
+pub(super) fn bind(
+    program: &HirProgram,
+    module: ModuleId,
+    binding: &Binding,
+    param: &HirParam,
+    index: usize,
+    stop: &str,
+    lines: &mut AdapterLines,
+) -> String {
+    let ty = |ty: &Ty| rust_type(program, ty, module);
+    let value = match binding {
+        Binding::Path(name) => format!("varyk_req.param::<{}>(\"{name}\")", ty(&param.ty)),
+        Binding::Query(name) => format!("varyk_req.query::<{}>(\"{name}\")", ty(&param.ty)),
+        Binding::Body => format!(
+            "varyk_req.json::<{}>(\"{}\").await",
+            ty(&param.ty),
+            param.name
+        ),
+        Binding::State => {
+            let state = match &param.ty {
+                Ty::Shared(state) => state.as_ref(),
+                other => other,
+            };
+            format!("varyk_req.state::<{}>()", ty(state))
+        }
+        Binding::Package(_) => format!("varyk_req.bind::<{}>().await", ty(&param.ty)),
+    };
+    let mutability = if param.mode == ParamMode::MutableBorrow {
+        "mut "
+    } else {
+        ""
+    };
+    lines.line(
+        1,
+        &format!("let {mutability}varyk_{index} = match {value} {{"),
+    );
+    lines.line(2, "Ok(v) => v,");
+    lines.line(2, &format!("Err(r) => return {stop},"));
+    lines.line(1, "};");
+    match param.mode {
+        ParamMode::Owned => format!("varyk_{index}"),
+        ParamMode::SharedBorrow => format!("&varyk_{index}"),
+        ParamMode::MutableBorrow => format!("&mut varyk_{index}"),
+    }
+}
+
+/// The response for `value`, what a handler returned, by `shape`
+/// (milestone 5b4 spec 2.3, 4), each a function of the package's
+/// contract but an `http::Response`, which is sent as built.
+fn response(package: &str, shape: &ReturnShape, value: &str) -> String {
+    match shape {
+        ReturnShape::Nothing => format!("{{ {value}; {package}::respond_empty() }}"),
+        ReturnShape::Json => format!("{package}::respond_json(&{value})"),
+        ReturnShape::Option => format!("{package}::respond_option({value})"),
+        ReturnShape::Response => value.to_string(),
+        ReturnShape::Result(ok) => format!(
+            "match {value} {{ Ok(v) => {}, Err(e) => {package}::respond_error(e) }}",
+            response(package, ok, "v")
+        ),
+    }
+}
+
+/// The path to the root of the package module `module` belongs to, from
+/// this crate: `::http` for `::http::server`, as the program's key for
+/// the package names it (M5b2 spec 5), and `crate` for a module of this
+/// package, whose root names every item of the contract (milestone 5b4
+/// spec 7.2).
+fn package_root(program: &HirProgram, module: ModuleId) -> String {
+    let path = program.module_path(module);
+    match path
+        .strip_prefix("::")
+        .and_then(|rest| rest.split("::").next())
+    {
+        Some(key) => format!("::{key}"),
+        None => "crate".to_string(),
     }
 }
 
@@ -436,14 +698,20 @@ fn indentation(indent: usize) -> String {
 /// Writes `text` (possibly multi-line, e.g. a `while` or `for` body) as
 /// physical lines: the first at `indent` levels, the rest as they are
 /// (already carrying their own absolute indentation), every line tagged
-/// with `span`.
-fn push_lines(writer: &mut Writer, indent: usize, text: &str, span: Option<Span>) {
+/// with `span` and `mark`.
+fn push_lines(
+    writer: &mut Writer,
+    indent: usize,
+    text: &str,
+    span: Option<Span>,
+    mark: Option<Mark>,
+) {
     let mut lines = text.split('\n');
     if let Some(first) = lines.next() {
-        writer.line(indent, first, span);
+        writer.marked_line(indent, first, span, mark);
     }
     for line in lines {
-        writer.line(0, line, span);
+        writer.marked_line(0, line, span, mark);
     }
 }
 
@@ -459,6 +727,8 @@ fn stmt_span(stmt: &HirStmt) -> Span {
         | HirStmt::For { span, .. }
         | HirStmt::Break { span }
         | HirStmt::Continue { span } => *span,
+        HirStmt::Route(route) => route.span,
+        HirStmt::Hook(hook) => hook.span,
     }
 }
 
@@ -531,8 +801,11 @@ impl FnEmitter<'_> {
         if runs {
             writer.line(inner, "::varyk_std::run(async {", Some(f.span));
         }
-        // A program that logs starts logging first thing (M5a spec 7.5).
-        if self.program.logs && is_main {
+        // A program that logs starts logging first thing (M5a spec 7.5),
+        // in `main` and inside an async test's runtime, so a message
+        // logged under `varyk test` reaches stderr (milestone 5b4 spec
+        // 7.5); `start` tolerates being called by many tests.
+        if self.program.logs && (is_main || runs) {
             writer.line(inner + 1, "::varyk_std::start();", Some(f.span));
         }
         if runs {
@@ -567,8 +840,9 @@ impl FnEmitter<'_> {
             self.stmt(writer, stmt, inner);
         }
         if let Some(tail) = &block.tail {
+            self.mark.set(None);
             let text = self.expr(tail, need, inner);
-            push_lines(writer, inner, &text, Some(tail.span));
+            push_lines(writer, inner, &text, Some(tail.span), self.mark.take());
         }
     }
 
@@ -578,8 +852,43 @@ impl FnEmitter<'_> {
     /// emission below a statement stays string-based, so a nested block's
     /// lines take the statement's span rather than their own).
     fn stmt(&self, writer: &mut Writer, stmt: &HirStmt, indent: usize) {
+        self.mark.set(None);
         let text = self.stmt_text(stmt, indent);
-        push_lines(writer, indent, &text, Some(stmt_span(stmt)));
+        push_lines(
+            writer,
+            indent,
+            &text,
+            Some(stmt_span(stmt)),
+            self.mark.take(),
+        );
+    }
+
+    /// The path to the `varyk-http` package whose `App` the local `app`
+    /// holds, from this crate: `::http`.
+    fn package_of(&self, app: LocalId) -> Option<String> {
+        match self.function.locals[app.0 as usize].ty {
+            Ty::Struct(id) => Some(package_root(
+                self.program,
+                self.program.structs[id.0 as usize].module,
+            )),
+            _ => None,
+        }
+    }
+
+    /// The number of the module's adapter for `adapted`, added to the
+    /// module's list the first time it is asked for: the `N` of
+    /// `varyk_route_N` (milestone 5b4 spec 4).
+    pub(super) fn adapter(&self, package: &str, adapted: Adapted) -> usize {
+        let mut adapters = self.adapters.borrow_mut();
+        let span = adapted.span();
+        if let Some(number) = adapters.iter().position(|a| a.of.span() == span) {
+            return number;
+        }
+        adapters.push(Adapter {
+            package: package.to_string(),
+            of: adapted,
+        });
+        adapters.len() - 1
     }
 
     /// One statement's Rust text, without its leading indentation or
@@ -709,6 +1018,44 @@ impl FnEmitter<'_> {
             }
             HirStmt::Break { .. } => "break;".to_string(),
             HirStmt::Continue { .. } => "continue;".to_string(),
+            // The route's adapter is written after the module's functions;
+            // here the app is given it (milestone 5b4 spec 4).
+            HirStmt::Route(route) => {
+                self.mark.set(Some(Mark::Route));
+                let Some(package) = self.package_of(route.app) else {
+                    return "compile_error!(\"a route on something that is not an app\");"
+                        .to_string();
+                };
+                let number = self.adapter(&package, Adapted::Route(route.clone()));
+                format!(
+                    "{}.{}(\"{}\", {package}::route(varyk_route_{number}));",
+                    self.local_name(route.app),
+                    route.method.call(),
+                    path_text(&route.path)
+                )
+            }
+            // A hook's adapter likewise, from the same count.
+            HirStmt::Hook(hook) => {
+                self.mark.set(Some(Mark::Route));
+                let Some(package) = self.package_of(hook.app) else {
+                    return "compile_error!(\"a hook on something that is not an app\");"
+                        .to_string();
+                };
+                let number = self.adapter(&package, Adapted::Hook(hook.clone()));
+                let wrapped = match hook.kind {
+                    HookKind::Before => format!("{package}::before_hook(varyk_route_{number})"),
+                    HookKind::After => format!("{package}::after_hook(varyk_route_{number})"),
+                };
+                let prefix = match &hook.prefix {
+                    Some(prefix) => format!("\"{}\", ", path_text(prefix)),
+                    None => String::new(),
+                };
+                format!(
+                    "{}.{}({prefix}{wrapped});",
+                    self.local_name(hook.app),
+                    hook.call()
+                )
+            }
         }
     }
 

@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0214]: async functions cannot call each other in a cycle: `batch` calls `build_app`, which calls `batch`
+ --> src/main.vr:6:15
+  |
+6 |     let app = build_app(state).await;
+  |               ^^^^^^^^^^^^^^^^ async functions cannot call each other in a cycle: `batch` calls `build_app`, which calls `batch`
+  |
+  = note: an async function's waiting is planned out before it runs, which cannot be done for one that waits on itself; make one of them an ordinary function, or use a loop
+  = note: in Rust terms, the future would contain itself and have no fixed size

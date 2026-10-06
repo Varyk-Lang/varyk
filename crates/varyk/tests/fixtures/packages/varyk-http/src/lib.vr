@@ -1,0 +1,44 @@
+pub mod server;
+mod tests;
+
+pub use server::App;
+pub use server::Request;
+pub use server::Response;
+pub use server::Client;
+pub use server::route;
+pub use server::before_hook;
+pub use server::after_hook;
+pub use server::respond_empty;
+pub use server::respond_json;
+pub use server::respond_option;
+pub use server::respond_error;
+pub use server::respond_before;
+
+// The constructors of an error whose message is written for the client
+// (milestone 5b4 spec 2.6): `respond_error` sends it with its status.
+
+pub fn bad_request(text: string) -> Error {
+    Error::with_status(400, text.clone())
+}
+
+pub fn unauthorized(text: string) -> Error {
+    Error::with_status(401, text.clone())
+}
+
+pub fn forbidden(text: string) -> Error {
+    Error::with_status(403, text.clone())
+}
+
+pub fn not_found(text: string) -> Error {
+    Error::with_status(404, text.clone())
+}
+
+pub fn conflict(text: string) -> Error {
+    Error::with_status(409, text.clone())
+}
+
+// An error sent with `status`; one outside 400 to 599 is sent as a 500
+// with a fixed body, its message logged.
+pub fn error(status: u16, text: string) -> Error {
+    Error::with_status(status, text.clone())
+}

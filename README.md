@@ -25,8 +25,10 @@ cargo install varyk
 JSON, configuration from the environment, logging, tests, `async` functions
 and tasks, and Varyk packages that use Varyk packages work today, and so do
 SQL databases through the [`varyk-sql`](https://github.com/Varyk-Lang/varyk-sql)
-package (`varyk add sql`). HTTP is next, milestone 5b4 on the
-[roadmap](docs/roadmap.md). What works today is under [Status](#status).
+package (`varyk add sql`). The compiler's side of HTTP is in place, with
+every route checked against its handler before anything runs; the HTTP
+package itself, `varyk-http`, comes next (see the
+[roadmap](docs/roadmap.md)). What works today is under [Status](#status).
 
 ## Use Varyk until you need Rust
 
@@ -191,7 +193,7 @@ varyk build [file.vr]    generate and build the Rust; prints the executable path
 varyk run [file.vr]      build, then run the program, forwarding its exit code
 varyk test [file.vr]     build the program's #[test] functions and run them
 varyk init [dir]         write a new package; --lib writes a library
-varyk add [args]         run cargo add in the package; varyk add sql adds varyk-sql
+varyk add [args]         run cargo add in the package; varyk add sql adds the database package
 varyk publish            publish the package to crates.io as a plain Rust crate
 ```
 
@@ -208,18 +210,36 @@ in the example above.
 
 Varyk is experimental and pre-1.0: anything may change, including any
 syntax, error code, or command-line flag, and a new feature or a breaking
-change bumps the minor version. The current release, 0.6.0, is milestone
-5b3: facades for packages, on top of milestone 5b2's Varyk packages that
-use Varyk packages, milestone 5b1's async functions and tasks, milestone
-5a's data, configuration, logging, and tests, and milestone 4's closures,
-iterators, and patterns. Structs, enums, and `match`, `for` loops, methods,
-`Option`, `Result`, `Vec`, `?`, and `format!` work, and so do packages with
-dependencies, modules at any depth, `use`, private fields, and Rust structs
-and enums imported from `.rs` files; the compiler builds and runs every
-program in `examples/`, and it reports every error it knows about with a
-code, a plain-word message, and, where it can, a suggested fix. An HTTP
-server and client, and much more, are not there yet; see
+change bumps the minor version. This is milestone 5b4: the compiler's
+side of HTTP, on top of milestone 5b3's facades for packages, milestone
+5b2's Varyk packages that use Varyk packages, milestone 5b1's async
+functions and tasks, milestone 5a's data, configuration, logging, and
+tests, and milestone 4's closures, iterators, and patterns. Structs,
+enums, and `match`, `for` loops, methods, `Option`, `Result`, `Vec`, `?`,
+and `format!` work, and so do packages with dependencies, modules at any
+depth, `use`, private fields, and Rust structs and enums imported from
+`.rs` files; the compiler builds and runs every program in `examples/`,
+and it reports every error it knows about with a code, a plain-word
+message, and, where it can, a suggested fix. The HTTP package, dates and
+times, and much more are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
+
+Milestone 5b4 makes the compiler ready for
+[`varyk-http`](https://github.com/Varyk-Lang/varyk-http), the HTTP
+package, which lives in its own repository and is not released yet. With it
+in a build, `app.get("/users/{id}", get_user)` adds a route, and `varyk
+check` checks the path against `get_user`'s parameters; a handler's
+parameters are filled from the path, the query string, the JSON body, and
+the app's shared state, and what it returns is the answer, `None` a 404.
+`before`, `before_on`, and `after` hooks run around each request, and
+`app.request` sends one through the app in a test. An `Error` can carry an
+HTTP status (`Error::with_status(404, "...")` in the language,
+`http::bad_request("...")` in the package); one without a status is a 500
+whose message is logged and never sent to the client. A `.rs` facade can
+also take any value JSON can write (`&T: Serialize`), and `varyk add`
+takes several official packages at once (`varyk add http sql`, once
+`varyk-http` is published). See "HTTP" in
+[docs/language.md](docs/language.md).
 
 Milestone 5b3 lets a package's `.rs` facade take a type parameter filled
 from where the result goes, any number of plain values after the other
@@ -287,6 +307,7 @@ fn display_name(&self) -> &str {
 - [docs/specs/2026-10-01-milestone-5b1-design.md](docs/specs/2026-10-01-milestone-5b1-design.md): milestone 5b1's additions.
 - [docs/specs/2026-10-02-milestone-5b2-design.md](docs/specs/2026-10-02-milestone-5b2-design.md): milestone 5b2's additions.
 - [docs/specs/2026-10-03-milestone-5b3-design.md](docs/specs/2026-10-03-milestone-5b3-design.md): milestone 5b3's additions.
+- [docs/specs/2026-10-05-milestone-5b4-design.md](docs/specs/2026-10-05-milestone-5b4-design.md): milestone 5b4's additions.
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how to work on the compiler.
 
 ## License

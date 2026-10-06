@@ -1,0 +1,10 @@
+struct State {
+    name: string,
+}
+
+async fn home(res: http::Response) {}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    app.get("/", home);
+}

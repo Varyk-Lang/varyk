@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0219]: `add` has two parameters that would each be the body, `first` and `second`
+  --> src/main.vr:13:5
+   |
+13 |     app.post("/users", add);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^ `add` has two parameters that would each be the body, `first` and `second`
+   |
+   = note: a request has one body; put both in one struct

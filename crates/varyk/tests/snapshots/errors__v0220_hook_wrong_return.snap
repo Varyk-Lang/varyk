@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0220]: `stamp` returns `Response`, and an `after` hook returns nothing
+  --> src/main.vr:13:5
+   |
+13 |     app.after(stamp);
+   |     ^^^^^^^^^^^^^^^^ `stamp` returns `Response`, and an `after` hook returns nothing
+   |
+   = note: an `after` hook changes the response through a `mut` parameter, as in `res.set_header("x-name", "value")`

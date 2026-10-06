@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0114]: `checks_home` is a test and cannot be a route's handler
+  --> src/main.vr:10:18
+   |
+10 |     app.get("/", checks_home);
+   |                  ^^^^^^^^^^^ `checks_home` is a test and cannot be a route's handler
+   |
+   = note: `varyk test` runs each test on its own; put what the route does in an `async fn` without `#[test]`

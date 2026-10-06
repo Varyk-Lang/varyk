@@ -11,7 +11,7 @@ mod rust_expr;
 mod writer;
 
 pub use rust::RustBackend;
-pub use writer::{GeneratedFile, Writer};
+pub use writer::{GeneratedFile, Mark, Writer};
 
 /// A generated Cargo project, not yet written to disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +195,15 @@ impl SourceMap<'_> {
         let index = line.checked_sub(1)?;
         file.lines.get(index as usize).copied().flatten()
     }
+
+    /// What `path`'s line `line` (1-based) belongs to: a route or an
+    /// `App::new` call (milestone 5b4 spec 7.5); `None` for any other
+    /// line, or one [`SourceMap::lookup`] does not find.
+    pub fn mark(&self, path: &str, line: u32) -> Option<Mark> {
+        let file = self.files.iter().find(|file| file.path == path)?;
+        let index = line.checked_sub(1)?;
+        file.marks.get(index as usize).copied().flatten()
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +251,179 @@ mod tests {
         assert_eq!(map.lookup("src/other.rs", 1), None, "an unknown file");
         assert_eq!(map.lookup("src/main.rs", 99), None, "an out-of-range line");
         assert_eq!(map.lookup("src/main.rs", 0), None, "line 0 is not 1-based");
+    }
+
+    /// Every line of a route's adapter and its registration call carries
+    /// the route call's span and [`Mark::Route`], a registration inside
+    /// an `if` included, and the line of `App::new` [`Mark::State`], so a
+    /// thread-safety error there gets their words (milestone 5b4 spec
+    /// 7.5); adapters are numbered in source order.
+    #[test]
+    fn route_lines_and_the_app_new_line_are_marked_in_the_source_map() {
+        use crate::test_packages::{Dep, varyk_http};
+        let text = "struct State {\n    name: string,\n}\nasync fn home(state: Shared<State>) -> string {\n    state.name.clone()\n}\nfn main() {\n    let mut app = http::App::new(Shared::new(State { name: \"a\" }));\n    app.get(\"/\", home);\n    if true {\n        app.get(\"/b\", home);\n    }\n}\n";
+        let program = varyk_http()
+            .check(text, &[("http", Dep::Package("varyk-http"))])
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        let generated =
+            RustBackend.generate(&program, &CrateInfo::single_file("p".to_string(), None));
+        let map = generated.source_map();
+        let main = &generated.files[0];
+        assert_eq!(main.path, "src/main.rs");
+        let lines: Vec<&str> = main.text.lines().collect();
+        let first = lines
+            .iter()
+            .position(|line| line.starts_with("async fn varyk_route_0("))
+            .expect("the first adapter")
+            - 1;
+        let second = lines
+            .iter()
+            .position(|line| line.starts_with("async fn varyk_route_1("))
+            .expect("the second adapter")
+            - 1;
+        let source = |span: Span| &text[span.start as usize..span.end as usize];
+        // The `if` is one statement, whose lines all carry its span, and
+        // so the mark of the route inside.
+        let in_if = lines
+            .iter()
+            .position(|line| *line == "    if true {")
+            .expect("the if");
+        for (index, line) in lines.iter().enumerate() {
+            let number = index as u32 + 1;
+            let mark = map.mark("src/main.rs", number);
+            let span = map.lookup("src/main.rs", number);
+            if line.contains("App::new(") {
+                assert_eq!(mark, Some(Mark::State), "{line}");
+            } else if line.contains("route(varyk_route_") || (in_if..in_if + 3).contains(&index) {
+                assert_eq!(mark, Some(Mark::Route), "{line}");
+            } else if (first..second - 1).contains(&index) {
+                assert_eq!(mark, Some(Mark::Route), "{line}");
+                assert_eq!(span.map(source), Some("app.get(\"/\", home)"), "{line}");
+            } else if index >= second {
+                assert_eq!(mark, Some(Mark::Route), "{line}");
+                assert_eq!(span.map(source), Some("app.get(\"/b\", home)"), "{line}");
+            } else {
+                assert_eq!(mark, None, "{line}");
+            }
+        }
+        assert!(
+            main.text
+                .contains("    app.get(\"/\", ::http::route(varyk_route_0));\n"),
+            "{}",
+            main.text
+        );
+        assert!(
+            main.text
+                .contains("        app.get(\"/b\", ::http::route(varyk_route_1));\n"),
+            "{}",
+            main.text
+        );
+    }
+
+    /// A hook's adapter shares the module's count with the routes, lends
+    /// the hook the request, an `after` hook the response as its
+    /// parameter's mode says, and the state when it takes it; every line
+    /// of it carries the hook call's span and [`Mark::Route`] (milestone
+    /// 5b4 spec 4).
+    #[test]
+    fn hook_adapters_share_the_route_count_and_map_to_the_hook_call() {
+        use crate::test_packages::{Dep, varyk_http};
+        let text = "struct State {\n    name: string,\n}\nasync fn home() {}\nasync fn admin(req: http::Request, state: Shared<State>) -> Result<bool, Error> {\n    Ok(true)\n}\nasync fn look(req: http::Request, res: http::Response) {}\nfn main() {\n    let mut app = http::App::new(Shared::new(State { name: \"a\" }));\n    app.after(look);\n    app.get(\"/\", home);\n    app.before_on(\"/admin\", admin);\n}\n";
+        let program = varyk_http()
+            .check(text, &[("http", Dep::Package("varyk-http"))])
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        let generated =
+            RustBackend.generate(&program, &CrateInfo::single_file("p".to_string(), None));
+        let map = generated.source_map();
+        let main = &generated.files[0];
+        for line in [
+            "    app.after(::http::after_hook(varyk_route_0));",
+            "    app.get(\"/\", ::http::route(varyk_route_1));",
+            "    app.before_on(\"/admin\", ::http::before_hook(varyk_route_2));",
+            "async fn varyk_route_0(varyk_req: ::http::Request, varyk_res: ::http::Response) -> ::http::Response {",
+            "    let mut varyk_res = varyk_res;",
+            "    look(&varyk_req, &varyk_res).await;",
+            "    varyk_res",
+            "async fn varyk_route_2(varyk_req: ::http::Request) -> Option<::http::Response> {",
+            "    let varyk_1 = match varyk_req.state::<State>() {",
+            "        Err(r) => return Some(r),",
+            "    ::http::respond_before(admin(&varyk_req, &varyk_1).await)",
+        ] {
+            assert!(
+                main.text.lines().any(|have| have == line),
+                "{line}\n{}",
+                main.text
+            );
+        }
+        let lines: Vec<&str> = main.text.lines().collect();
+        let start = lines
+            .iter()
+            .position(|line| line.starts_with("async fn varyk_route_2("))
+            .expect("the before_on adapter");
+        let source = |span: Span| &text[span.start as usize..span.end as usize];
+        for number in start..lines.len() {
+            let number = number as u32 + 1;
+            assert_eq!(map.mark("src/main.rs", number), Some(Mark::Route));
+            assert_eq!(
+                map.lookup("src/main.rs", number).map(source),
+                Some("app.before_on(\"/admin\", admin)")
+            );
+        }
+    }
+
+    /// A route's adapter binds the path, query, body, and state parameters
+    /// before the package's own types, so a 400 comes before a live
+    /// handler's early response, and the handler is still called in its
+    /// parameter order (milestone 5b4 spec 4).
+    #[test]
+    fn a_route_adapter_binds_package_types_after_the_other_parameters() {
+        use crate::test_packages::{Dep, varyk_http};
+        let text = "struct State {\n    n: i64,\n}\nasync fn show(req: http::Request, id: i64) {}\nfn main() {\n    let mut app = http::App::new(Shared::new(State { n: 1 }));\n    app.get(\"/{id}\", show);\n}\n";
+        let program = varyk_http()
+            .check(text, &[("http", Dep::Package("varyk-http"))])
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        let generated =
+            RustBackend.generate(&program, &CrateInfo::single_file("p".to_string(), None));
+        let lines: Vec<&str> = generated.files[0].text.lines().collect();
+        let position = |needle: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle}\n{}", generated.files[0].text))
+        };
+        let param = position("let varyk_1 = match varyk_req.param::<i64>(\"id\")");
+        let bind =
+            position("let varyk_0 = match varyk_req.bind::<::http::server::Request>().await");
+        assert!(param < bind, "{}", generated.files[0].text);
+        position("    show(&varyk_0, varyk_1).await;");
+    }
+
+    /// In the package named `varyk-http` itself, whose `App` is declared
+    /// in `server` and named at the root by `pub use`, an adapter and its
+    /// registration write the package root, `crate`, as the path to the
+    /// contract items (milestone 5b4 spec 2.1, 7.2).
+    #[test]
+    fn the_package_s_own_routes_write_crate_as_the_package() {
+        use crate::test_packages::varyk_http;
+        let build = varyk_http();
+        let program = &build.checked[0].program;
+        let generated =
+            RustBackend.generate(program, &CrateInfo::single_file("p".to_string(), None));
+        let tests = generated
+            .files
+            .iter()
+            .find(|file| file.path == "src/tests.rs")
+            .expect("the tests module");
+        for line in [
+            "        app.get(\"/greet/{name}\", crate::route(varyk_route_0));",
+            "async fn varyk_route_0(varyk_req: crate::Request) -> crate::Response {",
+        ] {
+            assert!(
+                tests.text.lines().any(|have| have == line),
+                "{line}\n{}",
+                tests.text
+            );
+        }
     }
 
     #[test]

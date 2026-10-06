@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0302]: `get` may change `app`, but `app` was declared without `mut`
+ --> src/main.vr:9:5
+  |
+8 |     let app = http::App::new(Shared::new(State { name: "users" }));
+  |         --- `app` is declared here without `mut`
+9 |     app.get("/", home);
+  |     ^^^^^^^^^^^^^^^^^^ `get` may change `app`, but `app` was declared without `mut`
+  |
+help: insert `mut ` before `app`

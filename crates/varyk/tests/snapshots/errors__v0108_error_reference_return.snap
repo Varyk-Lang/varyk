@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: unsupported Rust signature: `Failures::last` cannot be called from Varyk
+ --> crates/varyk/tests/fixtures/errors/v0108_error_reference_return/main.vr:4:25
+  |
+4 |     let last = failures.last();
+  |                         ^^^^ unsupported Rust signature: `Failures::last` cannot be called from Varyk
+  |
+  = note: the Rust signature is `fn last(&self) -> &varyk_std::Error`
+  = note: `varyk_std::Error` can only be the whole return of a function or the error of a returned `Result`, not borrowed; return it by value

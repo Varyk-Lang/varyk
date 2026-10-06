@@ -69,6 +69,7 @@ pub fn typecheck(
             locals: Vec::new(),
             scopes: Vec::new(),
             loop_depth: 0,
+            loop_heads: 0,
             closures: Vec::new(),
             range_vars: Vec::new(),
             option_try_operand: None,
@@ -81,6 +82,7 @@ pub fn typecheck(
             async_callees: Vec::new(),
             task_places: Vec::new(),
             task_uses: Vec::new(),
+            apps: HashMap::new(),
             base: &base,
             reached: &mut reached,
             env_reached: &mut env_reached,
@@ -355,6 +357,30 @@ fn tree_path(resolved: &Resolved, id: ModuleId, sources: &[SourceFile]) -> Strin
 /// does not cascade into "unknown name" at every later use.
 type Scope = HashMap<String, Option<LocalId>>;
 
+/// What a callee's parameters take beyond their types (milestone 5b3
+/// spec 2.2, 2.3; milestone 5b4 spec 2.7): the default for a callee with
+/// none of them, which every Varyk function and built-in is.
+#[derive(Debug, Default)]
+struct ArgRules {
+    /// Per parameter, whether it takes only text written in the program.
+    literal: Vec<bool>,
+    /// Any number of values follow the fixed arguments.
+    variadic: bool,
+    /// The parameter whose type is its argument's.
+    serialize: Option<usize>,
+}
+
+impl ArgRules {
+    /// Those of the imported function `sig`.
+    fn of(sig: &ImportedSig) -> ArgRules {
+        ArgRules {
+            literal: sig.literal.clone(),
+            variadic: sig.variadic,
+            serialize: sig.serialize_param,
+        }
+    }
+}
+
 /// Checks one function. Every method returning `Option` has already
 /// reported a diagnostic when it returns `None`.
 struct FnChecker<'a> {
@@ -371,6 +397,11 @@ struct FnChecker<'a> {
     /// How many `while` and `for` loops enclose the current statement,
     /// within the innermost closure.
     loop_depth: u32,
+    /// How many `while` conditions and `while let` values enclose the
+    /// current expression: each runs every time around, as a loop's body
+    /// does, though `break` and `continue` there leave no loop (milestone
+    /// 5b4 spec 2.1, V0221).
+    loop_heads: u32,
     /// The closures whose bodies enclose the current expression,
     /// outermost first.
     closures: Vec<closures::Frame>,
@@ -405,6 +436,9 @@ struct FnChecker<'a> {
     /// The locals holding a task, or a `Vec` of tasks, that something
     /// uses (milestone 5b1 spec 2.4).
     task_uses: Vec<LocalId>,
+    /// The locals bound to `App::new(..)` by a `let` of this function
+    /// (milestone 5b4 spec 2.1): the apps whose routes may be added here.
+    apps: HashMap<LocalId, routes::AppLocal>,
     /// The directory an `assert`'s location is written from (see
     /// [`location_base`]).
     base: &'a std::path::Path,
@@ -569,11 +603,16 @@ impl FnChecker<'_> {
         let tail = block
             .tail
             .as_deref()
-            .map(|tail| self.expr(tail, expected.clone()));
+            .map(|tail| self.expr_or_route(tail, expected.clone()));
         self.scopes.pop();
 
+        // A route or hook call as the tail is a statement all the same.
         let tail = match tail {
-            Some(Some(tail)) => Some(Box::new(tail)),
+            Some(Some(routes::Lowered::Expr(tail))) => Some(Box::new(tail)),
+            Some(Some(routes::Lowered::Stmt(stmt))) => {
+                stmts.push(*stmt);
+                None
+            }
             Some(None) => return None,
             None => None,
         };
@@ -631,6 +670,7 @@ impl FnChecker<'_> {
                     return None;
                 };
                 let local = self.bind(name, value.ty.clone(), *mutable);
+                self.bind_app(local, &value);
                 Some(HirStmt::Let {
                     local,
                     value,
@@ -651,6 +691,7 @@ impl FnChecker<'_> {
                     ));
                     return None;
                 }
+                self.app_assigned(&target)?;
                 let value = self.expr(value, Some(target.ty.clone()))?;
                 let value = self.expect(value, &target.ty)?;
                 Some(HirStmt::Assign {
@@ -664,7 +705,10 @@ impl FnChecker<'_> {
                 span,
                 has_semi,
             } => {
-                let expr = self.expr(expr, None)?;
+                let expr = match self.expr_or_route(expr, None)? {
+                    routes::Lowered::Stmt(stmt) => return Some(*stmt),
+                    routes::Lowered::Expr(expr) => expr,
+                };
                 if !has_semi {
                     // A block-like expression mid-block without `;` must be `()`.
                     return self
@@ -696,7 +740,10 @@ impl FnChecker<'_> {
                 Some(HirStmt::Return { value, span: *span })
             }
             Stmt::While { cond, body, span } => {
+                // The condition runs each time around, as the body does.
+                self.loop_heads += 1;
                 let cond = self.condition(cond);
+                self.loop_heads -= 1;
                 self.loop_depth += 1;
                 let body = self.block(body, Some(Ty::Unit));
                 self.loop_depth -= 1;
@@ -1461,13 +1508,12 @@ impl FnChecker<'_> {
             }
         }
 
-        let (params, literal, variadic, ret): (Vec<Ty>, Vec<bool>, bool, Ty) = match found {
+        let (params, rules, ret): (Vec<Ty>, ArgRules, Ty) = match found {
             Callee::Varyk(id) => {
                 let sig = &self.symbols.fns[id.0 as usize];
                 (
                     sig.params.iter().map(|p| p.1.clone()).collect(),
-                    Vec::new(),
-                    false,
+                    ArgRules::default(),
                     sig.ret.clone(),
                 )
             }
@@ -1482,8 +1528,7 @@ impl FnChecker<'_> {
                 self.uses_std |= sig.names_std;
                 let found = (
                     sig.params.iter().map(|p| p.0.clone()).collect(),
-                    sig.literal.clone(),
-                    sig.variadic,
+                    ArgRules::of(sig),
                     sig.ret.clone(),
                 );
                 if sig.is_async {
@@ -1505,7 +1550,7 @@ impl FnChecker<'_> {
                 Some((ret, t)) => (ret, Some(t)),
                 None => (ret, None),
             };
-        let (args, trailing) = self.arguments(&path, &params, &literal, variadic, args, span)?;
+        let (args, trailing) = self.arguments(&path, &params, &rules, args, span)?;
         Some(HirExpr {
             kind: HirExprKind::Call {
                 callee: found,
@@ -1548,7 +1593,7 @@ impl FnChecker<'_> {
         }
         let (cond, kind) = if name == "assert" {
             let [cond] = args else {
-                self.arguments(name, &[Ty::Bool], &[], false, args, span);
+                self.arguments(name, &[Ty::Bool], &ArgRules::default(), args, span);
                 return None;
             };
             let cond = self
@@ -1591,11 +1636,13 @@ impl FnChecker<'_> {
 
     /// The arguments of a call to `path` (at `span`), each typed against
     /// its parameter type in `params`; V0201 when the count differs.
-    /// `literal` says, per parameter, whether it takes only text written
-    /// in the program (milestone 5b3 spec 2.3): any other argument there
-    /// is V0217. It is empty for a callee with no such parameter.
+    /// `rules.literal` says, per parameter, whether it takes only text
+    /// written in the program (milestone 5b3 spec 2.3): any other argument
+    /// there is V0217. The argument of `rules.serialize` is typed from
+    /// itself and checked as a `json::stringify` argument is (milestone
+    /// 5b4 spec 2.7).
     ///
-    /// When `variadic` (milestone 5b3 spec 2.2), the arguments after
+    /// When `rules.variadic` (milestone 5b3 spec 2.2), the arguments after
     /// `params` are values, each typed with nothing expected and of a
     /// type [`is_value_type`] admits (V0218), returned apart from the
     /// fixed ones; there may be none, and V0201 says "at least".
@@ -1603,11 +1650,11 @@ impl FnChecker<'_> {
         &mut self,
         path: &str,
         params: &[Ty],
-        literal: &[bool],
-        variadic: bool,
+        rules: &ArgRules,
         args: &[Expr],
         span: Span,
     ) -> Option<(Vec<HirExpr>, Vec<HirExpr>)> {
+        let variadic = rules.variadic;
         if args.len() < params.len() || (!variadic && args.len() > params.len()) {
             let plural = |n: usize| if n == 1 { "" } else { "s" };
             let message = format!(
@@ -1625,9 +1672,13 @@ impl FnChecker<'_> {
         let (fixed, values) = args.split_at(params.len());
         let mut checked = Vec::new();
         for (at, (arg, ty)) in fixed.iter().zip(params).enumerate() {
-            if literal.get(at) == Some(&true) && !matches!(arg.kind, ExprKind::String(_)) {
+            if rules.literal.get(at) == Some(&true) && !matches!(arg.kind, ExprKind::String(_)) {
                 self.diagnostics.push(not_literal_text(path, arg));
                 checked.push(None);
+                continue;
+            }
+            if rules.serialize == Some(at) {
+                checked.push(self.serialized(arg));
                 continue;
             }
             checked.push(
@@ -2235,7 +2286,10 @@ fn unfinished_chains_in_block(block: &HirBlock, out: &mut Vec<Diagnostic>) {
                 }
                 unfinished_chains_in_block(body, out);
             }
-            HirStmt::Break { .. } | HirStmt::Continue { .. } => {}
+            HirStmt::Break { .. }
+            | HirStmt::Continue { .. }
+            | HirStmt::Route(_)
+            | HirStmt::Hook(_) => {}
         }
     }
     if let Some(tail) = &block.tail {
@@ -2545,6 +2599,7 @@ mod closures;
 mod exhaustive;
 mod methods;
 mod patterns;
+mod routes;
 mod values;
 
 #[cfg(test)]

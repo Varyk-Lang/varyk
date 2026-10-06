@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0217]: a route's path must be text written in the program
+  --> src/main.vr:10:13
+   |
+10 |     app.get(path, home);
+   |             ^^^^ a route's path must be text written in the program
+   |
+   = note: write the path in quotes, as in `"/users/{id}"`

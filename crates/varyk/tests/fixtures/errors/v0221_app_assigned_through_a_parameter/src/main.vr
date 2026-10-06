@@ -1,0 +1,12 @@
+struct State {
+    name: string,
+}
+
+fn reset(mut app: http::App) {
+    app = http::App::new(Shared::new(State { name: "others" }));
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    reset(app);
+}

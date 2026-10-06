@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0222]: `"/files/*"` is not a valid route path
+ --> src/main.vr:9:13
+  |
+9 |     app.get("/files/*", list);
+  |             ^^^^^^^^^^ `"/files/*"` is not a valid route path
+  |
+  = note: `*` cannot be in a path: a segment holds letters, digits, `-`, `_`, `.`, and `~`, or is a `{name}`

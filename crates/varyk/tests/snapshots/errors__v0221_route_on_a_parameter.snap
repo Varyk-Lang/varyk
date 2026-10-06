@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0221]: routes are added to an app made by `App::new` in the same function, and `app` is not one
+ --> src/main.vr:8:5
+  |
+8 |     app.get("/", home);
+  |     ^^^^^^^^^^^^^^^^^^ routes are added to an app made by `App::new` in the same function, and `app` is not one
+  |
+  = note: make the app and add its routes in one function, as in `let mut app = http::App::new(state);` then `app.get("/", home);`; that function may then return the app

@@ -130,6 +130,7 @@ pub fn check_file(
         checked: &checked,
         dependency: false,
         listings: &listings,
+        name: package.map(|package| package.name.as_str()),
     };
     let mut program =
         check_package(entry, package, packages, sources).map_err(|mut diagnostics| {
@@ -194,6 +195,7 @@ fn check_dependency(
         checked,
         dependency: true,
         listings,
+        name: Some(&package.name),
     };
     let program = match check_package(entry, Some(&package), packages, sources) {
         Ok(program) => program,

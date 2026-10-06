@@ -1,0 +1,24 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn taken(name: &str) -> Result<i64, ::varyk_std::Error> {
+    if name.is_empty() {
+        return Err(::varyk_std::Error::with_status(409u16, name.to_string()));
+    }
+    Ok(1i64)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn code(e: &::varyk_std::Error) -> u16 {
+    e.status().unwrap_or(500u16)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    match taken("") {
+        Ok(n) => ::std::println!("{}", n),
+        Err(e) => ::std::println!("{}", code(&e)),
+    }
+}

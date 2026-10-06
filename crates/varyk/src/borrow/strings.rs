@@ -412,7 +412,10 @@ impl Flows<'_> {
                 self.block(body);
                 self.blocks.pop();
             }
-            HirStmt::Break { .. } | HirStmt::Continue { .. } => {}
+            HirStmt::Break { .. }
+            | HirStmt::Continue { .. }
+            | HirStmt::Route(_)
+            | HirStmt::Hook(_) => {}
         }
     }
 

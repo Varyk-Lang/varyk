@@ -1072,7 +1072,22 @@ impl FnAnalyzer<'_> {
                 self.block(body);
             }
             HirStmt::Break { .. } | HirStmt::Continue { .. } => {}
+            HirStmt::Route(route) => self.added(route.app, route.method.call(), route.span),
+            HirStmt::Hook(hook) => self.added(hook.app, hook.call(), hook.span),
         }
+    }
+
+    /// A route or hook call, `call` on the app local `app` at `span`,
+    /// changes its app as a `mut self` method does (milestone 5b4 spec
+    /// 7.4); its handler or hook is not a value, and borrows nothing.
+    fn added(&mut self, app: LocalId, call: &str, span: Span) {
+        let app = HirExpr {
+            kind: HirExprKind::Local(app),
+            ty: self.local(app).ty.clone(),
+            span,
+        };
+        let modes = [ParamMode::MutableBorrow];
+        self.call(call, &modes, false, &[&app], None);
     }
 
     fn expr(&mut self, expr: &HirExpr) {
@@ -2035,6 +2050,8 @@ impl FnAnalyzer<'_> {
                     self.block_uses(body, false, false, out);
                 }
                 HirStmt::Break { .. } | HirStmt::Continue { .. } => {}
+                HirStmt::Route(route) => out.push((route.app, true, route.span)),
+                HirStmt::Hook(hook) => out.push((hook.app, true, hook.span)),
             }
         }
         if let Some(tail) = &block.tail {

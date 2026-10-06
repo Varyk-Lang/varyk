@@ -1,0 +1,14 @@
+struct State {
+    key: string,
+}
+
+async fn stamp(req: http::Request, res: http::Response) -> http::Response {
+    let mut out = http::Response::empty();
+    out.set_header("x-app", "users");
+    out
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { key: "k1" }));
+    app.after(stamp);
+}

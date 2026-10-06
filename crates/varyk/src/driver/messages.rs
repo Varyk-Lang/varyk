@@ -7,7 +7,8 @@
 //!   at the mapped Varyk span (warnings are dropped — section 2.3's
 //!   item-level lint allows should already have silenced them), or V0901
 //!   when rustc says a value cannot go to another thread, which only a
-//!   started call's task asks of it (milestone 5b1 spec 5);
+//!   started call's task (milestone 5b1 spec 5), a route's or hook's
+//!   adapter, and `App::new`'s state ask of it (milestone 5b4 spec 7.5);
 //! - a copied `.rs` module: the user's own Rust, shown as rustc rendered
 //!   it but with every copied file's internal path rewritten to its
 //!   user file, errors and warnings alike. rustc's `rendered` text can
@@ -35,7 +36,7 @@ use std::path::{Path, PathBuf};
 use varyk_syntax::Span;
 
 use super::PackageCrate;
-use crate::backend::SourceMap;
+use crate::backend::{Mark, SourceMap};
 use crate::diagnostics::Diagnostic;
 use crate::diagnostics::codes::{V0900, V0901};
 
@@ -157,7 +158,8 @@ pub fn classify(
 
     match map.lookup(tree_path.as_ref(), line_start) {
         Some(span) if level == "error" => {
-            if let Some(diagnostic) = thread_safety(msg, &text, span) {
+            let mark = map.mark(tree_path.as_ref(), line_start);
+            if let Some(diagnostic) = thread_safety(msg, &text, span, mark) {
                 return Some(Message::Generated(diagnostic));
             }
             let message = match code {
@@ -249,12 +251,20 @@ pub fn classify_package(msg: &serde_json::Value, package: &PackageCrate) -> Vec<
 }
 
 /// V0901 at `span` when rustc's error `text` (`msg`'s headline) says a
-/// value cannot be sent or shared between threads: `Task::start` is the
-/// only `Send` bound generated code has, so the task of a started call
-/// holds a value from Rust code that cannot go to another thread
-/// (milestone 5b1 spec 5). The type is the one rustc's `help` says lacks
+/// value cannot be sent or shared between threads. Generated code has
+/// three such bounds: `Task::start`, so the task of a started call holds
+/// a value from Rust code that cannot go to another thread (milestone
+/// 5b1 spec 5); a route's or hook's adapter, given to the package at its
+/// registration, so its handler holds one; and `App::new`, so the state
+/// holds one (milestone 5b4 spec 3, 7.5). `mark`, what the line belongs
+/// to, picks the words. The type is the one rustc's `help` says lacks
 /// `Send` or `Sync`, or the headline's own; `None` for any other error.
-fn thread_safety(msg: &serde_json::Value, text: &str, span: Span) -> Option<Diagnostic> {
+fn thread_safety(
+    msg: &serde_json::Value,
+    text: &str,
+    span: Span,
+    mark: Option<Mark>,
+) -> Option<Diagnostic> {
     let sent = text.contains("cannot be sent between threads safely");
     if !sent && !text.contains("cannot be shared between threads safely") {
         return None;
@@ -281,22 +291,35 @@ fn thread_safety(msg: &serde_json::Value, text: &str, span: Span) -> Option<Diag
     } else {
         ("cannot be shared between threads", "Sync")
     };
-    Some(
-        Diagnostic::new(
-            V0901,
-            span,
-            format!("the task started here holds {what}, which {cannot}"),
-        )
-        .with_note(
+    let (holder, why, instead) = match mark {
+        Some(Mark::Route) => (
+            "the handler or hook added here holds",
+            "each request may be answered on another thread, so what a handler or hook is given, \
+             and what it holds while it waits, must be able to go there",
+            "",
+        ),
+        Some(Mark::State) => (
+            "the state given here holds",
+            "every request may be answered on its own thread, and every one of them reads \
+             the app's state, so the state must be able to be shared between threads",
+            "",
+        ),
+        None => (
+            "the task started here holds",
             "a started task may run on another thread, so what it is given, and what it \
-             holds while it waits, must be able to go there; this value comes from Rust code, \
-             a `.rs` module or a crate it uses",
-        )
-        .with_note(format!(
-            "in Rust terms, {what} is not `{missing}`; in the Rust code, use `Arc` in place of \
-             `Rc`, and `Mutex` or an atomic in place of `Cell` or `RefCell`, or wait for the \
-             call with `.await` instead of starting it"
-        )),
+             holds while it waits, must be able to go there",
+            ", or wait for the call with `.await` instead of starting it",
+        ),
+    };
+    Some(
+        Diagnostic::new(V0901, span, format!("{holder} {what}, which {cannot}"))
+            .with_note(format!(
+                "{why}; this value comes from Rust code, a `.rs` module or a crate it uses"
+            ))
+            .with_note(format!(
+                "in Rust terms, {what} is not `{missing}`; in the Rust code, use `Arc` in place \
+                 of `Rc`, and `Mutex` or an atomic in place of `Cell` or `RefCell`{instead}"
+            )),
     )
 }
 
@@ -406,7 +429,7 @@ fn tree_relative<'a>(file_name: &'a str, crate_src: &Path) -> Cow<'a, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{GeneratedCrate, GeneratedFile, Writer};
+    use crate::backend::{GeneratedCrate, GeneratedFile, Mark, Writer};
     use serde_json::json;
     use varyk_syntax::{FileId, Span};
 
@@ -484,8 +507,19 @@ mod tests {
     /// `message` and its `children`, with no code, as rustc gives a
     /// future's thread-safety errors.
     fn thread_error(message: &str, children: serde_json::Value) -> Option<Message> {
+        marked_thread_error(None, message, children)
+    }
+
+    /// [`thread_error`] at a line that belongs to `mark`: a route's
+    /// adapter or registration, or an `App::new` call (milestone 5b4
+    /// spec 7.5).
+    fn marked_thread_error(
+        mark: Option<Mark>,
+        message: &str,
+        children: serde_json::Value,
+    ) -> Option<Message> {
         let mut writer = Writer::new("src/main.rs");
-        writer.line(0, "let t = match (s,) { .. };", Some(span(10, 20)));
+        writer.marked_line(0, "let t = match (s,) { .. };", Some(span(10, 20)), mark);
         let generated = crate_with(vec![writer.finish()], Vec::new());
         let map = generated.source_map();
         let msg = json!({
@@ -557,6 +591,67 @@ mod tests {
                 other => panic!("expected Generated, got {other:?}"),
             }
         }
+    }
+
+    /// A thread-safety error at a route's line, its adapter or its
+    /// registration, where rustc puts "future cannot be sent", is V0901
+    /// about the route's handler; one at an `App::new` line, where a
+    /// state that cannot be shared fails, is V0901 about the state
+    /// (milestone 5b4 spec 3, 7.5).
+    #[test]
+    fn a_thread_safety_error_at_a_route_or_app_new_is_v0901_in_their_words() {
+        let sent = json!([{"level": "help", "message": "within `Session`, the trait `Send` is not \
+            implemented for `Rc<String>`", "spans": []}]);
+        let Some(Message::Generated(route)) = marked_thread_error(
+            Some(Mark::Route),
+            "future cannot be sent between threads safely",
+            sent,
+        ) else {
+            panic!("expected Generated");
+        };
+        assert_eq!(route.code, V0901);
+        assert_eq!(route.span, span(10, 20));
+        assert_eq!(
+            route.message,
+            "the handler or hook added here holds `Rc<String>`, which cannot be sent to another thread"
+        );
+        assert!(
+            route.notes.iter().any(|note| note.contains("each request")),
+            "{:?}",
+            route.notes
+        );
+        assert!(
+            !route.notes.iter().any(|note| note.contains("started")),
+            "{:?}",
+            route.notes
+        );
+
+        let Some(Message::Generated(state)) = marked_thread_error(
+            Some(Mark::State),
+            "`Cell<i64>` cannot be shared between threads safely",
+            json!([]),
+        ) else {
+            panic!("expected Generated");
+        };
+        assert_eq!(state.code, V0901);
+        assert_eq!(state.span, span(10, 20));
+        assert_eq!(
+            state.message,
+            "the state given here holds `Cell<i64>`, which cannot be shared between threads"
+        );
+        assert!(
+            state
+                .notes
+                .iter()
+                .any(|note| note.contains("every request")),
+            "{:?}",
+            state.notes
+        );
+        assert!(
+            !state.notes.iter().any(|note| note.contains("started")),
+            "{:?}",
+            state.notes
+        );
     }
 
     /// Any other rustc error in a generated file stays V0900, and a V0901

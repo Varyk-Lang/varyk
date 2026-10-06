@@ -1,6 +1,6 @@
 # The Varyk language
 
-This page describes everything Varyk accepts today, in milestone 5b3 of an
+This page describes everything Varyk accepts today, in milestone 5b4 of an
 experimental, pre-1.0 language (see [roadmap.md](roadmap.md) for what comes
 next). Anything not described here is rejected with an error that names
 what is not supported. For the reasons behind the design, see
@@ -508,7 +508,9 @@ error (V0206), and so is one in a function whose error type is not `Error`.
 | Call | Uses the value | Result |
 |---|---|---|
 | `Error::new(text)`; `text: string` | none | a new `Error` with the message `text`; `text` is kept, like a struct field |
+| `Error::with_status(status, text)`; `status: u16`, `text: string` | none | a new `Error` with that HTTP status and the message `text`; `text` is kept, like a struct field. `varyk-http` sends a status from 400 to 599 with its message, as the body of the response, and any other status as a 500 with a fixed body (see [Errors with a status](#errors-with-a-status)); so give a status only a message written for the client |
 | `e.message()` | reads | the message: part of `e`, not a copy (see "Returning part of a parameter") |
+| `e.status()` | reads | the HTTP status as an `Option<u16>`, a copy; `None` for an error made with `Error::new` or by any standard call. A status is set with `Error::with_status` or by `varyk-http`'s functions over it, `http::bad_request(text)` and the others (see [Errors with a status](#errors-with-a-status)), and means the message was written for the client |
 
 `{}` prints an `Error`'s message, and two errors can be compared with `==`.
 There is no conversion into `Error` from another error type: a function's
@@ -516,7 +518,7 @@ own error enum becomes one with `map_err` and a function that gives its
 text, `r.map_err(|e| Error::new(describe(e)))`. In the generated Rust,
 `Error` is `::varyk_std::Error` and `parse` is `::varyk_std::parse`, from
 the `varyk-std` crate; a single file that uses either (names `Error`, or
-calls `Error::new`, `parse`, or a `json` or `env` call) gets it as a dependency at
+calls `Error::new`, `Error::with_status`, `parse`, or a `json` or `env` call) gets it as a dependency at
 exactly the compiler's version.
 
 **`Option<T>`:**
@@ -1075,13 +1077,16 @@ the level, and the message: `2026-09-30T12:00:00.000Z INFO listening on port
 8080`. With `LOG_FORMAT=json` each line is one JSON object with the keys
 `time`, `level`, and `message`; any other value gives text.
 
-A program that makes a `log` call, or uses a Varyk package that makes one,
-starts logging first thing in its `main`, and so needs `varyk-std`; a
-program without one writes nothing to stderr. Setup never stops
+A program that makes a `log` call, uses a Varyk package that makes one, or
+makes an app with `http::App::new` (whose package logs every request and
+the message of every 500, see [HTTP](#http)) starts logging first thing in
+its `main` and in each async test, and so needs `varyk-std`; a program
+without any of them writes nothing to stderr. Setup never stops
 the program: a bad `LOG` value or a `.env` that cannot be read gives one
 warning line, and logging goes on at `info` in text. In the generated Rust
-a call is `::varyk_std::tracing::info!(..)`, and `main` begins with
-`::varyk_std::start();`. A library's `log` calls go wherever the program
+a call is `::varyk_std::tracing::info!(..)`, and `main` and an async test
+begin with `::varyk_std::start();`, which does nothing when logging is
+already started. A library's `log` calls go wherever the program
 using it sends them.
 
 ## Tests
@@ -1316,7 +1321,10 @@ like any call, and `f(x).await?` passes an `Err` on.
 - `.await` goes after a call to an async function, `Task::all` or
   `Task::all_settled`, or a name holding a task (V0212).
 - Async functions may not call each other in a cycle, directly or through
-  others, and an async function may not call itself (V0214).
+  others, and an async function may not call itself (V0214). An async
+  function that adds a route or a hook counts as calling its handler or
+  hook, so a handler that gets back to the function that added it is a
+  cycle too.
 - An async function may not return part of a parameter (V0311): everything
   it returns is new, so return a copy (`.clone()` for text).
 
@@ -1709,7 +1717,10 @@ kind's data. The check follows the fields all the way down, and a type
 that holds itself through a `Vec` is fine.
 
 `json::stringify` and `json::parse` only read their argument, so the
-value can be used after the call. In the generated Rust they are
+value can be used after the call. A `.rs` function that writes its
+argument the same way, with a `&T` parameter where `T: serde::Serialize +
+?Sized`, takes any type `json::stringify` does, by these rules too (see
+"Calling Rust"). In the generated Rust they are
 `::varyk_std::json::stringify(&value)` and
 `::varyk_std::json::parse::<User>(&text)`, and a type that a call reaches
 derives serde's `Serialize`, `Deserialize`, or both, through `varyk-std`,
@@ -1821,7 +1832,7 @@ facade function: `Value::from` copies its text as it hands the value over.
 Nothing else copies a string's text behind your back. A string that is
 already owned moves instead, with no copy.
 
-## Not in milestone 5b3
+## Not in milestone 5b4
 
 These do not exist yet; where one can be written, it is an error that names
 what is not supported. They are left out because no program has needed
@@ -1856,18 +1867,27 @@ custom formats in JSON; structured log fields (`log::info("x", id = 1)`),
 log targets, and spans; `.env` variable expansion and several `.env`
 files; a kind or a cause on `Error`, and automatic conversion into `Error`
 from other error types at `?`; attributes on structs, methods, and
-variants with data; `#[default]` on an `Option`, enum, or struct field; and HTTP, which is to
-come as a package in milestone 5b4, as the database comes as `varyk-sql`.
+variants with data; and `#[default]` on an `Option`, enum, or struct field.
+
+Also not yet, from HTTP (see [HTTP](#http)): a hook that wraps the handler
+and calls it itself; groups of routes as values; a handler reading a header
+or cookie by name without taking `http::Request`; a body read as anything
+but JSON or a multipart upload (XML, URL-encoded forms); headers for one
+client request beyond the client's defaults; adding a route or hook to an app a function was given, not one it
+made; a handler that is a method, a function of a `.rs` file, or a function
+of another package; `serve` taking an address (the address is a setting,
+in the package's README); TLS in the server, which is the job of the proxy
+in front of it; request and response bodies sent in pieces as they come;
+an OpenAPI document written from the routes; and types for dates, times,
+UUIDs, and bytes, which come in milestone 5c.
 
 Also not yet, from facades (see [A facade for a package](#a-facade-for-a-package)):
-a type parameter in a parameter (`&T: Serialize`, planned for 5b4), two
-type parameters, a `where` clause, or another bound; a `u64`, a struct, a
+two type parameters, a `where` clause, or another bound; a `u64`, a struct, a
 `Vec`, or a map as a trailing value; `varyk_std::Error`
-anywhere but as the error of a returned `Result`; a Varyk function with a
+anywhere but as the error of a returned `Result` or as the whole return; a Varyk function with a
 literal-only parameter or one taking any number of values; naming
 `varyk_std::Value` from Varyk code; `pub use` of a module, with braces,
-globs, or `as`, or of an item of another package; and several shorthands in
-one `varyk add`.
+globs, or `as`, or of an item of another package.
 
 Also not yet, from async code: `race` and `any`; timeouts; channels;
 changing a value shared between tasks (a `Mutex`); a task anywhere but where
@@ -1895,7 +1915,7 @@ blocks for built-in types; a `use` of an enum variant; naming a crate from
 Varyk code (write a `.rs` facade instead: a Rust file of the package that
 wraps what the program needs from the crate in plain functions, as
 "Calling Rust" shows); and everything planned for later milestones, such
-as HTTP, databases, `varyk fmt`, and a language server.
+as `varyk fmt` and a language server.
 
 `unwrap` and `expect` are never added, in this or any later milestone: a
 call that stops the program when a value is absent defeats the purpose of a
@@ -1904,6 +1924,307 @@ every use.
 
 Names are ASCII only for now (letters, digits, and `_`); string text can be
 any Unicode.
+
+## HTTP
+
+A service answers requests through `varyk-http`, the official HTTP
+package. It lives in its own repository, `Varyk-Lang/varyk-http`, and is
+not released yet: it ships from there after this compiler release, and
+until then `varyk add http` has nothing to add. Once released, it is added
+as any package is, with `varyk add http` (see [`varyk add` and
+upgrading](#varyk-add-and-upgrading)), which lists it under the key `http`,
+so code writes `http::App`. Its README is the guide to everything it
+offers: the server's settings and their defaults, cookies, files, the
+client, and which release of the package goes with which `varyk`. This
+section is what the compiler does with it.
+
+Varyk cannot pass a function around as a value, so the compiler knows this
+one package by name, as it knows `varyk-std`: when a build holds the
+package whose crate name is `varyk-http`, under whatever key, the calls that
+add routes and hooks to its `App` are the compiler's own, and `varyk check`
+checks each route against its function before anything is built.
+
+```varyk
+// src/main.vr, after `varyk add http`
+struct User {
+    id: i64,
+    name: string,
+}
+
+struct NewUser {
+    name: string,
+}
+
+struct State {
+    users: Vec<User>,
+}
+
+async fn get_user(id: i64, state: Shared<State>) -> Option<User> {
+    for user in state.users {
+        if user.id == id {
+            return Some(user.clone());
+        }
+    }
+    None
+}
+
+async fn create_user(user: NewUser, state: Shared<State>) -> Result<http::Response, Error> {
+    if user.name.is_empty() {
+        return Err(http::bad_request("a user needs a name"));
+    }
+    let created = User { id: state.users.len() as i64 + 1, name: user.name.clone() };
+    let mut r = http::Response::json(created);
+    r.set_status(201);
+    Ok(r)
+}
+
+fn build_app(state: Shared<State>) -> http::App {
+    let mut app = http::App::new(state.clone());
+    app.get("/users/{id}", get_user);
+    app.post("/users", create_user);
+    app
+}
+```
+
+The program's `async fn main()` makes the app and serves it:
+
+```varyk
+let users = vec![User { id: 1, name: "Ada" }];
+let app = build_app(Shared::new(State { users: users }));
+let port: u16 = 3000;
+if let Err(e) = app.serve(port).await {
+    log::error("cannot serve: {}", e);
+}
+```
+
+`GET /users/1` is answered with a 200 and `{"id":1,"name":"Ada"}`,
+`GET /users/2` with a 404, and `GET /users/abc` with a 400 saying that the
+path parameter `id` cannot be read from `abc`; `get_user` is not called
+for either. `POST /users` with `{"name": "Bo"}` is answered with a 201.
+
+### The route table
+
+| Call | Meaning |
+|---|---|
+| `http::App::new(state)` | a new app; `state` is a `Shared` of the struct every handler may read (see [Shared](#shared)), given away as `Shared::new` gives its struct |
+| `app.get(path, f)`, `app.post(path, f)`, `app.put(path, f)`, `app.patch(path, f)`, `app.delete(path, f)` | a route: a request with that method whose path fits `path` calls the function `f`, its *handler* |
+| `app.before(f)`, `app.before_on(prefix, f)` | a hook run before every request a route matches, or before those whose route's path starts with `prefix` |
+| `app.after(f)` | a hook run on every response the router makes |
+| `app.serve(port).await` | answers requests on `port`, a `u16`, until the program is stopped (ctrl-c, or the platform's SIGTERM, which lets the requests in progress finish), and logs the address it listens on once it binds; gives `Result<bool, Error>`, an `Err` when the port cannot be used |
+| `app.request(req).await` | sends one request through the app, without a port, and gives the `http::Response` (see [Requests in a test](#requests-in-a-test)) |
+
+`f` is a function's name with no parentheses: `get_user`, not
+`get_user()`. `path` and `prefix` are text written in quotes in the
+program (V0217 otherwise). Adding a route or a hook changes the app, so its
+name is a `let mut` (V0302). Each route is checked against the state's
+type, which `http::App::new` fixes, so routes and hooks are added where
+the app is made: to a name given `http::App::new(..)` in the same function,
+each by a statement of its own, not inside a loop (which would add the
+route again on every turn) or a closure, and that name, or any other name holding an app, is never given
+another value (V0221 for each). The app itself is an ordinary value: a
+function may return it, as `build_app` does, so that `main` and the tests
+make the same app. In `build_app`, `state` is a parameter, which the
+function only borrows, so it gives the app a copy of the handle,
+`state.clone()` (V0304 otherwise).
+
+The package has more calls on `App`, ordinary calls of an imported struct:
+the address to listen on (only this computer, `127.0.0.1`, unless a call
+says otherwise, so a service run on a laptop is not open to its network),
+CORS, limits, and the rest its README lists.
+
+### Routes and their handlers
+
+A path is `/` followed by parts separated by `/`. A part is either written
+out, in ASCII letters, digits, `-`, `_`, `.`, and `~`, or is a name in
+braces, `{id}`, which stands for whatever the request has there. No part
+is empty, no name is used twice, and only the path `"/"` ends with `/`.
+Anything else is V0222, and so is a second route with the same method and
+path. A path matches whole: `/users/{id}` matches `/users/1`, not
+`/users/1/posts`.
+
+The handler is an `async fn` of the current package, in any module from
+which the route can see it (V0105 otherwise: `admin::list_users` must be
+`pub`). It is not `main` (V0106), a test (V0114), a method, a function of a
+`.rs` file, or a function of another package (V0220). Each of its
+parameters gets its value from the request by the first of these rules
+that fits:
+
+1. a parameter with the name of a `{name}` of the path is that part of the
+   path; its type is an integer type, `bool`, or `string`;
+2. a parameter of type `Shared<State>`, where `State` is the struct given
+   to `http::App::new`, is the app's state; there is at most one;
+3. a parameter of type `http::Request` is the request itself, to read its
+   headers, cookies, or body (the package may add more types like it);
+4. on `post`, `put`, and `patch`, one parameter of a type JSON can hold, a
+   struct, an enum, or a `Vec` or `HashMap`, is the request's body, read as
+   JSON with the rules and attribute checks of `json::parse` (V0209, V0210);
+5. any other parameter of an integer type, `bool`, `string`, or an
+   `Option` of one is read by its name from the query string, the part of
+   the address after `?`: `search(prefix: Option<string>, exact: bool)`
+   reads `/search?prefix=A&exact=true`. A plain type must be there; an
+   `Option` is `None` when it is not.
+
+A parameter that fits none of these, a `{name}` with no parameter, a body
+on `get` or `delete`, two bodies, two states, or two `http::Request`s, a
+`Shared` of another struct, or a path parameter of another type is V0219, one for each
+problem, at the route, naming the parameter or the part. So renaming a
+parameter cannot quietly stop it from getting its value. A query
+parameter's name is part of the address clients write, so renaming one
+changes what they must send.
+
+The request is read before the handler runs. A part of the path or a query
+value that is not a value of its type (`abc` for an `i64`), a missing query
+value, or a body that is not JSON of its type is answered with a 400 whose
+body names the parameter and what is wrong, and the handler is not called:
+inside a handler, every parameter is a real value of its type. A path no
+route matches is answered with a 404, and a known path asked for with
+another method with a 405.
+
+A handler is called as any Varyk function is: its parameters borrow what
+they are given, and a `mut` parameter (`mut user: NewUser`) may be changed.
+
+### Responses
+
+What a handler returns is its answer:
+
+| Returns | Answer |
+|---|---|
+| nothing | 204, with no body |
+| a value `json::stringify` writes, other than an `Option` | 200, with the value as JSON |
+| `Option<T>` | 200 with `T` as JSON, or 404 for `None` |
+| `http::Response` | the response as built |
+| `Result<X, Error>`, `X` one of the rows above but nothing | `X`'s answer for `Ok`, and the error's for `Err` (see [Errors with a status](#errors-with-a-status)) |
+
+Any other return type is V0220, and a type JSON cannot write is V0210. A
+`string` is sent as a JSON string. For another status, a header, or plain
+text, build an `http::Response`: `http::Response::json(value)` (which
+reads `value`, as `json::stringify` does), `http::Response::text(s)`, or
+`http::Response::empty()` (a 204), then `r.set_status(201)` or
+`r.set_header("location", "/users/3")`. A handler that can fail and has
+nothing to send returns `Result<http::Response, Error>`, with
+`Ok(http::Response::empty())`. A handler that takes a type for a live
+connection, which the package may add (a WebSocket, say), answers before
+the handler runs and ignores what it returns, so it returns nothing, or
+`Result<http::Response, Error>` for `?` to work on its calls.
+
+### Hooks
+
+| Hook | Its function |
+|---|---|
+| `app.before(f)`, `app.before_on(prefix, f)` | `async fn f(req: http::Request) -> Result<bool, Error>`, or with a second parameter `state: Shared<State>` |
+| `app.after(f)` | `async fn f(req: http::Request, mut res: http::Response)`, returning nothing, or with a third parameter `state: Shared<State>` |
+
+The parameters come in this order, under any names; any other shape is
+V0220. A `before` hook decides whether the request goes on: `Ok(true)` lets
+it through, `Ok(false)` answers 403 with the package's `forbidden` body,
+for a check with nothing to explain, and `Err(e)` answers with the error.
+`before_on` runs only for routes under its prefix, which is written as
+a path without `{name}` parts (V0222) and matched on whole parts against
+the path of the route the request matched, as the program wrote it:
+`"/admin"` covers the routes `/admin` and `/admin/users/{id}`, not
+`/administrators`. A hook's request cannot be `mut` (V0220): a change to
+it would not reach the handler.
+
+A request no route matches, a 404 or a 405, runs no `before` hook. An
+`after` hook runs on every response the router makes, that 404 or 405 and
+a `before` hook's refusal included, and changes it through its `mut` parameter
+(`res.set_header(..)`); without `mut` it only reads it, to log it, say.
+
+Hooks run in the order they were added, and each covers every route of the
+app, wherever its line is: a `before` added after the routes still runs
+before each of them. A handler that needs to know who is asking calls a
+function of the program, `let user = current_user(req, state)?;`; a hook
+does not hand it anything.
+
+```varyk
+async fn check_key(req: http::Request, state: Shared<State>) -> Result<bool, Error> {
+    match req.header("x-key") {
+        Some(key) => Ok(key == state.key),
+        None => Err(http::unauthorized("an `x-key` header is needed")),
+    }
+}
+
+async fn stamp(req: http::Request, mut res: http::Response) {
+    res.set_header("x-served-by", "users");
+}
+```
+
+These run with `app.before_on("/admin", check_key);` and
+`app.after(stamp);` in `build_app`, for a `State` with a `key` field.
+
+### Requests in a test
+
+`app.request(req).await` sends one request through the app, hooks
+included, without a port, and gives the `http::Response` the server would
+have sent. A request is made with `http::Request::new(method, path)`, then
+`req.set_header(name, value)` and `req.set_body(text)`; an answer is read
+with `r.status()`, `r.header(name)`, and `r.body()`:
+
+```varyk
+#[test]
+async fn gets_a_user() {
+    let users = vec![User { id: 1, name: "Ada" }];
+    let app = build_app(Shared::new(State { users: users }));
+    let r = app.request(http::Request::new("GET", "/users/1")).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "{\"id\":1,\"name\":\"Ada\"}");
+}
+```
+
+`request` only reads the app, so one app may answer many requests. A
+program with an `http::App::new` call starts logging in `main` and in every
+async test, whether or not it calls `log` (see [Logging](#logging)), so
+the message of a 500 is on the screen under `varyk test` too.
+
+### Errors with a status
+
+An `Error` may carry an HTTP status (`e.status()`, see
+[Types](#types)). The package's functions make one, each taking the
+message as a `string`: `http::bad_request(text)` (400),
+`http::unauthorized(text)` (401), `http::forbidden(text)` (403),
+`http::not_found(text)` (404), `http::conflict(text)` (409), and
+`http::error(status, text)` for any other, `status` a `u16`. They are
+written in Varyk over `Error::with_status` (see [Types](#types)), and only
+Varyk code sets a status: no official package's Rust does. A status from
+400 to 599 is sent; any other is sent as a 500, and its message is
+logged, with the method and path.
+
+An error with a status from 400 to 599 is sent with that status and the body
+`{"error":"<message>"}`. An error without one, made by `Error::new` or
+passed on with `?` from a call such as a database query, is sent as a 500
+with the fixed body `{"error":"internal error"}`, and its message is logged
+as an error, with the request's method and path. A status therefore means
+the message was written for the client, and no other error's message
+reaches one: a database message, a file path, or an address inside an
+error stays in the log.
+
+### Safety
+
+- A route is checked before anything runs, by `varyk check`, as above.
+- What a request sends is read by the package, never by the handler: a
+  value that does not fit its type is a 400 before the handler is called.
+- No internal message reaches a client: an error without a status is a 500
+  with a fixed body, and so is a crash inside a handler, which stops only
+  that request; the message is in the log.
+- Every request may be answered on another thread, so what a handler holds
+  while it waits, and the app's state, must be able to go there. Every type
+  Varyk declares can; a type from Rust code that cannot is V0901 at the
+  route, or at `http::App::new` (see "Calling Rust").
+- The package's defaults are the careful ones: limits on a request's size
+  and time, listening on this computer only, and CORS off until it is asked
+  for; a limit on how many requests are answered at once is available, but
+  off until it is asked for, since memory is the platform's to manage. Its
+  README lists them and the calls that change them.
+
+For Rust readers: `varyk-http` is built on axum, tower-http, and reqwest,
+and the generated program never names any of them. For each route and hook
+the compiler writes one small function, `varyk_route_0`, `varyk_route_1`,
+and so on, in the module of the route call, which reads each parameter
+through the package (`varyk_req.param::<i64>("id")`), calls the handler,
+and turns its result into a response (`::http::respond_option(v)`); the
+route becomes `app.get("/users/{id}", ::http::route(varyk_route_0));`.
+`--emit-rust` shows them, and a rustc error inside one is reported at its
+route (V0900).
 
 ## Calling Rust
 
@@ -1961,21 +2282,25 @@ the return type is one of these:
 | `S`, a struct or enum imported from a `.rs` file of the package (below) | that struct or enum, given away (moved) |
 | `Vec<T>`, `Option<T>`, `Result<T, E>` where `T` and `E` are in this table | the same Varyk type, given away (moved) |
 | `Result<T, varyk_std::Error>` return, written by that full path, where `T` is in this table | `Result<T, Error>`: `?` opens it in a function returning `Result<_, Error>`, and `match` reads `e.message()`; a program needs `varyk-std` when its own `.rs` module has such a function, called or not, and when it calls one of a dependency package |
+| `varyk_std::Error` as the whole return, written by that full path (not in a parameter, a field, or inside another type) | `Error`, for a facade that makes an error of its own (`varyk-http`'s own constructors are Varyk over `Error::with_status`); a program needs `varyk-std` for such a function as for the `Result` return above |
 | `Result<T, varyk_std::Error>`, `Result<Option<T>, varyk_std::Error>`, or `Result<Vec<T>, varyk_std::Error>` return of a `pub fn` or method with one type parameter `T: serde::de::DeserializeOwned` (or `varyk_std::serde::de::DeserializeOwned`, which needs no `serde` dependency), written inline by that full path, and `T` nowhere else | `T` is the type the result is used as, found as for `json::parse`: a `let` with a written type, an argument, a return value, or a field, through `?` and `.await`; with none, or for a started call (no `.await`), it is V0207. `T` is any type `json::parse` reads, with the same attribute checks (V0209), and a Rust type from a `.rs` module or a type of another package is V0210. The generated Rust writes `T` after the name, as in `crate::db::Store::one::<User>(&db, ..)`. The result is a new value the caller owns; a program needs `varyk-std` for such a function as for `varyk_std::Error` |
+| `&T` parameter of a `pub fn` or method with one type parameter `T: serde::Serialize + ?Sized` (or `varyk_std::serde::Serialize + ?Sized`), written inline by that full path, and `T` nowhere else | any type `json::stringify` writes, typed from the argument: a number, `bool`, `string`, an `Option`, `Vec`, or `HashMap` of those, or a struct or enum of the current package, with the same attribute checks (V0209); a Rust type from a `.rs` module or a type of another package is V0210. The argument of an awaited or plain call is read, not given away, as `json::stringify`'s is, so a name passed stays usable; a started call (no `.await`) gives it to its task, as it gives every argument (see [Two ways to call](#two-ways-to-call)). The generated Rust lends it as `json::stringify` does, where a string may be a `&str`, which is why the bound needs `?Sized` (V0108 without it). Rust works out `T` from the argument, so nothing is written after the name. A program needs `varyk-std` for such a function as for `varyk_std::Error` |
 | `&T` or `&mut T` where `T` is one of the value types above but `String` | borrowed, or `mut` |
 | `()` return, or none | nothing |
 
 Any other signature cannot be called: `&String` (take `&str` instead),
-generics other than the type parameter just above (two of them, a `where`
-clause, another bound, a lifetime parameter, or `T` in a parameter or
-elsewhere in the return; the note says which), lifetimes (`&'static str`
+generics other than the two type parameters just above (two of them, both
+kinds at once, a `where` clause, another bound, a lifetime parameter, a
+`DeserializeOwned` `T` in a parameter or elsewhere in the return, or a
+`Serialize` `T` anywhere but once as `&T` in one parameter; the note says
+which), lifetimes (`&'static str`
 anywhere but a parameter included), trait objects, `HashMap` and other `std` types,
 `varyk_std::Value` anywhere but in a last `Vec<varyk_std::Value>` parameter,
 references in the return type other than the ones just above (return an
 owned value such as `String`),
 `()` inside another type (`Result<(), String>`; use `bool` or a struct
 instead), `varyk_std::Error` anywhere but as the error of the returned
-`Result` (or as a bare `Error` a `use` brings in: write the full path),
+`Result` or as the whole return (or as a bare `Error` a `use` brings in: write the full path),
 and unknown types. Calling such a function is an error that shows its Rust
 signature and what to change. `unsafe fn`, `const fn`, trait
 methods, names a `pub use` brings in, and functions, methods, structs, and
@@ -2033,7 +2358,10 @@ is not `Send`, or not `Sync`: an `Rc`, a `Cell`, or a `RefCell` inside it).
 Only rustc can tell, so `varyk check` accepts such a program and `varyk
 build` reports V0901 at the started call, naming the Rust type: use `Arc`
 in place of `Rc` and `Mutex` or an atomic in place of `Cell` or `RefCell`
-in the Rust code, or await the call instead of starting it.
+in the Rust code, or await the call instead of starting it. The same holds
+for what a route's handler holds while it waits and for an app's state,
+which every request reads: V0901 is then at the route call, or at
+`http::App::new`.
 
 A Rust type is found two ways: a bare name is an item of the same `.rs`
 file, and a full path, `crate::other::Thing`, is an item of another `.rs`
@@ -2245,6 +2573,14 @@ impl Store {
     ) -> Result<T, varyk_std::Error> {
         // reads the JSON under `key` with `serde_json::from_value`
     }
+
+    pub fn save<T: varyk_std::serde::Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<u64, varyk_std::Error> {
+        // stores `value` under `key` with `serde_json::to_value`
+    }
 }
 ```
 
@@ -2268,12 +2604,14 @@ fn add_ada() -> Result<User, Error> {
     let mut db = store::open();
     let name = "Ada";
     db.put("user/1", 1, name)?;
+    let bo = User { id: 2, name: "Bo" };
+    db.save("user/2", bo)?;
     db.one("user/1")
 }
 ```
 
-`add_ada` stores `[1, "Ada"]` and reads it back as a `User`. Each shape
-does one thing:
+`add_ada` stores `[1, "Ada"]` and `{"id":2,"name":"Bo"}`, and reads the
+first back as a `User`. Each shape does one thing:
 
 - `key: &'static str` takes only text written in the program (V0217), so
   in `varyk-sql` no input can become part of a query;
@@ -2283,7 +2621,14 @@ does one thing:
 - `T: varyk_std::serde::de::DeserializeOwned` is filled from where the
   result goes, `User` from the return type here, so the facade reads into a struct it
   has never seen (V0207 when nothing says the type);
-- `varyk_std::Error` is Varyk's own `Error`, so `?` and `e.message()` work.
+- `value: &T` with `T: varyk_std::serde::Serialize + ?Sized` takes any
+  value `json::stringify` writes, `bo` here, read and not given away, so the
+  facade sends out a struct it has never seen (V0210 for a type JSON cannot
+  write); `varyk-http`'s `Response::json` takes its value this way;
+- `varyk_std::Error` is Varyk's own `Error`, so `?` and `e.message()` work;
+  a function returning a bare `varyk_std::Error` makes one, for a facade
+  that makes an error of its own (`http::bad_request` is Varyk over
+  `Error::with_status`, not such a function).
 
 The `pub use` lines (see [Files and modules](#files-and-modules)) give the
 program the short names `store::open` and `store::Store`. The real
@@ -2496,7 +2841,7 @@ through: `::u::length::Meters` when you list `u = { package = "units" }`.
 
 ### Not yet
 
-Several shorthands in one `varyk add`; a Varyk package under
+A Varyk package under
 `[dev-dependencies]`, marked `optional`, or reached through a Rust crate;
 reading a package's `[features]`; skipping the compile of a package you
 trust; a summary file so `check` need not read a package's sources; rustc
@@ -2513,7 +2858,8 @@ varyk run [file.vr] [--release] [-- args...]     build, then run with the given 
 varyk test [file.vr]                             build the tests and run them
 varyk init [dir] [--lib]                         write a new package
 varyk add [cargo add args]                       run cargo add in the package
-varyk add sql [cargo add args]                   add the official database package as `sql`
+varyk add http sql                               add the official packages as `http` and `sql`
+varyk add sql [cargo add args]                   add one official package under its short name
 varyk publish [--assemble-only] [-- cargo args]  check, assemble a plain Rust crate, and run
                                                   cargo publish there
 ```
@@ -2609,18 +2955,26 @@ A package that uses other Varyk packages is built as described under
 you give, in the package found upward from the current directory (so a
 relative `--path` is relative to the package), and passes cargo's output and
 exit code through; Varyk interprets none of the arguments except the
-shorthand `sql` (below). Outside a package it says "no Varyk package here". Cargo reads the package's
-`Cargo.toml`, which names the `.vr` root, so `varyk add --path ../lib` works
-in any package `varyk init` made.
+official names `http` and `sql` (below). Outside a package it says "no
+Varyk package here". Cargo reads the package's `Cargo.toml`, which names
+the `.vr` root, so `varyk add --path ../lib` works in any package `varyk
+init` made.
 
-`varyk add sql` adds the official database package: it runs `cargo add
-varyk-sql --rename sql`, so code writes `sql::connect`, and any later
-arguments go to cargo as written (`varyk add sql --features postgres`). Only
-one shorthand per call: `varyk add sql sql` is refused with "add one
-official package per `varyk add` call". A call whose first argument is not a
-shorthand is passed through unchanged, so `varyk add varyk-sql --rename sql`
-still works. The package lives in its own repository, and its README says
-what it offers.
+`varyk add http` and `varyk add sql` add the official packages: each runs
+`cargo add varyk-http --rename http` or `cargo add varyk-sql --rename sql`,
+so code writes `http::App` or `sql::connect`. The crate name written in full
+(`varyk add varyk-http`) does the same. Name several and each runs its own
+`cargo add`, in order, stopping at the first failure (`varyk add http sql`);
+that form takes no other argument, and `varyk add http sql --features
+postgres` is refused with "pass other arguments with one package at a time".
+With one official name first, any later arguments go to cargo as written
+(`varyk add sql --features postgres`). A short name with `--rename` is
+refused, "write the full name: `varyk add varyk-http --rename web`" (naming the
+package asked for), since
+`http` and `sql` are also names of unrelated crates; the full name with
+`--rename` passes through to cargo, as does any call whose first argument is
+not an official name (`varyk add serde`). Each package lives in its own
+repository, and its README says what it offers.
 
 A program that uses `varyk-std` (it names `Error`, calls one of its
 features, such as `json`, `log`, `time::sleep`, or `Task::all`, starts a call, or has an
@@ -2687,18 +3041,18 @@ Every error has a code. A code is never reused for a different meaning.
 | V0102 | unknown field, of a struct or of a variant with named fields, in a value or a pattern |
 | V0103 | a name defined more than once (a method included, a `use` or `pub use` name the module already declares or brings in, a field of a variant, a field named twice in a value or a pattern, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
 | V0104 | a module file that is missing, present as both `.vr` and `.rs` (in a Varyk package this build uses, the `.vr` is loaded and the `.rs` ignored instead) or as both `shop.vr` and `shop/mod.vr`, unreadable, a `.rs` file that cannot be parsed as Rust, or named `main` or `lib` (or `bin` in the entry file), in any capitalization; a `.rs` file that uses a crate not in `[dependencies]` (or only in `[dev-dependencies]`, or any crate in a single file) in a `use` or `extern crate` item (a crate named only in a path, `other::f()`, is rustc's to report, at build), declares a module of its own, or uses `include!`, shown at that line of the `.rs` file |
-| V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see (in a library, the packages that use it included: a `pub` item in `pub` modules, or a `pub` function, method, or field of a `.rs` module they can reach, naming a type in a private module); a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub`; a `pub use` of an item without `pub`, or of one in a module that is not `pub` all the way from the root |
-| V0106 | a missing or malformed `fn main()`, `main` defined in a library's `src/lib.vr`, or a call to an async `main` |
+| V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see (in a library, the packages that use it included: a `pub` item in `pub` modules, or a `pub` function, method, or field of a `.rs` module they can reach, naming a type in a private module); a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub`; a `pub use` of an item without `pub`, or of one in a module that is not `pub` all the way from the root; a function named as a route's handler or a hook that is not visible from the route or hook call |
+| V0106 | a missing or malformed `fn main()`, `main` defined in a library's `src/lib.vr`, a call to an async `main`, or `main` named as a route's handler or a hook |
 | V0107 | `String` or `str` written where `string` is meant |
-| V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change. Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path, and a type in a `.rs` file with a glob `use` or a macro that could define names |
+| V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change, for a generic one which part is outside the two type parameter shapes of "Calling Rust" (a `Serialize` bound without `?Sized` says to add it). Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path, and a type in a `.rs` file with a glob `use` or a macro that could define names |
 | V0109 | a struct or enum that contains itself, directly or through other structs, enums, `Option`, or `Result`; a `Vec` or `HashMap` breaks the cycle |
 | V0110 | a `use` naming a crate this compiler recognizes by name (`std`, `core`, `alloc`), or a path or a `use` starting at a dependency in `[dependencies]` that is a Rust crate and not a Varyk package; call a crate from a `.rs` module in the package instead |
 | V0111 | a path Varyk cannot follow: `super` in the entry file, a `use` ending at an enum variant or at a type's method or associated function, a `use` whose leading name, or whose only name (`use shop;`), is a module declared elsewhere in the package (write it from `crate::` or `super::`), or a `use` whose leading name another `use` made; a `use` of a package's name alone (`use units;`), which can already be used; when its leading name is also a dependency that a module or a standard name hides, a note gives the `Cargo.toml` line that renames the dependency (as V0100 and V0113 do) |
 | V0112 | an attribute Varyk does not have (the message lists the four; `derive` gets a note that `.clone()`, `==`, and JSON need none), one in a place it cannot go (the note says where it goes), the same attribute twice on one item, or a value missing (`#[rename]`, `#[default]`) or not expected (`#[skip(1)]`, `#[test(1)]`) |
 | V0113 | the name `Error`, the standard error type, or `Task` or `Shared`, the standard types of async code, given to a struct, an enum, a module, or a `use`, or to a `pub` struct or enum of a `.rs` module; `json`, `env`, `log`, or `time`, the standard modules, given to a module, a struct, an enum, or a `use`, or a `use` of one (`use json;`, `use json::parse;`); `assert` or `assert_eq` given to a function or a `use`; a function, method, struct, enum, module, or `use` name starting with `varyk_`, kept for what Varyk adds to the Rust it writes |
-| V0114 | a `#[test]` function with parameters or a return type, a call to or `use` of one, or `main` of the entry file marked `#[test]`; `assert` or `assert_eq` outside a `#[test]` function |
+| V0114 | a `#[test]` function with parameters or a return type, a call to or `use` of one, one named as a route's handler or a hook, or `main` of the entry file marked `#[test]`; `assert` or `assert_eq` outside a `#[test]` function |
 | V0115 | a value whose type is, or holds, a struct or enum declared in a Varyk package this package does not list in `[dependencies]`, or in another version of one it does (two versions are two packages; the note names both); the note gives the line for `Cargo.toml` |
-| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool`; `Task::all` or `Task::all_settled` given anything but a `Vec` of tasks, and `Task::all_settled` on tasks that do not give a `Result`; a `Shared` given where the struct it holds is expected |
+| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool`; `Task::all` or `Task::all_settled` given anything but a `Vec` of tasks, and `Task::all_settled` on tasks that do not give a `Result`; a `Shared` given where the struct it holds is expected; an argument of `http::App::new` that is not a `Shared` |
 | V0201 | wrong number of arguments, or of values in an enum value; a variant value with named fields that leaves one out, or with the wrong kind of brackets; a closure with more or fewer than one parameter |
 | V0202 | `println!`, `format!`, or a `log` call with the wrong number of `{}`, or something other than `{}` in braces; a `log` call whose text is not a string literal written in quotes |
 | V0203 | `{}` used on anything but a number, `bool`, string, or `Error`; `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file; `==` or `!=` on a `Shared`, or on a type holding one |
@@ -2708,18 +3062,22 @@ Every error has a code. A code is never reused for a different meaning.
 | V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, `parse()`, `json::parse(..)`, `env::parse()`, or a call of a `.rs` function whose result type has a `DeserializeOwned` type parameter whose type cannot be worked out where it is written (a started call of one included), `Err(e)?;`, `text.parse().ok()`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
 | V0208 | a value that must be used where it is made: an `Option` from `get`, or from `find` on a chain of borrowed items, holding part of a stored value, stored in a `let`, passed, returned, used with `?`, given any method, or named whole by a pattern (look inside it with `match` or `if let`); an unfinished chain anywhere but as the value the next call of the chain is made on or the head of a `for` (finish the chain there) |
 | V0209 | a `#[rename]` value that is not a string in quotes, or is empty; a `#[default]` value that does not fit its field's type (`"x"` on an `i32`, `300` on a `u8`, `1` on an `f64`); `#[default]` on an `Option` field or on a field that is not a number, `string`, or `bool`; on a type a `json` call reaches, a skipped field with no `#[default]` that is not an `Option` when the type is read, or two fields that are not skipped, or two variants, with the same key once renamed, and, on a type `env::parse` reaches, two fields whose upper-cased keys are the same variable |
-| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call or a call of a `.rs` function with a `DeserializeOwned` type parameter, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, a type declared in another Varyk package (convert it in that package), a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
+| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, a call of a `.rs` function with a `DeserializeOwned` type parameter, the argument of a `.rs` function's `&T` parameter with `T: Serialize`, or a route whose handler's body or return type is one, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, a type declared in another Varyk package (convert it in that package), a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
 | V0211 | a call to an async function, or `.await`, in a function that is not `async`; `.await` inside a closure |
 | V0212 | `.await` after something that is not a call to an async function, `Task::all`, `Task::all_settled`, or a name holding a task; `Task::all` or `Task::all_settled` without `.await` |
 | V0213 | a started call anywhere but a `let` with a name, the value `.detach()` is called on, a `vec!` element, or the value of a collected `map`'s closure, `let _ =` included; a name holding a task, or a `Vec` of tasks, that nothing awaits, detaches, or gives to `Task::all` or `Task::all_settled`: its task would be thrown away |
-| V0214 | async functions that call each other in a cycle, or an async function that calls itself, whether the calls are awaited or started; the message names the cycle |
+| V0214 | async functions that call each other in a cycle, or an async function that calls itself, whether the calls are awaited or started, or adds one as a route's handler or hook; the message names the cycle |
 | V0215 | a name holding a task used other than by `.await` or `.detach()`, or a `Vec` of tasks used other than by `Task::all` or `Task::all_settled` (indexed, given `push`, looped over, passed, returned, given to another name, or followed by `.await`); `Task` written as a type |
 | V0216 | `Shared` of anything but a struct, at `Shared::new` or written, or `Shared` written anywhere but a parameter's or a `let`'s type (a field, a return type, or inside another type) |
-| V0217 | an argument to a `.rs` parameter of type `&'static str`, which takes only text written in the program, that is not a string literal (a name, a parameter, or a `format!`; pass the values after the text instead) |
+| V0217 | an argument to a `.rs` parameter of type `&'static str`, which takes only text written in the program, that is not a string literal (a name, a parameter, or a `format!`; pass the values after the text instead); a route's path or a `before_on` prefix that is not a string literal |
 | V0218 | a value passed after the other arguments to a `.rs` function whose last parameter is `Vec<varyk_std::Value>`, of a type that cannot be one: anything but `bool`, `string`, `f32`, `f64`, `i8` to `i64`, `u8` to `u32`, or an `Option` of one of those (a struct, a `Vec`, a `HashMap`, a `u64`, or a `usize`, for which the help writes `as i64`) |
+| V0219 | a route whose path and handler do not fit, one diagnostic per problem at the route call: a `{name}` of the path with no parameter, a parameter that gets no value from the request (an `http::Response`, `http::App`, or `http::Client` among them), a body on `get` or `delete`, two bodies, two states, two parameters of one type the package gives (`http::Request`), a `Shared` of another type than the app's state, or a path parameter that is not an integer, `bool`, or `string` |
+| V0220 | a route's handler or a hook of the wrong shape: not an async function, a method or associated function, a Rust function, a function of another package, a closure, or a local; a handler's return type outside the list (nothing, a type JSON can hold, an `Option` of one, `http::Response`, or a `Result` of one of those with `Error`); or a hook whose parameters are not, in order, the request (`http::Request`, not `mut`), for `after` the response (`http::Response`), then optionally the app's state as a `Shared`, or whose return is not `Result<bool, Error>` for `before` and `before_on` and nothing for `after` |
+| V0221 | a route or hook call on an app that is not a local bound to `App::new` in the same function (a parameter, a field, another local), inside a loop, a loop's condition or `while let` value, or a closure, or used as a value rather than a statement of its own; or an assignment to any name holding an app |
+| V0222 | a route path that is not valid (one not starting with `/`, an empty segment, a trailing `/` other than `"/"` itself, a character other than ASCII letters, digits, `-`, `_`, `.`, and `~` in a literal segment, a `{name}` that is not an identifier, or a name twice), a `before_on` prefix that is not such a path or holds a `{name}`, or a method and path the app already has a route for |
 | V0300 | changing a parameter that was declared without `mut`, by assigning to it or calling `push` or `pop` on it |
 | V0301 | changing a `let` name that was declared without `mut`, or a name a `match` pattern or a `for` made, by assigning to it or calling `push` or `pop` on it; also changing, inside a closure, a name from outside it or the closure's parameter |
-| V0302 | a `let` name without `mut` passed to a `mut` parameter or used to call a `mut self` method |
+| V0302 | a `let` name without `mut` passed to a `mut` parameter or used to call a `mut self` method or to add a route or a hook |
 | V0303 | a parameter without `mut`, or a name a `match` pattern or a `for` made, passed to a `mut` parameter or used to call a `mut self` method; also, inside a closure, a name from outside it or the closure's parameter so passed |
 | V0304 | a value the function only borrows, stored in a struct, an element, an enum value, `Some`, `Ok`, `Err`, or a `vec!`, passed to `push`, used with `?`, or returned; a stored `Option` or `Result` with more than numbers and `bool`s inside, used up by `unwrap_or`, `ok_or`, or `ok`; returns that mix part of a parameter with something new, or that are part of a `let` of the function, of a number or `bool` parameter or `for` variable, of a `mut` parameter, or of a parameter of a function that calls itself; also a binding of a `match` on an enum that runs code when it is thrown away (an `impl Drop`), kept or given away; a name from outside a closure kept inside it, or given by a closure of `map` or `map_err`, as is part of its parameter; `collect` on a chain of borrowed items (copy them with `.map(\|w\| w.clone())`); the item a closure of `filter`, `any`, `all`, or `find` looks at, kept or given away; a chain's `map` closure giving part of an owned item, or something new beside a part; a value the function only borrows given to a started call, whose task keeps it, or a task detached inside a closure; for text the fix is `.clone()` |
 | V0305 | a value used after it was given away, to a started call's task among others, or a task awaited or detached twice, or a `Vec` of tasks given to `Task::all` or `Task::all_settled` twice |
@@ -2736,5 +3094,6 @@ Every error has a code. A code is never reused for a different meaning.
 | V0404 | the `varyk-std` dependency of a program that uses it (or of a Varyk package of the build that uses it, at that package's own `Cargo.toml`, whose lock is not read) is missing, comes from a `path` or `git`, is `optional` or renamed, has a requirement that is not `X.Y` or `X.Y.Z` (optionally `^`) on the compiler's version, or `Cargo.lock` locks an older `varyk-std`; or, when the program or a Varyk package it uses needs `varyk-std`, the `varyk-std` cargo resolves for the build is older than the compiler (at the program's `varyk-std` line, or its `Cargo.toml`, and not beside the `Cargo.lock` one); the note gives the line to write, or `cargo update -p varyk-std` |
 | V0405 | cargo could not work out which packages the build uses (`cargo metadata` failed, for example on a `path` dependency whose folder is missing, or offline with a package not yet downloaded); the note carries cargo's own message |
 | V0406 | a package whose `Cargo.toml` does not name its `.vr` root as its target: no `[[bin]]` (`name` the package's name, `path = "src/main.vr"`) or `[lib]` (`path = "src/lib.vr"`); the note and the help give the lines to add |
+| V0407 | the `varyk-http` package of the build does not match this compiler: its `App`, `Request`, or `Response` is not a struct named at its root, at its `Cargo.toml`; the note names the package's version, this compiler's, and what is missing, and points to the version table in `varyk-http`'s README |
 | V0900 | rustc rejected the Rust code Varyk generated, which should not happen, except for the known limits listed under "Calling Rust"; the message carries rustc's own message and code and asks you to report it, or, when rustc also rejected a `.rs` module you wrote, says it may follow from that error. An error or warning in a `.rs` module you wrote is not this code: it is shown at your file, unchanged. An error in the crate of a Varyk package the build uses is this code too, naming the package, and is not a Varyk bug when it is in one of that package's own `.rs` modules |
-| V0901 | at `varyk build`: a started call whose task holds a value from Rust code that cannot be sent to, or shared with, another thread (an `Rc`, `Cell`, or `RefCell` inside it); the message names the Rust type |
+| V0901 | at `varyk build`: a started call whose task holds a value from Rust code that cannot be sent to, or shared with, another thread (an `Rc`, `Cell`, or `RefCell` inside it), a route or hook call whose handler holds one, or an `http::App::new` call whose state holds one; the message names the Rust type |

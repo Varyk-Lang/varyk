@@ -1567,8 +1567,8 @@ fn varyk_std_error_anywhere_else_is_not_callable_and_says_where_it_can_be() {
         "pub fn f(e: varyk_std::Error) -> bool { true }",
         "pub fn f(e: &varyk_std::Error) -> bool { true }",
         "pub fn f(e: Option<varyk_std::Error>) -> bool { true }",
-        "pub fn f() -> varyk_std::Error { todo!() }",
         "pub fn f() -> Option<varyk_std::Error> { None }",
+        "pub fn f() -> Vec<varyk_std::Error> { Vec::new() }",
         "pub fn f() -> Result<varyk_std::Error, String> { todo!() }",
         "pub fn f() -> Result<i64, Vec<varyk_std::Error>> { Ok(1) }",
         "pub fn f(r: Result<i64, varyk_std::Error>) -> bool { true }",
@@ -1582,7 +1582,26 @@ fn varyk_std_error_anywhere_else_is_not_callable_and_says_where_it_can_be() {
             note.contains("`varyk_std::Error` can only be the error of a returned `Result`"),
             "{text}: {note}"
         );
+        assert!(
+            note.contains("or the whole return of a function"),
+            "{text}: {note}"
+        );
     }
+}
+
+#[test]
+fn a_bare_varyk_std_error_return_is_callable_and_is_error() {
+    let sig = mapped(
+        "pub fn bad(text: &str) -> varyk_std::Error { varyk_std::Error::new(text.to_string()) }",
+    );
+    assert!(sig.callable, "{:?}", sig.note);
+    assert_eq!(sig.ret, Ty::Error);
+    assert_eq!(sig.params, vec![(Ty::String, ParamMode::SharedBorrow)]);
+    assert!(sig.names_std);
+    let sig = mapped("pub fn error(status: u16, text: &str) -> varyk_std::Error { todo!() }");
+    assert!(sig.callable, "{:?}", sig.note);
+    assert_eq!(sig.ret, Ty::Error);
+    assert!(sig.names_std);
 }
 
 #[test]
@@ -1636,6 +1655,33 @@ fn a_last_vec_of_values_makes_the_signature_variadic() {
     let sig = mapped("pub fn run(id: i64) {}");
     assert!(!sig.variadic);
     assert!(!sig.names_std);
+}
+
+/// Milestone 5b4 spec 2.7: a `&T` parameter with `T: Serialize + ?Sized`
+/// is lent, filled from its argument, and makes the program use
+/// `varyk-std` whichever path its bound is written by, as the serde
+/// derive of the argument's type comes from there.
+#[test]
+fn a_serialize_parameter_is_lent_and_names_varyk_std() {
+    for text in [
+        "pub fn json<T: serde::Serialize + ?Sized>(code: u16, value: &T) -> i64 { 1 }",
+        "pub fn json<T: varyk_std::serde::Serialize + ?Sized>(code: u16, value: &T) -> i64 { 1 }",
+    ] {
+        let sig = mapped(text);
+        assert!(sig.callable, "{text}: {:?}", sig.note);
+        assert_eq!(sig.serialize_param, Some(1), "{text}");
+        assert_eq!(sig.params.len(), 2, "{text}");
+        assert_eq!(sig.params[1].1, ParamMode::SharedBorrow, "{text}");
+        assert!(sig.names_std, "{text}");
+    }
+    let sig = mapped("pub fn json(code: u16) -> i64 { 1 }");
+    assert_eq!(sig.serialize_param, None);
+    let sig = mapped("pub fn json<T: serde::Serialize>(value: &T) -> i64 { 1 }");
+    assert!(!sig.callable);
+    assert_eq!(sig.serialize_param, None);
+    let note = sig.note.unwrap_or_default();
+    assert!(note.contains("add `?Sized`"), "{note}");
+    assert!(note.contains("`T: serde::Serialize + ?Sized`"), "{note}");
 }
 
 #[test]
@@ -3371,7 +3417,12 @@ fn another_generic_shape_is_not_callable_and_says_which() {
         ),
         (
             "pub fn f<T: Default>() -> Result<T, varyk_std::Error> { todo!() }",
-            "no bound, or a bound other than `serde::de::DeserializeOwned`",
+            "no bound, or a bound other than `serde::de::DeserializeOwned` or \
+             `serde::Serialize + ?Sized`",
+        ),
+        (
+            "pub fn f<T: serde::Serialize + ?Sized>(v: Vec<T>) -> i64 { todo!() }",
+            "the type parameter in a type other than `&T`",
         ),
         (
             "pub fn f<'a, T: serde::de::DeserializeOwned>(s: &'a str) -> Result<T, varyk_std::Error> { todo!() }",
@@ -3391,7 +3442,14 @@ fn another_generic_shape_is_not_callable_and_says_which() {
         assert_eq!(sig.result_hole, None, "{text}");
         let note = sig.note.unwrap_or_default();
         assert!(
-            note.contains("only with one type parameter `T: serde::de::DeserializeOwned`"),
+            note.contains(
+                "only with one type parameter, written inline by full path: `T: \
+                 serde::de::DeserializeOwned`"
+            ),
+            "{text}: {note}"
+        );
+        assert!(
+            note.contains("or `T: serde::Serialize + ?Sized`"),
             "{text}: {note}"
         );
         assert!(

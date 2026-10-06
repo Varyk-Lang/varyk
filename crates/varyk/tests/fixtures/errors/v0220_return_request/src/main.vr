@@ -1,0 +1,12 @@
+struct State {
+    name: string,
+}
+
+async fn home() -> Result<http::Request, Error> {
+    Ok(http::Request::new("GET", "/"))
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    app.get("/", home);
+}

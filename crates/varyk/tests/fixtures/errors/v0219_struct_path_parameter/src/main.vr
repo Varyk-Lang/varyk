@@ -1,0 +1,14 @@
+struct State {
+    name: string,
+}
+
+struct UserId {
+    n: i64,
+}
+
+async fn get_user(id: UserId) {}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    app.get("/users/{id}", get_user);
+}

@@ -1,0 +1,8 @@
+struct State {
+    name: string,
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    app.get("/", |n| n);
+}

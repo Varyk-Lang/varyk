@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    let handle = ext::open();
+    println!("{}", ext::json(handle));
+}

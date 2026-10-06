@@ -1,0 +1,8 @@
+mod ext;
+
+fn show(failures: ext::Failures) {
+    let last = failures.last();
+}
+
+fn main() {
+}

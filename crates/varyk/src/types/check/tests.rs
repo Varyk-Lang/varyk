@@ -1301,6 +1301,73 @@ fn a_type_parameter_with_nowhere_to_come_from_is_refused() {
     assert!(!diagnostics[0].notes.iter().any(|n| n == started));
 }
 
+/// Milestone 5b4 spec 2.7: the argument of a `&T` parameter with `T:
+/// Serialize + ?Sized` is any type `json::stringify` writes, typed from
+/// itself: a struct, a `Vec` of structs, a `string` local and literal, an
+/// `i64`, and an `Option`, from a free call and a method. A struct it
+/// reaches derives `Serialize`, and it is lent, so each local is usable
+/// after the call.
+#[test]
+fn a_serialize_parameter_takes_any_type_json_writes() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/interop/serialize_args/main.vr");
+    let program = result.expect("should type-check");
+    assert!(program.uses_std);
+    let user = Ty::Struct(crate::resolve::StructId(0));
+    let main = function(&program, "main");
+    let args: Vec<(Vec<Ty>, Vec<Ty>)> = (5..=10).map(|at| split_tys(stmt_expr(main, at))).collect();
+    let one = |ty: Ty| (vec![ty], Vec::new());
+    assert_eq!(
+        args,
+        vec![
+            one(user.clone()),
+            one(Ty::Vec(Box::new(user.clone()))),
+            one(Ty::String),
+            one(Ty::String),
+            one(I64),
+            one(Ty::Option(Box::new(Ty::String))),
+        ]
+    );
+    assert_eq!(
+        split_tys(stmt_expr(main, 12)),
+        (vec![Ty::String, user], Vec::new())
+    );
+    assert_eq!(local_ty(main, "a"), Ty::String);
+    assert_eq!(local_ty(main, "g"), Ty::Int(IntKind::Usize));
+    assert_eq!(
+        program.structs[0].serde,
+        Serde {
+            serialize: true,
+            deserialize: false
+        }
+    );
+    if let Err(diagnostics) = crate::borrow::analyze(program, &sources) {
+        panic!("each local stays usable after the call: {diagnostics:#?}");
+    }
+}
+
+/// Milestone 5b4 spec 2.7: a Rust type from a `.rs` module cannot be the
+/// argument of a `Serialize` parameter (V0210, at the argument).
+#[test]
+fn a_rust_type_for_a_serialize_parameter_is_v0210() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/errors/v0210_serialize_rust_type/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    let found: Vec<(&str, Span)> = diagnostics.iter().map(|d| (d.code, d.span)).collect();
+    assert_eq!(
+        found,
+        vec![(
+            codes::V0210,
+            part_of(&sources, "ext::json(handle)", "handle")
+        )],
+        "{diagnostics:#?}"
+    );
+    assert_eq!(
+        diagnostics[0].message,
+        "`Handle` cannot be turned into JSON"
+    );
+}
+
 // --- Examples and modes -----------------------------------------------------
 
 fn modes(function: &HirFunction) -> Vec<ParamMode> {
@@ -3977,6 +4044,38 @@ fn error_new_makes_an_error_and_message_is_part_of_it() {
 }
 
 #[test]
+fn error_with_status_makes_an_error() {
+    let program = ok("fn gone() -> Error {
+    Error::with_status(404, \"gone\")
+}
+fn copy(text: string) -> Error {
+    Error::with_status(409, text.clone())
+}
+fn main() {
+    let e = Error::with_status(404, \"gone\");
+    let s = e.status();
+}
+");
+    let main = function(&program, "main");
+    assert_eq!(local_ty(main, "e"), Ty::Error);
+    assert_eq!(
+        local_ty(main, "s"),
+        Ty::Option(Box::new(Ty::Int(IntKind::U16)))
+    );
+    assert!(program.uses_std);
+}
+
+#[test]
+fn error_with_status_wants_a_u16_status() {
+    let (d, _) = one_error("fn main() {\n    let e = Error::with_status(\"404\", \"gone\");\n}\n");
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    let (d, _) = one_error(
+        "fn main() {\n    let n: i32 = 404;\n    let e = Error::with_status(n, \"gone\");\n}\n",
+    );
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+}
+
+#[test]
 fn a_struct_holding_an_error_keeps_clone_and_eq() {
     let program = ok("struct Failure {
     error: Error,
@@ -4091,7 +4190,8 @@ fn a_call_error_does_not_have_is_v0100_listing_its_calls() {
     let (d, _) = one_error("fn main() {\n    let e = Error::other(\"x\");\n}\n");
     assert_eq!(d.code, codes::V0100, "{d:#?}");
     assert!(
-        d.message.contains("the only one is `Error::new(..)`"),
+        d.message
+            .contains("its functions are `Error::new(..)` and `Error::with_status(..)`"),
         "{d:#?}"
     );
 }
@@ -5455,5 +5555,722 @@ mod packages {
             Err(diagnostics) => only(&diagnostics).clone(),
         };
         assert_eq!(d.code, codes::V0105, "{d:#?}");
+    }
+}
+
+/// Programs using the stub `varyk-http` (milestone 5b4 spec 2.1, 6).
+mod http {
+    use super::*;
+    use crate::builtins::Owner;
+    use crate::hir::{
+        Binding, HirExprKind, HirHook, HirRoute, HirStmt, HookKind, HttpMethod, ReturnShape,
+        Segment,
+    };
+    use crate::resolve::StructId;
+    use crate::test_packages::{Build, Dep, varyk_http};
+    use crate::types::check::routes::parse_path;
+
+    const HTTP: [(&str, Dep<'static>); 1] = [("http", Dep::Package("varyk-http"))];
+
+    const STATE: &str = "struct State {\n    name: string,\n}\n";
+
+    fn checks(text: &str) -> HirProgram {
+        let mut build = varyk_http();
+        build.check(text, &HTTP).unwrap_or_else(|diagnostics| {
+            panic!("expected success for:\n{text}\ngot {diagnostics:#?}")
+        })
+    }
+
+    fn one(text: &str) -> Diagnostic {
+        let mut build = varyk_http();
+        match build.check(text, &HTTP) {
+            Ok(_) => panic!("expected a diagnostic for:\n{text}"),
+            Err(diagnostics) => only(&diagnostics).clone(),
+        }
+    }
+
+    /// The value of the first `let` of the function `name`.
+    fn first_let<'a>(program: &'a HirProgram, name: &str) -> &'a HirExpr {
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("no function {name}"));
+        function
+            .body
+            .stmts
+            .iter()
+            .find_map(|stmt| match stmt {
+                HirStmt::Let { value, .. } => Some(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no let in {name}"))
+    }
+
+    fn struct_named(program: &HirProgram, ty: &Ty) -> String {
+        match ty {
+            Ty::Struct(id) => program.structs[id.0 as usize].name.clone(),
+            other => panic!("not a struct: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn app_new_types_as_the_package_s_app_and_records_the_state_type() {
+        let program = checks(&format!(
+            "{STATE}fn main() {{\n    let app = http::App::new(Shared::new(State {{ name: \"a\" }}));\n}}\n"
+        ));
+        let value = first_let(&program, "main");
+        assert_eq!(struct_named(&program, &value.ty), "App");
+        let Ty::Struct(app) = value.ty else {
+            unreachable!()
+        };
+        let package = program.structs[app.0 as usize].package.as_ref();
+        assert_eq!(package.map(|item| item.name.as_str()), Some("varyk-http"));
+        let HirExprKind::Call {
+            callee: Callee::Builtin(id),
+            args,
+            ..
+        } = &value.kind
+        else {
+            panic!("expected the intrinsic call, got {value:#?}");
+        };
+        assert_eq!(id.get().owner, Owner::App);
+        let [state] = args.as_slice() else {
+            panic!("one argument: {args:#?}");
+        };
+        let Ty::Shared(inner) = &state.ty else {
+            panic!("a Shared: {state:#?}");
+        };
+        assert_eq!(struct_named(&program, inner), "State");
+    }
+
+    #[test]
+    fn app_new_is_reached_through_any_path_to_the_package_s_app() {
+        checks(&format!(
+            "use http::App;\n{STATE}fn main() {{\n    let state = Shared::new(State {{ name: \"a\" }});\n    let app = App::new(state);\n    let other = http::server::App::new(Shared::new(State {{ name: \"b\" }}));\n}}\n"
+        ));
+    }
+
+    #[test]
+    fn app_new_makes_the_program_use_std_and_log() {
+        let program = checks(&format!(
+            "{STATE}fn main() {{\n    let app = http::App::new(Shared::new(State {{ name: \"a\" }}));\n}}\n"
+        ));
+        assert!(program.uses_std);
+        assert!(program.logs);
+        // Naming the package's types alone does neither.
+        let program = checks(
+            "fn main() {\n    let r = http::Response::empty();\n    println!(\"{}\", r.status());\n}\n",
+        );
+        assert!(!program.logs);
+    }
+
+    #[test]
+    fn app_new_takes_a_shared() {
+        let d = one("fn main() {\n    let app = http::App::new(3);\n}\n");
+        assert_eq!(d.code, codes::V0200, "{d:#?}");
+        let d = one(&format!(
+            "{STATE}fn main() {{\n    let app = http::App::new(State {{ name: \"a\" }});\n}}\n"
+        ));
+        assert_eq!(d.code, codes::V0200, "{d:#?}");
+        let d = one(&format!(
+            "{STATE}fn main() {{\n    let a = http::App::new(Shared::new(State {{ name: \"a\" }}), 1);\n}}\n"
+        ));
+        assert_eq!(d.code, codes::V0201, "{d:#?}");
+    }
+
+    #[test]
+    fn app_new_takes_its_state_as_an_owned_slot() {
+        // Given away: a second use is V0305, as after `Shared::new`.
+        let d = one(&format!(
+            "{STATE}fn main() {{\n    let state = Shared::new(State {{ name: \"a\" }});\n    let app = http::App::new(state);\n    let again = http::App::new(state);\n}}\n"
+        ));
+        assert_eq!(d.code, codes::V0305, "{d:#?}");
+        // A borrowed parameter cannot be given away: V0304.
+        let d = one(&format!(
+            "{STATE}fn build(state: Shared<State>) -> http::App {{\n    http::App::new(state)\n}}\nfn main() {{}}\n"
+        ));
+        assert_eq!(d.code, codes::V0304, "{d:#?}");
+        checks(&format!(
+            "{STATE}fn build(state: Shared<State>) -> http::App {{\n    http::App::new(state.clone())\n}}\nfn main() {{}}\n"
+        ));
+    }
+
+    #[test]
+    fn an_app_may_be_passed_returned_and_held_in_a_field() {
+        checks(&format!(
+            "{STATE}struct Server {{\n    app: http::App,\n}}\nfn build(state: Shared<State>) -> http::App {{\n    let mut app = http::App::new(state.clone());\n    app\n}}\nfn port(app: http::App) -> i32 {{\n    8080\n}}\nfn main() {{\n    let server = Server {{ app: build(Shared::new(State {{ name: \"a\" }})) }};\n    println!(\"{{}}\", port(server.app));\n}}\n"
+        ));
+    }
+
+    #[test]
+    fn app_new_as_a_value_is_v0100() {
+        let d = one("fn main() {\n    let f = http::App::new;\n}\n");
+        assert_eq!(d.code, codes::V0100, "{d:#?}");
+    }
+
+    #[test]
+    fn a_struct_app_of_another_package_is_an_ordinary_struct() {
+        let mut build = Build::default();
+        build.add("not_http", &[]);
+        let deps = [("web", Dep::Package("not_http"))];
+        let program = build
+            .check("fn main() {\n    let app = web::App::new();\n}\n", &deps)
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        let value = first_let(&program, "main");
+        assert!(
+            matches!(
+                &value.kind,
+                HirExprKind::Call {
+                    callee: Callee::Imported(_) | Callee::Varyk(_),
+                    ..
+                }
+            ),
+            "{value:#?}"
+        );
+        assert!(!program.logs);
+    }
+
+    #[test]
+    fn a_varyk_http_without_request_is_v0407() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/errors/v0407_varyk_http_without_request/varyk-http");
+        let mut build = Build::default();
+        build.add_dir("varyk-http", dir, &[]);
+        let d = match build.check("fn main() {}\n", &HTTP) {
+            Ok(_) => panic!("expected V0407"),
+            Err(diagnostics) => only(&diagnostics).clone(),
+        };
+        assert_eq!(d.code, codes::V0407, "{d:#?}");
+        assert!(
+            d.notes.iter().any(|note| note.contains("`Request`")),
+            "{d:#?}"
+        );
+    }
+
+    // --- Routes (milestone 5b4 spec 2.1 to 2.3) ---------------------------
+
+    const USERS: &str = "struct State {\n    name: string,\n}\nstruct User {\n    id: i64,\n    name: string,\n}\nstruct NewUser {\n    name: string,\n}\n";
+
+    /// `USERS`, then `handlers`, then a `main` making an app and running
+    /// `routes`, each a line of its body.
+    fn app_program(handlers: &str, routes: &str) -> String {
+        format!(
+            "{USERS}{handlers}fn main() {{\n    let mut app = http::App::new(Shared::new(State {{ name: \"a\" }}));\n{routes}}}\n"
+        )
+    }
+
+    /// The routes of `name`'s body, in order.
+    fn routes_of<'a>(program: &'a HirProgram, name: &str) -> Vec<&'a HirRoute> {
+        function(program, name)
+            .body
+            .stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                HirStmt::Route(route) => Some(route),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn struct_id(program: &HirProgram, name: &str) -> StructId {
+        let index = program
+            .structs
+            .iter()
+            .position(|def| def.name == name)
+            .unwrap_or_else(|| panic!("no struct {name}"));
+        StructId(index as u32)
+    }
+
+    // --- The package named `varyk-http` itself (milestone 5b4 spec 2.1) ---
+
+    /// A library whose `src/lib.vr` is `lib`, its `src/server.rs` the
+    /// stub `varyk-http`'s, in a scratch directory.
+    fn library_with_the_stub_s_server(lib: &str) -> crate::package::tests::TempDir {
+        let stub = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/varyk-http/src/server.rs");
+        let server = std::fs::read_to_string(stub).expect("the stub's server.rs");
+        let dir = crate::package::tests::TempDir::new("own_http");
+        dir.write("src/server.rs", &server);
+        dir.write("src/lib.vr", lib);
+        dir
+    }
+
+    /// A library that names its own `App` at its root and adds a route to
+    /// it.
+    const OWN_APP: &str = "pub mod server;\n\npub use server::App;\npub use server::Request;\npub use server::Response;\n\nstruct State {\n    name: string,\n}\nasync fn home() {}\npub fn build() -> App {\n    let mut app = App::new(Shared::new(State { name: \"a\" }));\n    app.get(\"/\", home);\n    app\n}\n";
+
+    #[test]
+    fn the_stub_s_own_test_adds_a_route_to_its_own_app() {
+        let build = varyk_http();
+        let program = &build.checked[0].program;
+        let routes = routes_of(program, "a_route_answers_a_request");
+        assert_eq!(routes.len(), 1, "{routes:#?}");
+    }
+
+    #[test]
+    fn a_library_named_varyk_http_marks_its_own_app() {
+        let dir = library_with_the_stub_s_server(OWN_APP);
+        let mut build = Build::default();
+        build
+            .try_add_dir("varyk-http", dir.0.clone(), &[("varyk-std", Dep::Rust)])
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        let program = &build.checked[0].program;
+        assert_eq!(routes_of(program, "build").len(), 1);
+        let value = first_let(program, "build");
+        assert!(
+            matches!(
+                &value.kind,
+                HirExprKind::Call {
+                    callee: Callee::Builtin(id),
+                    ..
+                } if id.get().owner == Owner::App
+            ),
+            "{value:#?}"
+        );
+    }
+
+    #[test]
+    fn a_library_named_otherwise_does_not_mark_its_app() {
+        let dir = library_with_the_stub_s_server(OWN_APP);
+        let mut build = Build::default();
+        let diagnostics =
+            match build.try_add_dir("not-http", dir.0.clone(), &[("varyk-std", Dep::Rust)]) {
+                Ok(()) => panic!("`App::new` is the facade's own, which Varyk cannot call"),
+                Err(diagnostics) => diagnostics,
+            };
+        assert!(
+            diagnostics.iter().any(|d| d.code == codes::V0108),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn a_varyk_http_depending_on_another_marks_both_apps() {
+        let lib = format!(
+            "{OWN_APP}pub fn build_inner() -> inner::App {{\n    let mut app = inner::App::new(Shared::new(State {{ name: \"b\" }}));\n    app.get(\"/\", home);\n    app\n}}\n"
+        );
+        let dir = library_with_the_stub_s_server(&lib);
+        let mut build = varyk_http();
+        build
+            .try_add_dir(
+                "varyk-http",
+                dir.0.clone(),
+                &[
+                    ("varyk-std", Dep::Rust),
+                    ("inner", Dep::Package("varyk-http")),
+                ],
+            )
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        let program = &build.checked[1].program;
+        let app_of = |name: &str| {
+            let routes = routes_of(program, name);
+            let [route] = routes.as_slice() else {
+                panic!("one route in {name}: {routes:#?}");
+            };
+            match function(program, name).locals[route.app.0 as usize].ty {
+                Ty::Struct(id) => program.structs[id.0 as usize].package.is_some(),
+                ref other => panic!("not an app: {other:?}"),
+            }
+        };
+        assert!(!app_of("build"), "the package's own `App`");
+        assert!(app_of("build_inner"), "the `App` of `inner`");
+    }
+
+    #[test]
+    fn a_route_is_a_statement_with_its_method_path_and_handler() {
+        let program = checks(&app_program(
+            "async fn get_user(id: i64) -> Option<User> {\n    None\n}\nasync fn home() {}\n",
+            "    app.get(\"/users/{id}\", get_user);\n    app.delete(\"/\", home);\n",
+        ));
+        let routes = routes_of(&program, "main");
+        let [user, home] = routes.as_slice() else {
+            panic!("two routes: {routes:#?}");
+        };
+        assert_eq!(user.method, HttpMethod::Get);
+        assert_eq!(
+            user.path,
+            vec![
+                Segment::Literal("users".to_string()),
+                Segment::Param("id".to_string())
+            ]
+        );
+        assert_eq!(program.function(user.handler).name, "get_user");
+        assert_eq!(user.params, vec![Binding::Path("id".to_string())]);
+        let main = function(&program, "main");
+        assert_eq!(main.locals[user.app.0 as usize].name, "app");
+        assert_eq!(home.method, HttpMethod::Delete);
+        assert!(home.path.is_empty());
+        assert_eq!(home.ret, ReturnShape::Nothing);
+    }
+
+    #[test]
+    fn each_parameter_binds_by_the_first_rule_that_fits() {
+        let program = checks(&app_program(
+            "async fn update(\n    req: http::Request,\n    q: Option<string>,\n    id: i64,\n    mut user: NewUser,\n    state: Shared<State>,\n    page: u32,\n    name: string,\n    flag: bool,\n) {}\n",
+            "    app.put(\"/users/{id}/{name}\", update);\n",
+        ));
+        let routes = routes_of(&program, "main");
+        let request = struct_id(&program, "Request");
+        assert_eq!(
+            routes[0].params,
+            vec![
+                Binding::Package(request),
+                Binding::Query("q".to_string()),
+                Binding::Path("id".to_string()),
+                Binding::Body,
+                Binding::State,
+                Binding::Query("page".to_string()),
+                Binding::Path("name".to_string()),
+                Binding::Query("flag".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_body_binds_on_post_put_and_patch() {
+        let program = checks(&app_program(
+            "async fn add(users: Vec<NewUser>) {}\nasync fn tags(tags: HashMap<string, i64>) {}\n",
+            "    app.post(\"/users\", add);\n    app.patch(\"/tags\", tags);\n",
+        ));
+        let routes = routes_of(&program, "main");
+        assert_eq!(routes[0].params, vec![Binding::Body]);
+        assert_eq!(routes[1].params, vec![Binding::Body]);
+    }
+
+    #[test]
+    fn each_return_shape_is_recorded() {
+        let handlers = "async fn nothing() {}\nasync fn one() -> User {\n    User { id: 1, name: \"a\" }\n}\nasync fn many() -> Vec<User> {\n    Vec::new()\n}\nasync fn text() -> string {\n    \"a\"\n}\nasync fn maybe() -> Option<User> {\n    None\n}\nasync fn built() -> http::Response {\n    http::Response::empty()\n}\nasync fn tried() -> Result<User, Error> {\n    Err(Error::new(\"no\"))\n}\nasync fn tried_maybe() -> Result<Option<User>, Error> {\n    Ok(None)\n}\nasync fn tried_built() -> Result<http::Response, Error> {\n    Ok(http::Response::empty())\n}\n";
+        let routes = "    app.get(\"/a\", nothing);\n    app.get(\"/b\", one);\n    app.get(\"/c\", many);\n    app.get(\"/d\", text);\n    app.get(\"/e\", maybe);\n    app.get(\"/f\", built);\n    app.get(\"/g\", tried);\n    app.get(\"/h\", tried_maybe);\n    app.get(\"/i\", tried_built);\n";
+        let program = checks(&app_program(handlers, routes));
+        let shapes: Vec<ReturnShape> = routes_of(&program, "main")
+            .iter()
+            .map(|route| route.ret.clone())
+            .collect();
+        let result = |shape| ReturnShape::Result(Box::new(shape));
+        assert_eq!(
+            shapes,
+            vec![
+                ReturnShape::Nothing,
+                ReturnShape::Json,
+                ReturnShape::Json,
+                ReturnShape::Json,
+                ReturnShape::Option,
+                ReturnShape::Response,
+                result(ReturnShape::Json),
+                result(ReturnShape::Option),
+                result(ReturnShape::Response),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_body_is_read_from_json_and_the_return_written() {
+        let program = checks(&app_program(
+            "async fn add(user: NewUser) -> Result<Option<User>, Error> {\n    Ok(None)\n}\n",
+            "    app.post(\"/users\", add);\n",
+        ));
+        let new_user = &program.structs[struct_id(&program, "NewUser").0 as usize];
+        assert!(new_user.serde.deserialize && !new_user.serde.serialize);
+        let user = &program.structs[struct_id(&program, "User").0 as usize];
+        assert!(user.serde.serialize && !user.serde.deserialize);
+    }
+
+    #[test]
+    fn a_route_in_one_branch_of_an_if_is_accepted() {
+        checks(&app_program(
+            "async fn home() {}\n",
+            "    let open = true;\n    if open {\n        app.get(\"/\", home);\n    } else {\n        app.get(\"/closed\", home)\n    }\n",
+        ));
+    }
+
+    #[test]
+    fn a_handler_may_be_named_through_a_path() {
+        checks(&app_program(
+            "async fn home() {}\n",
+            "    app.get(\"/\", home);\n    app.get(\"/home\", crate::home);\n",
+        ));
+    }
+
+    #[test]
+    fn a_second_shared_and_two_requests_are_v0219() {
+        let d = one(&app_program(
+            "async fn h(a: Shared<State>, b: Shared<State>) {}\n",
+            "    app.get(\"/\", h);\n",
+        ));
+        assert_eq!(d.code, codes::V0219, "{d:#?}");
+        assert!(d.message.contains("`b`"), "{d:#?}");
+        let d = one(&app_program(
+            "async fn h(a: http::Request, b: http::Request) {}\n",
+            "    app.get(\"/\", h);\n",
+        ));
+        assert_eq!(d.code, codes::V0219, "{d:#?}");
+        assert!(d.message.contains("`b`"), "{d:#?}");
+    }
+
+    #[test]
+    fn a_method_or_a_rust_function_as_the_handler_is_v0220() {
+        let d = one(&app_program(
+            "impl State {\n    async fn list(self) {}\n    async fn make() {}\n}\n",
+            "    app.get(\"/\", State::make);\n",
+        ));
+        assert_eq!(d.code, codes::V0220, "{d:#?}");
+        let d = one(&app_program(
+            "",
+            "    app.get(\"/\", http::respond_empty);\n",
+        ));
+        assert_eq!(d.code, codes::V0220, "{d:#?}");
+        let mut build = varyk_http();
+        let diagnostics = build
+            .resolve_fixture("http_rust_handler", &HTTP)
+            .and_then(|resolved| typecheck(resolved, &build.sources))
+            .err()
+            .unwrap_or_else(|| panic!("expected V0220"));
+        let d = only(&diagnostics);
+        assert_eq!(d.code, codes::V0220, "{d:#?}");
+        assert!(d.message.contains("Rust"), "{d:#?}");
+    }
+
+    #[test]
+    fn a_repeated_name_and_a_path_without_its_slash_are_v0222() {
+        let d = one(&app_program(
+            "async fn h(id: i64) {}\n",
+            "    app.get(\"/a/{id}/{id}\", h);\n",
+        ));
+        assert_eq!(d.code, codes::V0222, "{d:#?}");
+        let d = one(&app_program(
+            "async fn h() {}\n",
+            "    app.get(\"users\", h);\n",
+        ));
+        assert_eq!(d.code, codes::V0222, "{d:#?}");
+    }
+
+    #[test]
+    fn a_route_in_a_closure_or_used_as_a_value_is_v0221() {
+        let d = one(&app_program(
+            "async fn h() {}\n",
+            "    let x = Some(1).map(|n| {\n        app.get(\"/\", h);\n        n\n    });\n",
+        ));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+        let d = one(&app_program(
+            "async fn h() {}\n",
+            "    let r = app.get(\"/\", h);\n",
+        ));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+        let d = one(&app_program(
+            "async fn h() {}\n",
+            "    let mut other = app;\n    other.get(\"/\", h);\n",
+        ));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+        let d = one(&app_program(
+            "async fn h() {}\n",
+            "    let mut n = 0;\n    while n < 2 {\n        app.post(\"/\", h);\n        n = n + 1;\n    }\n",
+        ));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+    }
+
+    #[test]
+    fn a_route_in_a_while_condition_is_v0221() {
+        let d = one(&app_program(
+            "async fn h() {}\n",
+            "    while {\n        app.get(\"/\", h);\n        false\n    } {\n    }\n",
+        ));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+        assert!(d.message.contains("loop"), "{d:#?}");
+    }
+
+    #[test]
+    fn the_route_call_shadows_the_facade_s_method_and_others_stay_ordinary() {
+        // `get` on any other value is that value's method.
+        checks(&app_program(
+            "async fn h() {}\n",
+            "    let v = vec![1];\n    let first = v.get(0);\n    app.get(\"/\", h);\n",
+        ));
+    }
+
+    #[test]
+    fn the_path_parser_takes_the_spec_s_paths_and_refuses_the_rest() {
+        assert_eq!(parse_path("/"), Ok(Vec::new()));
+        assert_eq!(
+            parse_path("/a-b_c.d~e/{x_1}"),
+            Ok(vec![
+                Segment::Literal("a-b_c.d~e".to_string()),
+                Segment::Param("x_1".to_string())
+            ])
+        );
+        for bad in [
+            "", "a", "//", "/a//b", "/a/", "/a*", "/{}", "/{1x}", "/{a}/{a}", "/{a", "/a{b}", "/é",
+            "/a b", "/{_}",
+        ] {
+            assert!(parse_path(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    // --- Hooks (milestone 5b4 spec 2.4) -----------------------------------
+
+    /// The hooks of `name`'s body, in order.
+    fn hooks_of<'a>(program: &'a HirProgram, name: &str) -> Vec<&'a HirHook> {
+        function(program, name)
+            .body
+            .stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                HirStmt::Hook(hook) => Some(hook),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const HOOKS: &str = "async fn check(req: http::Request) -> Result<bool, Error> {\n    Ok(true)\n}\nasync fn admin(req: http::Request, state: Shared<State>) -> Result<bool, Error> {\n    Ok(false)\n}\nasync fn stamp(req: http::Request, mut res: http::Response) {\n    res.set_header(\"x-a\", \"b\");\n}\nasync fn count(request: http::Request, mut response: http::Response, s: Shared<State>) {\n    response.set_header(\"x-name\", s.name);\n}\nasync fn look(req: http::Request, res: http::Response) {\n    println!(\"{}\", res.status());\n}\n";
+
+    #[test]
+    fn each_hook_signature_is_accepted_with_and_without_the_state() {
+        let program = checks(&app_program(
+            HOOKS,
+            "    app.before(check);\n    app.before_on(\"/admin/users\", admin);\n    app.after(stamp);\n    app.after(count);\n    app.after(look);\n",
+        ));
+        let hooks = hooks_of(&program, "main");
+        let shapes: Vec<_> = hooks
+            .iter()
+            .map(|hook| {
+                (
+                    hook.kind,
+                    hook.prefix.clone(),
+                    program.function(hook.hook).name.as_str(),
+                    hook.state,
+                    hook.call(),
+                )
+            })
+            .collect();
+        let admin = vec![
+            Segment::Literal("admin".to_string()),
+            Segment::Literal("users".to_string()),
+        ];
+        assert_eq!(
+            shapes,
+            vec![
+                (HookKind::Before, None, "check", false, "before"),
+                (HookKind::Before, Some(admin), "admin", true, "before_on"),
+                (HookKind::After, None, "stamp", false, "after"),
+                (HookKind::After, None, "count", true, "after"),
+                // An `after` hook that only reads the response.
+                (HookKind::After, None, "look", false, "after"),
+            ]
+        );
+        let main = function(&program, "main");
+        assert_eq!(main.locals[hooks[0].app.0 as usize].name, "app");
+        // A hook and a route of one app, in any order.
+        checks(&app_program(
+            &format!("{HOOKS}async fn home() {{}}\n"),
+            "    app.before(check);\n    app.get(\"/\", home);\n    app.after(stamp);\n    app.before_on(\"/\", check);\n",
+        ));
+    }
+
+    #[test]
+    fn a_before_in_a_loop_an_after_on_a_parameter_or_a_hook_as_a_value_is_v0221() {
+        let d = one(&app_program(
+            HOOKS,
+            "    for i in 0..2 {\n        app.before(check);\n    }\n",
+        ));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+        assert!(
+            d.message.contains("a hook cannot be added inside a loop"),
+            "{d:#?}"
+        );
+        let d = one(&format!(
+            "{USERS}{HOOKS}fn add(mut app: http::App) {{\n    app.after(stamp);\n}}\nfn main() {{}}\n"
+        ));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+        assert!(d.message.starts_with("hooks are added"), "{d:#?}");
+        let d = one(&app_program(HOOKS, "    let r = app.after(stamp);\n"));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+        assert!(d.message.contains("a hook is added"), "{d:#?}");
+        let d = one(&app_program(
+            HOOKS,
+            "    let x = Some(1).map(|n| {\n        app.before(check);\n        n\n    });\n",
+        ));
+        assert_eq!(d.code, codes::V0221, "{d:#?}");
+        assert!(d.message.contains("a hook cannot"), "{d:#?}");
+    }
+
+    #[test]
+    fn a_hook_of_another_shape_is_v0220() {
+        let cases = [
+            // Out of order.
+            "async fn h(state: Shared<State>, req: http::Request) -> Result<bool, Error> {\n    Ok(true)\n}\n",
+            // A `mut` request.
+            "async fn h(mut req: http::Request) -> Result<bool, Error> {\n    Ok(true)\n}\n",
+            // Another return.
+            "async fn h(req: http::Request) -> bool {\n    true\n}\n",
+            // A `Shared` of another type.
+            "async fn h(req: http::Request, s: Shared<User>) -> Result<bool, Error> {\n    Ok(true)\n}\n",
+            // Nothing taken.
+            "async fn h() -> Result<bool, Error> {\n    Ok(true)\n}\n",
+            // Too much taken.
+            "async fn h(req: http::Request, s: Shared<State>, n: i64) -> Result<bool, Error> {\n    Ok(true)\n}\n",
+            // Not async.
+            "fn h(req: http::Request) -> Result<bool, Error> {\n    Ok(true)\n}\n",
+        ];
+        for handler in cases {
+            let d = one(&app_program(handler, "    app.before(h);\n"));
+            assert_eq!(d.code, codes::V0220, "{handler}\n{d:#?}");
+        }
+        let d = one(&app_program(
+            "async fn h(mut req: http::Request) -> Result<bool, Error> {\n    Ok(true)\n}\n",
+            "    app.before(h);\n",
+        ));
+        assert!(
+            d.notes
+                .iter()
+                .any(|note| note.contains("does not reach the handler")),
+            "{d:#?}"
+        );
+        let after = [
+            // A response it returns rather than changes.
+            "async fn h(req: http::Request, res: http::Response) -> http::Response {\n    http::Response::empty()\n}\n",
+            // No response.
+            "async fn h(req: http::Request) {}\n",
+            // The response first.
+            "async fn h(res: http::Response, req: http::Request) {}\n",
+            // A `mut` request.
+            "async fn h(mut req: http::Request, res: http::Response) {}\n",
+        ];
+        for handler in after {
+            let d = one(&app_program(handler, "    app.after(h);\n"));
+            assert_eq!(d.code, codes::V0220, "{handler}\n{d:#?}");
+        }
+    }
+
+    #[test]
+    fn a_prefix_is_a_literal_path_without_names() {
+        let d = one(&app_program(
+            HOOKS,
+            "    app.before_on(\"/users/{id}\", check);\n",
+        ));
+        assert_eq!(d.code, codes::V0222, "{d:#?}");
+        let d = one(&app_program(
+            HOOKS,
+            "    app.before_on(\"/admin/\", check);\n",
+        ));
+        assert_eq!(d.code, codes::V0222, "{d:#?}");
+        let d = one(&app_program(
+            HOOKS,
+            "    let p = \"/admin\";\n    app.before_on(p, check);\n",
+        ));
+        assert_eq!(d.code, codes::V0217, "{d:#?}");
+        let d = one(&app_program(HOOKS, "    app.before_on(check);\n"));
+        assert_eq!(d.code, codes::V0201, "{d:#?}");
+        let d = one(&app_program(HOOKS, "    app.before(\"/\", check);\n"));
+        assert_eq!(d.code, codes::V0201, "{d:#?}");
+    }
+
+    #[test]
+    fn a_hook_s_function_is_chosen_as_a_handler_is() {
+        let d = one(&app_program("", "    app.before(main);\n"));
+        assert_eq!(d.code, codes::V0106, "{d:#?}");
+        assert!(d.message.contains("cannot be a hook"), "{d:#?}");
+        let d = one(&app_program("", "    app.after(|req, res| {});\n"));
+        assert_eq!(d.code, codes::V0220, "{d:#?}");
+        assert!(d.message.starts_with("a hook is named here"), "{d:#?}");
     }
 }

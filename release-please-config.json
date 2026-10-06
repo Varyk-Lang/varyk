@@ -60,6 +60,16 @@
           "type": "toml",
           "path": "/crates/varyk/tests/fixtures/packages/store_user/Cargo.toml",
           "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
+          "path": "/crates/varyk/tests/fixtures/packages/http_user/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
+          "path": "/crates/varyk/tests/fixtures/packages/varyk-http/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
         }
       ]
     }

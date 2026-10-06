@@ -1,0 +1,16 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0105]: function `admin::list_users` is not marked `pub`, so it can only be used inside its own module and the modules within it
+ --> src/main.vr:9:23
+  |
+9 |     app.get("/users", admin::list_users);
+  |                       ^^^^^^^^^^^^^^^^^ function `admin::list_users` is not marked `pub`, so it can only be used inside its own module and the modules within it
+  |
+ ::: src/admin.vr:1:1
+  |
+1 | async fn list_users() {}
+  | -- declared here without `pub`
+  |
+help: insert `pub ` before `async`

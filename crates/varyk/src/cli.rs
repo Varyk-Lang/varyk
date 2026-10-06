@@ -796,35 +796,71 @@ fn run_publish(assemble_only: bool, args: &[String], message_format: MessageForm
 
 /// The official packages `varyk add` has a shorthand for: the name typed,
 /// and the crate it adds (renamed to the shorthand so code can name it).
-const SHORTHANDS: &[(&str, &str)] = &[("sql", "varyk-sql")];
+/// Each crate name is also accepted as written.
+const SHORTHANDS: &[(&str, &str)] = &[("http", "varyk-http"), ("sql", "varyk-sql")];
 
-/// The arguments after `cargo add` for a `varyk add` call: a leading
-/// shorthand becomes its crate and `--rename`, the rest is passed as
-/// written, except a second shorthand, which is refused. Any other call
-/// passes through unchanged.
-fn add_args(args: &[String]) -> Result<Vec<String>, String> {
-    let is_shorthand = |arg: &String| SHORTHANDS.iter().find(|(name, _)| name == arg);
-    let Some(first) = args.first().and_then(is_shorthand) else {
-        return Ok(args.to_vec());
+/// The row of an official package named by its shorthand or its crate.
+fn official(arg: &str) -> Option<&'static (&'static str, &'static str)> {
+    SHORTHANDS
+        .iter()
+        .find(|(name, krate)| *name == arg || *krate == arg)
+}
+
+/// The `cargo add` arguments that add an official package under its
+/// shorthand.
+fn official_run(row: &(&str, &str)) -> Vec<String> {
+    vec![row.1.to_string(), "--rename".to_string(), row.0.to_string()]
+}
+
+/// The argument lists after `cargo add` for a `varyk add` call, one per
+/// run (section 2.9 of the 5b4 design). Leading official names, when there
+/// are two or more, each run alone and take no other argument. A single
+/// leading official name becomes its crate and `--rename`, and the rest
+/// goes to cargo as written; a shorthand with its own `--rename` is
+/// refused. Any other call passes through unchanged.
+fn add_args(args: &[String]) -> Result<Vec<Vec<String>>, String> {
+    let leading: Vec<&(&str, &str)> = args.iter().map_while(|arg| official(arg)).collect();
+    let Some(first) = leading.first() else {
+        return Ok(vec![args.to_vec()]);
     };
-    let rest = &args[1..];
-    if rest.iter().any(|arg| is_shorthand(arg).is_some()) {
-        return Err("add one official package per `varyk add` call".to_string());
+    if leading.len() > 1 {
+        if leading.len() < args.len() {
+            return Err(
+                "pass other arguments with one package at a time: `varyk add sql --features postgres`"
+                    .to_string(),
+            );
+        }
+        let mut once: Vec<&(&str, &str)> = Vec::new();
+        for row in leading {
+            if !once.contains(&row) {
+                once.push(row);
+            }
+        }
+        return Ok(once.into_iter().map(official_run).collect());
     }
-    let mut out = vec![
-        first.1.to_string(),
-        "--rename".to_string(),
-        first.0.to_string(),
-    ];
+    let rest = &args[1..];
+    let renamed = rest
+        .iter()
+        .any(|arg| arg == "--rename" || arg.starts_with("--rename="));
+    if renamed {
+        if args[0] == first.0 {
+            return Err(format!(
+                "write the full name: `varyk add {} --rename web`",
+                first.1
+            ));
+        }
+        return Ok(vec![args.to_vec()]);
+    }
+    let mut out = official_run(first);
     out.extend(rest.iter().cloned());
-    Ok(out)
+    Ok(vec![out])
 }
 
 /// Runs `add`: `cargo add` with `args` in the package found upward from
 /// the current directory, its output and exit code passed through.
 fn run_add(args: &[String]) -> ExitCode {
-    let args = match add_args(args) {
-        Ok(args) => args,
+    let runs = match add_args(args) {
+        Ok(runs) => runs,
         Err(message) => {
             eprintln!("error: {message}");
             return ExitCode::FAILURE;
@@ -838,21 +874,27 @@ fn run_add(args: &[String]) -> ExitCode {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
         _ => Path::new("."),
     };
-    match StdCommand::new("cargo")
-        .arg("add")
-        .args(args)
-        .current_dir(dir)
-        .status()
-    {
-        Ok(status) => match status.code() {
-            Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
-            None => ExitCode::FAILURE,
-        },
-        Err(err) => {
-            eprintln!("{}", cannot_run_cargo(&err));
-            ExitCode::FAILURE
+    for run in runs {
+        match StdCommand::new("cargo")
+            .arg("add")
+            .args(run)
+            .current_dir(dir)
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                return match status.code() {
+                    Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+                    None => ExitCode::FAILURE,
+                };
+            }
+            Err(err) => {
+                eprintln!("{}", cannot_run_cargo(&err));
+                return ExitCode::FAILURE;
+            }
         }
     }
+    ExitCode::SUCCESS
 }
 
 /// The one line for a `cargo` that could not be started: where to get it
@@ -981,48 +1023,104 @@ mod add_tests {
         list.iter().map(|s| (*s).to_string()).collect()
     }
 
+    fn runs(lists: &[&[&str]]) -> Result<Vec<Vec<String>>, String> {
+        Ok(lists.iter().map(|list| args(list)).collect())
+    }
+
+    const ONE_AT_A_TIME: &str =
+        "pass other arguments with one package at a time: `varyk add sql --features postgres`";
+
     #[test]
     fn a_shorthand_becomes_its_row() {
         assert_eq!(
             add_args(&args(&["sql"])),
-            Ok(args(&["varyk-sql", "--rename", "sql"]))
+            runs(&[&["varyk-sql", "--rename", "sql"]])
         );
+        assert_eq!(
+            add_args(&args(&["http"])),
+            runs(&[&["varyk-http", "--rename", "http"]])
+        );
+    }
+
+    #[test]
+    fn several_official_names_run_one_add_each() {
+        let expected = runs(&[
+            &["varyk-http", "--rename", "http"],
+            &["varyk-sql", "--rename", "sql"],
+        ]);
+        assert_eq!(add_args(&args(&["http", "sql"])), expected);
+        assert_eq!(add_args(&args(&["varyk-http", "varyk-sql"])), expected);
+        assert_eq!(add_args(&args(&["http", "varyk-sql"])), expected);
+    }
+
+    #[test]
+    fn a_repeated_official_name_runs_once() {
+        let expected = runs(&[&["varyk-http", "--rename", "http"]]);
+        assert_eq!(add_args(&args(&["http", "http"])), expected);
+        assert_eq!(add_args(&args(&["http", "varyk-http"])), expected);
+        let both = runs(&[
+            &["varyk-http", "--rename", "http"],
+            &["varyk-sql", "--rename", "sql"],
+        ]);
+        assert_eq!(add_args(&args(&["http", "sql", "varyk-http"])), both);
     }
 
     #[test]
     fn later_arguments_follow_the_row() {
+        let expected = runs(&[&["varyk-sql", "--rename", "sql", "--features", "postgres"]]);
         assert_eq!(
             add_args(&args(&["sql", "--features", "postgres"])),
-            Ok(args(&[
-                "varyk-sql",
-                "--rename",
-                "sql",
-                "--features",
-                "postgres"
-            ]))
+            expected
+        );
+        assert_eq!(
+            add_args(&args(&["varyk-sql", "--features", "postgres"])),
+            expected
         );
     }
 
     #[test]
-    fn a_second_shorthand_is_refused() {
-        assert_eq!(
-            add_args(&args(&["sql", "sql"])),
-            Err("add one official package per `varyk add` call".to_string())
-        );
+    fn other_arguments_after_several_official_names_are_refused() {
+        for call in [
+            &["http", "sql", "--features", "postgres"][..],
+            &["http", "sql", "serde"],
+            &["varyk-http", "sql", "--rename", "web"],
+        ] {
+            assert_eq!(add_args(&args(call)), Err(ONE_AT_A_TIME.to_string()));
+        }
+    }
+
+    #[test]
+    fn a_shorthand_with_rename_is_refused() {
+        for (call, example) in [
+            (&["http", "--rename", "web"][..], "varyk-http"),
+            (&["sql", "--rename=db"], "varyk-sql"),
+        ] {
+            assert_eq!(
+                add_args(&args(call)),
+                Err(format!(
+                    "write the full name: `varyk add {example} --rename web`"
+                ))
+            );
+        }
     }
 
     #[test]
     fn a_shorthand_leaves_other_crates_as_written() {
         assert_eq!(
             add_args(&args(&["sql", "serde"])),
-            Ok(args(&["varyk-sql", "--rename", "sql", "serde"]))
+            runs(&[&["varyk-sql", "--rename", "sql", "serde"]])
         );
     }
 
     #[test]
-    fn a_call_not_starting_with_a_shorthand_passes_through() {
-        for call in [&["serde"][..], &["varyk-sql", "--rename", "sql"]] {
-            assert_eq!(add_args(&args(call)), Ok(args(call)));
+    fn a_full_name_with_rename_and_other_calls_pass_through() {
+        for call in [
+            &["serde"][..],
+            &["varyk-sql", "--rename", "sql"],
+            &["varyk-http", "--rename", "web"],
+            &["serde", "http"],
+        ] {
+            assert_eq!(add_args(&args(call)), runs(&[call]));
         }
     }
 }

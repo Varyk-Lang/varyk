@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0219]: the path parameter `id` of `get_user` is `UserId`, and a path segment gives an integer, `bool`, or `string`
+  --> src/main.vr:13:5
+   |
+13 |     app.get("/users/{id}", get_user);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the path parameter `id` of `get_user` is `UserId`, and a path segment gives an integer, `bool`, or `string`
+   |
+   = note: anything more is read from the body or the state

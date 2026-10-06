@@ -489,6 +489,23 @@ fn borrowed_places_into_imported_owned_parameters_are_v0304() {
     assert_mut_fix_it(d, &sources, "fn push_shared(label", "label");
 }
 
+/// `Error::with_status`'s text is an owned slot as `Error::new`'s is
+/// (milestone 5b4 spec 2.6): a borrowed `string` is V0304 with the clone
+/// help, and a clone of it is accepted.
+#[test]
+fn error_with_status_takes_its_text_as_an_owned_slot() {
+    let (d, sources) = one_error(
+        "fn fail(text: string) -> Error {\n    Error::with_status(400, text)\n}\nfn main() {}\n",
+    );
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "400, text)", "text"), "{d:#?}");
+    let fix = d.fix_it.as_ref().expect("a clone fix-it");
+    assert!(fix.replacement.ends_with(".clone()"), "{fix:#?}");
+    ok(
+        "fn fail(text: string) -> Error {\n    Error::with_status(400, text.clone())\n}\nfn main() {}\n",
+    );
+}
+
 #[test]
 fn owned_values_and_copy_parameters_into_owned_slots_are_accepted() {
     ok("fn f(x: i32) -> i32 {\n    x\n}\nfn g(x: i32) -> i32 {\n    return x;\n}\nfn main() {}\n");
@@ -4511,4 +4528,92 @@ fn a_shared_clone_given_to_a_started_call_is_its_own_handle() {
         "    let a = work(p);\n    let x = a.await;\n",
     ));
     assert_eq!(d.code, codes::V0304, "{d:#?}");
+}
+
+/// Route calls on a `varyk-http` app (milestone 5b4 spec 7.4).
+mod routes {
+    use crate::diagnostics::{Diagnostic, codes};
+    use crate::hir::HirProgram;
+    use crate::test_packages::{Dep, varyk_http};
+
+    const HTTP: [(&str, Dep<'static>); 1] = [("http", Dep::Package("varyk-http"))];
+
+    /// A program with a handler `home`, whose `main` is `body`.
+    fn check(body: &str) -> Result<HirProgram, Vec<Diagnostic>> {
+        let text = format!(
+            "struct State {{\n    name: string,\n}}\nasync fn home(state: Shared<State>) {{}}\nfn main() {{\n{body}}}\n"
+        );
+        varyk_http().check(&text, &HTTP)
+    }
+
+    fn one(body: &str) -> Diagnostic {
+        match check(body) {
+            Ok(_) => panic!("expected a diagnostic for:\n{body}"),
+            Err(diagnostics) => {
+                assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+                diagnostics[0].clone()
+            }
+        }
+    }
+
+    const NEW: &str = "http::App::new(Shared::new(State { name: \"a\" }))";
+
+    #[test]
+    fn a_route_changes_the_app_so_its_local_is_let_mut() {
+        let d = one(&format!(
+            "    let app = {NEW};\n    app.get(\"/\", home);\n"
+        ));
+        assert_eq!(d.code, codes::V0302, "{d:#?}");
+        assert!(d.message.contains("`app`"), "{d:#?}");
+        check(&format!(
+            "    let mut app = {NEW};\n    app.get(\"/\", home);\n    app.post(\"/\", home);\n    let r = app;\n"
+        ))
+        .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+    }
+
+    #[test]
+    fn a_route_uses_the_app_so_it_cannot_follow_a_move() {
+        let d = one(&format!(
+            "    let mut app = {NEW};\n    let gone = app;\n    app.get(\"/\", home);\n"
+        ));
+        assert_eq!(d.code, codes::V0305, "{d:#?}");
+    }
+
+    #[test]
+    fn the_handler_is_not_a_value_and_moves_nothing() {
+        // The same handler on two routes, and the state still usable.
+        check(
+            "    let state = Shared::new(State { name: \"a\" });\n    let mut app = http::App::new(state.clone());\n    app.get(\"/a\", home);\n    app.get(\"/b\", home);\n    println!(\"{}\", state.name);\n",
+        )
+        .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+    }
+
+    #[test]
+    fn a_hook_changes_the_app_and_cannot_follow_a_move() {
+        let hooks = "async fn check(req: http::Request) -> Result<bool, Error> {\n    Ok(true)\n}\nasync fn stamp(req: http::Request, mut res: http::Response) {}\n";
+        let text = |body: &str| {
+            format!("struct State {{\n    name: string,\n}}\n{hooks}fn main() {{\n{body}}}\n")
+        };
+        let one = |body: &str| match varyk_http().check(&text(body), &HTTP) {
+            Ok(_) => panic!("expected a diagnostic for:\n{body}"),
+            Err(diagnostics) => {
+                assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+                diagnostics[0].clone()
+            }
+        };
+        let d = one(&format!("    let app = {NEW};\n    app.before(check);\n"));
+        assert_eq!(d.code, codes::V0302, "{d:#?}");
+        let d = one(&format!(
+            "    let mut app = {NEW};\n    let gone = app;\n    app.after(stamp);\n"
+        ));
+        assert_eq!(d.code, codes::V0305, "{d:#?}");
+        varyk_http()
+            .check(
+                &text(&format!(
+                    "    let mut app = {NEW};\n    app.before(check);\n    app.before_on(\"/a\", check);\n    app.after(stamp);\n    let r = app;\n"
+                )),
+                &HTTP,
+            )
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+    }
 }

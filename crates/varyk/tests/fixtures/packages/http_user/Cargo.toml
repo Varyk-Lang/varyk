@@ -1,0 +1,12 @@
+[package]
+name = "http_user"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "http_user"
+path = "src/main.vr"
+
+[dependencies]
+http = { path = "../varyk-http", package = "varyk-http" }
+varyk-std = "0.6.0"

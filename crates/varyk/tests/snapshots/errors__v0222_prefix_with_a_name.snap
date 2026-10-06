@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0222]: `"/users/{id}"` is not a valid prefix
+  --> src/main.vr:11:19
+   |
+11 |     app.before_on("/users/{id}", check_user);
+   |                   ^^^^^^^^^^^^^ `"/users/{id}"` is not a valid prefix
+   |
+   = note: a prefix is matched on its segments as written, so `{id}` cannot be one of them; `"/users"` covers `/users/1` and `/users/1/posts`

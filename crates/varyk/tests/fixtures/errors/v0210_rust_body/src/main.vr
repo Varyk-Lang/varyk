@@ -1,0 +1,12 @@
+mod ext;
+
+struct State {
+    name: string,
+}
+
+async fn add(payload: ext::Payload) {}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "users" }));
+    app.post("/payloads", add);
+}

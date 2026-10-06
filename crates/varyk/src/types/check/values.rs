@@ -9,12 +9,12 @@ use std::collections::HashMap;
 use varyk_syntax::{Expr, ExprKind, Ident, Path, Span};
 
 use super::asyncs::{TaskPlace, started_ty};
-use super::{FnChecker, is_builtin_variant, opaque_variant, unsupported_rust_signature};
+use super::{ArgRules, FnChecker, is_builtin_variant, opaque_variant, unsupported_rust_signature};
 use crate::builtins::{self, BuiltinId, Owner};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{HirExpr, HirExprKind, VariantRef};
 use crate::resolve::{
-    Callee, EnumId, ImportedFnId, LookupError, ResultShape, UserType, VariantFieldsDef,
+    Callee, EnumId, ImportedFnId, LookupError, ResultShape, StructId, UserType, VariantFieldsDef,
     display_path, no_parent, not_visible, path_text, shared_of_other, split_last,
 };
 use crate::types::Ty;
@@ -194,6 +194,13 @@ impl FnChecker<'_> {
             }
             PathOwner::User(user) => user,
         };
+        // The route table's `new` is an intrinsic, and shadows the
+        // facade's own (milestone 5b4 spec 2.1).
+        if let UserType::Struct(id) = user {
+            if self.symbols.is_app(id) && name.name == "new" {
+                return self.app_new(id, path, args, path_span, span);
+            }
+        }
         if let UserType::Enum(id) = user {
             let def = &self.symbols.enums[id.0 as usize];
             if def.variant(&name.name).is_some() {
@@ -241,11 +248,11 @@ impl FnChecker<'_> {
                 return None;
             }
         };
-        let (self_mode, params, literal, variadic, ret) = match id {
+        let (self_mode, params, rules, ret) = match id {
             Callee::Varyk(fn_id) => {
                 let sig = &self.symbols.fns[fn_id.0 as usize];
                 let params: Vec<Ty> = sig.params.iter().map(|p| p.1.clone()).collect();
-                (sig.self_mode, params, Vec::new(), false, sig.ret.clone())
+                (sig.self_mode, params, ArgRules::default(), sig.ret.clone())
             }
             Callee::Imported(imported) => {
                 let sig = &self.symbols.imported[imported.0 as usize];
@@ -257,14 +264,7 @@ impl FnChecker<'_> {
                 // The call names `varyk-std` (milestone 5b3 spec 2.4).
                 self.uses_std |= sig.names_std;
                 let params: Vec<Ty> = sig.params.iter().map(|p| p.0.clone()).collect();
-                let literal = sig.literal.clone();
-                (
-                    sig.self_mode,
-                    params,
-                    literal,
-                    sig.variadic,
-                    sig.ret.clone(),
-                )
+                (sig.self_mode, params, ArgRules::of(sig), sig.ret.clone())
             }
             Callee::Builtin(_) => unreachable!("a type's members are never built-ins"),
         };
@@ -298,8 +298,7 @@ impl FnChecker<'_> {
                 None => (ret, None),
             };
             let args = args.unwrap_or_default();
-            let (args, trailing) =
-                self.arguments(&full, &params, &literal, variadic, args, span)?;
+            let (args, trailing) = self.arguments(&full, &params, &rules, args, span)?;
             return Some(HirExpr {
                 kind: HirExprKind::Call {
                     callee: id,
@@ -358,14 +357,15 @@ impl FnChecker<'_> {
                      `log::warn`, and `log::error`",
                     name.name
                 ),
+                None if owner == Owner::Error => format!(
+                    "`Error` has no function `{}`; its functions are `Error::new(..)` and \
+                     `Error::with_status(..)`",
+                    name.name
+                ),
                 None => format!(
                     "`{type_name}` has no function `{}`; the only one is `{type_name}::new({})`",
                     name.name,
-                    if matches!(owner, Owner::Error | Owner::Shared) {
-                        ".."
-                    } else {
-                        ""
-                    }
+                    if owner == Owner::Shared { ".." } else { "" }
                 ),
                 Some(id) => {
                     let args = if id.get().params.is_empty() && owner != Owner::Log {
@@ -420,12 +420,12 @@ impl FnChecker<'_> {
                 };
                 self.type_hole(span, expected.as_ref(), found, what, shape);
             } else {
-                self.arguments(&full, &[], &[], false, args, span);
+                self.arguments(&full, &[], &ArgRules::default(), args, span);
             }
             return None;
         };
         let params: Vec<Ty> = entry.params.iter().map(|p| p.ty(&subst)).collect();
-        let (args, _) = self.arguments(&full, &params, &[], false, args, span)?;
+        let (args, _) = self.arguments(&full, &params, &ArgRules::default(), args, span)?;
         Some(HirExpr {
             kind: HirExprKind::Call {
                 callee: Callee::Builtin(id),
@@ -451,7 +451,7 @@ impl FnChecker<'_> {
         span: Span,
     ) -> Option<HirExpr> {
         let [value] = args else {
-            self.arguments("Shared::new", &[Ty::Unit], &[], false, args, span);
+            self.arguments("Shared::new", &[Ty::Unit], &ArgRules::default(), args, span);
             return None;
         };
         let inner = match expected {
@@ -474,6 +474,61 @@ impl FnChecker<'_> {
                 started: false,
             },
             ty,
+            span,
+        })
+    }
+
+    /// `http::App::new(state)` (milestone 5b4 spec 2.1), `app` the marked
+    /// struct reached through `path`: `state` is a `Shared`, whose struct
+    /// is the app's state type, taken as `Shared::new` takes its struct.
+    /// The program then needs `varyk-std` and sets up logging (spec 2.8).
+    fn app_new(
+        &mut self,
+        app: StructId,
+        path: &str,
+        args: Option<&[Expr]>,
+        path_span: Span,
+        span: Span,
+    ) -> Option<HirExpr> {
+        let full = format!("{path}::new");
+        let Some(args) = args else {
+            let message =
+                format!("`{full}` is a function, not a value; call it, as in `{full}(..)`");
+            self.diagnostics
+                .push(Diagnostic::new(codes::V0100, path_span, message));
+            return None;
+        };
+        let [state] = args else {
+            self.arguments(&full, &[Ty::Unit], &ArgRules::default(), args, span);
+            return None;
+        };
+        let state = self.expr(state, None)?;
+        if !matches!(state.ty, Ty::Shared(_)) {
+            let message = format!(
+                "`{full}` takes the app's state as a `Shared`, but this is `{}`",
+                self.ty_name(&state.ty)
+            );
+            self.diagnostics.push(
+                Diagnostic::new(codes::V0200, state.span, message).with_note(format!(
+                    "share the state first, as in `{full}(Shared::new(state))`; the handlers \
+                     then read it through a `Shared` parameter"
+                )),
+            );
+            return None;
+        }
+        let id = builtins::lookup(Owner::App, "new", false)?;
+        self.uses_std = true;
+        self.logs = true;
+        Some(HirExpr {
+            kind: HirExprKind::Call {
+                callee: Callee::Builtin(id),
+                args: vec![state],
+                trailing: Vec::new(),
+                type_arg: None,
+                rooted: None,
+                started: false,
+            },
+            ty: Ty::Struct(app),
             span,
         })
     }
@@ -534,7 +589,7 @@ impl FnChecker<'_> {
                 Owner::Env => &[],
                 _ => &[Ty::String],
             };
-            let (args, _) = self.arguments(&full, params, &[], false, args, span)?;
+            let (args, _) = self.arguments(&full, params, &ArgRules::default(), args, span)?;
             let subst = builtins::Subst {
                 expected: read.clone(),
                 ..builtins::Subst::default()
@@ -544,7 +599,7 @@ impl FnChecker<'_> {
             let [arg] = args else {
                 // Only the count is reported: the parameter's type is
                 // whatever the argument's is.
-                self.arguments(&full, &[Ty::Unit], &[], false, args, span);
+                self.arguments(&full, &[Ty::Unit], &ArgRules::default(), args, span);
                 return None;
             };
             let arg = self.expr(arg, None)?;
@@ -573,10 +628,30 @@ impl FnChecker<'_> {
         })
     }
 
+    /// The argument `arg` of a parameter whose type is its argument's
+    /// (milestone 5b4 spec 2.7), checked as a `json::stringify` argument
+    /// is: typed from itself, a type JSON can hold (V0210, at `arg`), and
+    /// what it reaches is written by serde.
+    pub(super) fn serialized(&mut self, arg: &Expr) -> Option<HirExpr> {
+        let span = arg.span;
+        let arg = self.expr(arg, None)?;
+        // An unfinished chain is V0208, from the walk after checking.
+        if !arg.ty.has_chain() {
+            self.converted(&arg.ty, false, Direction::Serialize, span)?;
+        }
+        Some(arg)
+    }
+
     /// Whether `ty` can go through `json`, or the environment when `env`
     /// (M5a spec 2.4, 2.5), in `direction`: V0210 at `span` when it
     /// cannot, else what it reaches is recorded for the derives.
-    fn converted(&mut self, ty: &Ty, env: bool, direction: Direction, span: Span) -> Option<()> {
+    pub(super) fn converted(
+        &mut self,
+        ty: &Ty,
+        env: bool,
+        direction: Direction,
+        span: Span,
+    ) -> Option<()> {
         let (structs, enums) = (&self.symbols.structs, &self.symbols.enums);
         let medium = if env { Medium::Env } else { Medium::Json };
         let judged = if env {

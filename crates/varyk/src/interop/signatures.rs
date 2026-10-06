@@ -67,6 +67,10 @@ pub enum RustTy {
     /// `Result<T, varyk_std::Error>`, `Result<Option<T>, ..>`, or
     /// `Result<Vec<T>, ..>`.
     Param,
+    /// `&T` as a parameter, `T` the function's one type parameter bounded
+    /// by `Serialize + ?Sized`, filled from the argument (milestone 5b4
+    /// spec 2.7); only where the importer accepted that shape.
+    SerializeParam,
     /// Anything else: generics, explicit lifetimes, trait objects, `impl
     /// Trait`, tuples, arrays, references to anything unmapped, `std`
     /// paths, and references in return position. Holds the original type
@@ -98,6 +102,7 @@ impl RustTy {
             RustTy::Unit => "()",
             RustTy::Error => "varyk_std::Error",
             RustTy::Param => "T",
+            RustTy::SerializeParam => "&T",
             RustTy::Ref(inner) => return format!("&{}", inner.text()),
             RustTy::RefMut(inner) => return format!("&mut {}", inner.text()),
             RustTy::Named(
@@ -154,6 +159,10 @@ pub(super) enum StdItem {
     /// `varyk_std::serde::de::DeserializeOwned`, the bound of a type
     /// parameter.
     DeserializeOwned,
+    /// `serde::Serialize` or `varyk_std::serde::Serialize`, the bound,
+    /// beside `?Sized`, of a type parameter filled from an argument
+    /// (milestone 5b4 spec 2.7).
+    Serialize,
 }
 
 /// The [`StdItem`] `path` names, by its full path (a leading `::` is
@@ -175,6 +184,7 @@ pub(super) fn std_item(path: &syn::Path) -> Option<StdItem> {
         ["serde", "de", "DeserializeOwned"] | ["varyk_std", "serde", "de", "DeserializeOwned"] => {
             Some(StdItem::DeserializeOwned)
         }
+        ["serde", "Serialize"] | ["varyk_std", "serde", "Serialize"] => Some(StdItem::Serialize),
         _ => None,
     }
 }
@@ -192,7 +202,8 @@ pub(super) struct Names {
     /// Inside an `impl S` block, `S`: what `Self` means.
     pub self_ty: Option<String>,
     /// The signature's accepted type parameter, which is
-    /// [`RustTy::Param`] (milestone 5b3 spec 2.1).
+    /// [`RustTy::Param`] (milestone 5b3 spec 2.1), and `&T` of it
+    /// [`RustTy::SerializeParam`] (milestone 5b4 spec 2.7).
     pub param: Option<String>,
 }
 
@@ -391,6 +402,9 @@ fn map_reference(reference: &TypeReference, whole: &Type, names: &Names) -> Rust
     }
     match map_value(inner, names) {
         RustTy::Opaque(_) | RustTy::Unit => RustTy::Opaque(type_to_text(whole)),
+        // The importer admits the type parameter of a parameter only as
+        // `&T` (milestone 5b4 spec 2.7).
+        RustTy::Param if reference.mutability.is_none() => RustTy::SerializeParam,
         value if reference.mutability.is_some() => RustTy::RefMut(Box::new(value)),
         value => RustTy::Ref(Box::new(value)),
     }

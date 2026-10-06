@@ -1,0 +1,12 @@
+struct State {
+    key: string,
+}
+
+async fn check_user(req: http::Request) -> Result<bool, Error> {
+    Ok(req.header("x-key").is_some())
+}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { key: "k1" }));
+    app.before_on("/users/{id}", check_user);
+}
