@@ -517,7 +517,7 @@ fn with_no_package_the_advice_fits_the_command() {
 }
 
 #[test]
-fn init_in_an_empty_dir_writes_the_three_files_named_after_the_directory() {
+fn init_in_an_empty_dir_writes_the_four_files_named_after_the_directory() {
     let parent = empty_dir("init_basic");
     let dir = parent.join("greeting");
     fs::create_dir_all(&dir).unwrap();
@@ -535,6 +535,7 @@ fn init_in_an_empty_dir_writes_the_three_files_named_after_the_directory() {
     assert_eq!(
         files,
         vec![
+            PathBuf::from(".dockerignore"),
             PathBuf::from(".gitignore"),
             PathBuf::from("Cargo.toml"),
             PathBuf::from("src/main.vr"),
@@ -558,6 +559,8 @@ fn init_in_an_empty_dir_writes_the_three_files_named_after_the_directory() {
     );
     let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
     assert_eq!(gitignore, "/target\n.env\n");
+    let dockerignore = fs::read_to_string(dir.join(".dockerignore")).unwrap();
+    assert_eq!(dockerignore, "target\n.env\n");
 }
 
 /// Every file under `dir`, relative to `root`, appended to `found`.

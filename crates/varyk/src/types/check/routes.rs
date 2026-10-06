@@ -896,7 +896,10 @@ impl FnChecker<'_> {
                                  gives an integer, `bool`, or `string`",
                                 self.ty_name(ty)
                             ),
-                            "anything more is read from the body or the state".to_string(),
+                            format!(
+                                "give `{name}` an integer type, `bool`, or `string`; a value with \
+                                 more in it, such as a struct, comes from the body or the state"
+                            ),
                         ))
                     }
                 }
