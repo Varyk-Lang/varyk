@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0](https://github.com/Varyk-Lang/varyk/compare/varyk-std-v0.7.2...varyk-std-v0.8.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* Time, Uuid, and Bytes are reserved type names, so a program that declares a type, enum, or module by one of those names must rename it; and varyk_std::Value has three new variants (Time, Uuid, and Bytes), so a match over Value needs arms for them. varyk-sql and varyk-http need their next releases to build under this version.
+
+### Features
+
+* milestone 5c, time, ids, and bytes ([188baf8](https://github.com/Varyk-Lang/varyk/commit/188baf892276c2053923bb67d1909e27809e8d9a))
+
 ## [0.7.2](https://github.com/Varyk-Lang/varyk/compare/varyk-std-v0.7.1...varyk-std-v0.7.2) (2026-10-07)
 
 
