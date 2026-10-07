@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0101]: a `HashMap` key must be of an integer type, `bool`, `string`, or `Uuid`
+ --> crates/varyk/tests/fixtures/errors/v0101_time_map_key/main.vr:2:23
+  |
+2 |     let seen: HashMap<Time, string> = HashMap::new();
+  |                       ^^^^ a `HashMap` key must be of an integer type, `bool`, `string`, or `Uuid`
+  |
+  = note: a key is compared and hashed to find its value; in Rust terms, the key type must implement `Eq` and `Hash`, which floats, `Time`, `Bytes`, and Varyk's own types do not

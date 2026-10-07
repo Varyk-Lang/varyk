@@ -1,0 +1,65 @@
+#[test]
+fn a_time_goes_through_the_facade() {
+    match crate::ext::read_time("2026-10-07T12:00:00Z") {
+        Some(t) => {
+            match crate::ext::later(t, 60) {
+                Ok(u) => assert_eq(u.to_iso(), "2026-10-07T12:01:00Z"),
+                Err(e) => assert_eq(e.message(), "no error"),
+            }
+            assert_eq(crate::ext::or_now(Some(t)), t);
+            let both = crate::ext::twice(t);
+            assert_eq(both.len(), 2);
+            match crate::ext::latest(both) {
+                Some(last) => assert_eq(last, t),
+                None => assert(false),
+            }
+        }
+        None => assert(false),
+    }
+    assert(!crate::ext::read_time("not a time").is_some());
+}
+
+#[test]
+fn an_id_goes_through_the_facade() {
+    let id = Uuid::new();
+    assert_eq(crate::ext::same(id), id);
+    assert_eq(crate::ext::pick(None, id), id);
+    let ids = crate::ext::ids(3);
+    assert_eq(ids.len(), 3);
+    match crate::ext::first_id(ids) {
+        Some(first) => assert(first != id),
+        None => assert(false),
+    }
+    match crate::ext::read_id("0192F0C4-7A3E-7B5C-9D1E-2F3A4B5C6D7E") {
+        Ok(read) => assert_eq(format!("{}", read), "0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e"),
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
+}
+
+#[test]
+fn bytes_are_lent_and_given() {
+    let b = Bytes::from_text("abc");
+    assert_eq(crate::ext::size(b), 3);
+    let kept = crate::ext::keep(b);
+    assert_eq(kept.len(), 3);
+}
+
+#[test]
+fn an_upload_holds_the_three() {
+    let upload = crate::ext::Upload::new(Bytes::from_text("data"));
+    assert_eq(upload.data.len(), 4);
+    assert(upload.at <= Time::now());
+    assert(upload.id != Uuid::v4());
+}
+
+#[test]
+fn a_binary_message_holds_bytes() {
+    match crate::ext::next(true) {
+        crate::ext::Message::Binary(b) => assert_eq(b.len(), 3),
+        crate::ext::Message::Text(text) => assert_eq(text, "not text"),
+    }
+    match crate::ext::next(false) {
+        crate::ext::Message::Text(text) => assert_eq(text, "hello"),
+        crate::ext::Message::Binary(b) => assert_eq(b.len(), 0),
+    }
+}

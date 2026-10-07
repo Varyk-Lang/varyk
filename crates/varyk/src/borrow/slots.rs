@@ -144,11 +144,17 @@ impl FnAnalyzer<'_> {
     }
 }
 
+/// Whether a V0304 on a value of type `ty` offers `.clone()`: a `string`,
+/// the one deliberate copy (spec 3.3, 3.5), or a `Bytes`, whose clone
+/// copies the handle and not the bytes (milestone 5c spec 2.3, 7.4).
+pub(super) fn clones(ty: &Ty) -> bool {
+    matches!(ty, Ty::String | Ty::Bytes)
+}
+
 /// Adds the fix-it `.clone()` after the value at `span` to a V0304 when
-/// the value (of type `ty`) is a `string`: the one deliberate copy (spec
-/// 3.3, 3.5). Nothing else has a `clone`.
+/// the value (of type `ty`) is one [`clones`] takes.
 pub(super) fn clone_fix_it(diagnostic: Diagnostic, span: Span, ty: &Ty) -> Diagnostic {
-    if *ty != Ty::String {
+    if !clones(ty) {
         return diagnostic;
     }
     let end = Span::new(span.file, span.end, span.end);

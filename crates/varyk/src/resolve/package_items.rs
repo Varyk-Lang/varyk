@@ -109,7 +109,15 @@ impl Symbols {
             Ty::Result(a, b) | Ty::HashMap(a, b) => {
                 self.unlisted_type(a).or_else(|| self.unlisted_type(b))
             }
-            Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Error | Ty::Unit => None,
+            Ty::Bool
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::String
+            | Ty::Error
+            | Ty::Time
+            | Ty::Uuid
+            | Ty::Bytes
+            | Ty::Unit => None,
         }
     }
 
@@ -731,7 +739,15 @@ impl Ids<'_> {
             Ty::Chain(t) => Ty::Chain(inner(t)),
             Ty::Task(t) => Ty::Task(inner(t)),
             Ty::Shared(t) => Ty::Shared(inner(t)),
-            Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Error | Ty::Unit => ty.clone(),
+            Ty::Bool
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::String
+            | Ty::Error
+            | Ty::Time
+            | Ty::Uuid
+            | Ty::Bytes
+            | Ty::Unit => ty.clone(),
         }
     }
 

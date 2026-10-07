@@ -1,0 +1,6 @@
+struct Time {
+    hour: i32,
+    minute: i32,
+}
+
+fn main() {}

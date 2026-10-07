@@ -23,9 +23,10 @@ cargo install varyk
 ```
 
 JSON, configuration from the environment, logging, tests, `async` functions
-and tasks, and Varyk packages that use Varyk packages work today, and so do
-SQL databases through the [`varyk-sql`](https://github.com/Varyk-Lang/varyk-sql)
-package (`varyk add sql`), and HTTP services through the
+and tasks, times, ids, and bytes, and Varyk packages that use Varyk packages
+work today, and so do SQL databases through the
+[`varyk-sql`](https://github.com/Varyk-Lang/varyk-sql) package
+(`varyk add sql`), and HTTP services through the
 [`varyk-http`](https://github.com/Varyk-Lang/varyk-http) package
 (`varyk add http`), with every route checked against its handler before
 anything runs. What works today is under [Status](#status).
@@ -210,19 +211,32 @@ in the example above.
 
 Varyk is experimental and pre-1.0: anything may change, including any
 syntax, error code, or command-line flag, and a new feature or a breaking
-change bumps the minor version. This is milestone 5b4: the compiler's
-side of HTTP, on top of milestone 5b3's facades for packages, milestone
-5b2's Varyk packages that use Varyk packages, milestone 5b1's async
-functions and tasks, milestone 5a's data, configuration, logging, and
-tests, and milestone 4's closures, iterators, and patterns. Structs,
+change bumps the minor version. This is milestone 5c: times, ids, and
+bytes, on top of milestone 5b4's compiler side of HTTP, milestone 5b3's
+facades for packages, milestone 5b2's Varyk packages that use Varyk
+packages, milestone 5b1's async functions and tasks, milestone 5a's data,
+configuration, logging, and tests, and milestone 4's closures, iterators, and patterns. Structs,
 enums, and `match`, `for` loops, methods, `Option`, `Result`, `Vec`, `?`,
 and `format!` work, and so do packages with dependencies, modules at any
 depth, `use`, private fields, and Rust structs and enums imported from
 `.rs` files; the compiler builds and runs every program in `examples/`,
 and it reports every error it knows about with a code, a plain-word
-message, and, where it can, a suggested fix. Dates and times, and much
-more, are not there yet; see
+message, and, where it can, a suggested fix. Calendar dates, durations,
+time zones, and much more are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
+
+Milestone 5c adds three built-in types: `Time`, a point in time in UTC
+read and written as `2026-10-07T12:00:00Z`; `Uuid`, where `Uuid::new()`
+makes a time-ordered version 7 id and `Uuid::v4()` a random one; and
+`Bytes`, an immutable run of bytes, base64 in JSON. All three go through
+JSON, comparison, the signatures of a `.rs` facade, and its trailing
+values; `Time` and `Uuid` also through `env::parse`, `parse`, printing,
+and route parameters. So the users API can store `created_at: Time` and
+not a string; the native database columns and bytes bodies come with the
+next releases of `varyk-sql` and `varyk-http`. `Time`, `Uuid`, and
+`Bytes` are now reserved names, and `varyk_std::Value` has three new
+variants, a breaking change. See `examples/records.vr` and "Time, ids,
+and bytes" in [docs/language.md](docs/language.md).
 
 Milestone 5b4 makes the compiler ready for
 [`varyk-http`](https://github.com/Varyk-Lang/varyk-http), the HTTP
@@ -309,6 +323,7 @@ fn display_name(&self) -> &str {
 - [docs/specs/2026-10-02-milestone-5b2-design.md](docs/specs/2026-10-02-milestone-5b2-design.md): milestone 5b2's additions.
 - [docs/specs/2026-10-03-milestone-5b3-design.md](docs/specs/2026-10-03-milestone-5b3-design.md): milestone 5b3's additions.
 - [docs/specs/2026-10-05-milestone-5b4-design.md](docs/specs/2026-10-05-milestone-5b4-design.md): milestone 5b4's additions.
+- [docs/specs/2026-10-07-milestone-5c-design.md](docs/specs/2026-10-07-milestone-5c-design.md): milestone 5c's additions.
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how to work on the compiler.
 
 ## License

@@ -1,6 +1,6 @@
 # The Varyk language
 
-This page describes everything Varyk accepts today, in milestone 5b4 of an
+This page describes everything Varyk accepts today, in milestone 5c of an
 experimental, pre-1.0 language (see [roadmap.md](roadmap.md) for what comes
 next). Anything not described here is rejected with an error that names
 what is not supported. For the reasons behind the design, see
@@ -289,20 +289,21 @@ Every other Rust keyword is reserved: `const`, `dyn`, `extern`, `loop`, `move`, 
 yet. None of them can be used as a name.
 
 `Some`, `None`, `Ok`, `Err`, `Option`, `Result`, `Vec`, `HashMap`, and
-`String` are reserved names: no function, method, struct, enum, variant, field, module,
-parameter, or `let` name can be any of them, because the generated Rust
-would then hide Rust's own. A struct, enum, or module also cannot take a
-built-in type's name (`i32`, `string`, `str`, and so on); a function, field,
-or local can (`let string = "x";` is fine). `Error`, the standard error
-type, and `Task` and `Shared`, the standard types of async code, cannot
-name a struct, enum, module, or `use`, nor a `pub` struct or enum of a
-`.rs` module (V0113). `json`, `env`, `log`, and `time`, the
-standard modules, cannot name a module, a struct, an enum, or a `use`, and `use json;` or
-`use json::parse;` is an error: a standard module is reached by its path
-where it is used. `assert` and `assert_eq` cannot name a function, and no
-function, method, struct, enum, module, or `use` name can start with
-`varyk_`, which is kept for what Varyk adds to the Rust it writes (all
-V0113). A local or a field may use any of these names.
+`String` are reserved names: no function, method, struct, enum, variant,
+field, module, parameter, or `let` name can be any of them, because the
+generated Rust would then hide Rust's own. A struct, enum, or module also
+cannot take a built-in type's name (`i32`, `string`, `str`, and so on); a
+function, field, or local can (`let string = "x";` is fine). `Error`, the
+standard error type, `Task` and `Shared`, the standard types of async code,
+and `Time`, `Uuid`, and `Bytes`, the standard types for a point in time, an
+id, and a run of bytes, cannot name a struct, enum, module, or `use`, nor a
+`pub` struct or enum of a `.rs` module (V0113). `json`, `env`, `log`, and
+`time`, the standard modules, cannot name a module, a struct, an enum, or a
+`use`, and `use json;` or `use json::parse;` is an error: a standard module
+is reached by its path where it is used. `assert` and `assert_eq` cannot
+name a function, and no function, method, struct, enum, module, or `use`
+name can start with `varyk_`, which is kept for what Varyk adds to the Rust
+it writes (all V0113). A local or a field may use any of these names.
 
 ## Types
 
@@ -317,9 +318,12 @@ V0113). A local or a field may use any of these names.
 | a struct you declare | a group of named fields |
 | an enum you declare | one of several variants, each with its own values |
 | `Option<T>`, `Result<T, E>`, `Vec<T>` | Rust's standard types, written as in Rust and nested freely |
-| `HashMap<K, V>` | values of type `V` found by keys of type `K`, an integer type, `bool`, or `string` |
+| `HashMap<K, V>` | values of type `V` found by keys of type `K`, an integer type, `bool`, `string`, or `Uuid` |
 | `Error` | the standard error: a message, given by every standard call that can fail |
 | `Shared<T>` | a handle many tasks read one struct `T` through; written only as a parameter's or a `let`'s type (see [Shared](#shared)) |
+| `Time` | one point in time in UTC, to the microsecond (see [Time, ids, and bytes](#time-ids-and-bytes)) |
+| `Uuid` | a 128-bit identifier (see [Time, ids, and bytes](#time-ids-and-bytes)) |
+| `Bytes` | an immutable run of bytes (see [Time, ids, and bytes](#time-ids-and-bytes)) |
 
 A struct declares its fields and their types. A field is private unless
 marked `pub`, and follows the same rule as any other item without `pub`:
@@ -380,8 +384,8 @@ or braces on a variant with values by position.
 `Option`, `Result`, `Vec`, and `HashMap` need exactly their types:
 `Option<i32>`, `Result<User, string>`, `Vec<Option<Shape>>`,
 `HashMap<string, i32>`. A `HashMap`'s key type is an integer type, `bool`,
-or `string`; its value type is any type. A `string` inside them is an owned
-`String` in the generated Rust, and a `HashMap` is Rust's
+`string`, or `Uuid`; its value type is any type. A `string` inside them is
+an owned `String` in the generated Rust, and a `HashMap` is Rust's
 `std::collections::HashMap`. Their values are written as in Rust:
 
 ```varyk
@@ -402,27 +406,30 @@ a parameter, a return value, a field, or a `vec!` element after one whose
 type is known. Anywhere else, write the type in a `let` first; the compiler
 never works it out from later lines.
 
-Numbers and `bool` are called Copy types: using one makes a copy, and the
-original stays usable. `string`, structs, enums, `Option`, `Result`, `Vec`,
-`HashMap`, and `Error` are not Copy.
+Numbers, `bool`, `Time`, and `Uuid` are called Copy types: using one makes
+a copy, and the original stays usable. `string`, structs, enums, `Option`,
+`Result`, `Vec`, `HashMap`, `Error`, and `Bytes` are not Copy.
 
-**Copies and comparisons.** A struct or enum can be copied with
-`x.clone()` when every field and value it holds can be: a number, a `bool`,
-a `string`, an `Error`, an `Option`, `Result`, `Vec`, or `HashMap` of such types,
-another struct or enum that can be copied, or a Rust type whose `.rs` file
-derives `Clone` for it (see [Rust structs and methods](#rust-structs-and-methods)).
-Two values of a type can be compared with `==` and `!=` by the same rule,
-with `PartialEq` in place of `Clone`. A type that holds itself through a
-`Vec` or a `HashMap` counts as if it could, as in Rust. `x.clone()` is a
-new, owned copy of everything inside; it works the same way on an
-`Error`, and on an `Option`, `Result`, `Vec`, or `HashMap` whose contents
-can be copied, and
-on a number or `bool` it is an error (V0100), since those are copied on use
-already. When something inside is in the way, `.clone()` and `==` are
-errors (V0203) that name the field, and, for a Rust type, say to derive the
-trait in its `.rs` file. In the generated Rust, a struct or enum carries one
-`#[derive(Clone, PartialEq)]` line listing what it allows (none when it
-allows neither); nothing is ever copied unless `.clone()` is written.
+**Copies and comparisons.** A struct or enum can be copied with `x.clone()`
+when every field and value it holds can be: a number, a `bool`, a `string`,
+an `Error`, a `Time`, a `Uuid`, a `Bytes`, an `Option`, `Result`, `Vec`, or
+`HashMap` of such types, another struct or enum that can be copied, or a
+Rust type whose `.rs` file derives `Clone` for it (see
+[Rust structs and methods](#rust-structs-and-methods)). Two values of a
+type can be compared with `==` and `!=` by the same rule, with `PartialEq`
+in place of `Clone`. A type that holds itself through a `Vec` or a
+`HashMap` counts as if it could, as in Rust. `x.clone()` is a new, owned
+copy of everything inside, but for a `Bytes`, whose clone shares its
+buffer (see [Time, ids, and bytes](#time-ids-and-bytes)). It works on an
+`Error` and a `Bytes` too, and on an `Option`, `Result`, `Vec`, or
+`HashMap` whose contents can be copied; on a Copy type (a number, `bool`,
+`Time`, or `Uuid`) it is an error (V0100), since those are copied on use
+already. When something inside is in the way, `.clone()` and `==`
+are errors (V0203) that name the field, and, for a Rust type, say to
+derive the trait in its `.rs` file. In the generated Rust, a struct or
+enum carries one `#[derive(Clone, PartialEq)]` line listing what it allows
+(none when it allows neither); nothing is ever copied unless `.clone()` is
+written.
 
 An `impl` block adds functions to a struct or enum declared in the same
 file. A function whose parameter list starts with `self` is a method; `self`
@@ -456,13 +463,14 @@ In the generated Rust, `self` is `&self` and `mut self` is `&mut self`.
 ### Calls on built-in types
 
 These are all the calls `Vec`, `string`, `Option`, `Result`, `HashMap`, and
-`Error` have, beside the calls of a chain (see [Chains](#chains)); any other is an
-error listing the type's calls. "Reads" borrows the
-value the call is made on, "changes" needs a value that may be changed, like
-a `mut` parameter, and "takes" uses the value up, as `?` does (see below).
-An argument is kept, like a struct field, unless the
-table says it is read: a read argument is only borrowed, so a parameter or
-another name for a value can be passed.
+`Error` have, beside the calls of a chain (see [Chains](#chains)) and those
+of `Time`, `Uuid`, and `Bytes` (see
+[Time, ids, and bytes](#time-ids-and-bytes)); any other is an error
+listing the type's calls. "Reads" borrows the value the call is made on, "changes" needs a
+value that may be changed, like a `mut` parameter, and "takes" uses the
+value up, as `?` does (see below). An argument is kept, like a struct
+field, unless the table says it is read: a read argument is only borrowed,
+so a parameter or another name for a value can be passed.
 
 **`Vec<T>`:**
 
@@ -475,10 +483,10 @@ another name for a value can be passed.
 | `v.is_empty()` | reads | `bool` |
 | `v.insert(i, x)`; `i: usize` | changes | nothing; `x` is kept at `i`, and the elements from `i` on move up one |
 | `v.remove(i)`; `i: usize` | changes | `T`: the element at `i`, taken out |
-| `v.contains(x)`; `x` read | reads | `bool`; `T` is a number type, `bool`, or `string` |
-| `v.sort()` | changes | nothing; `T` is an integer type, `bool`, or `string` |
+| `v.contains(x)`; `x` read | reads | `bool`; `T` is a number type, `bool`, `string`, `Time`, `Uuid`, or `Bytes` |
+| `v.sort()` | changes | nothing; `T` is an integer type, `bool`, `string`, or `Time` |
 | `v.join(sep)`; `sep: string` read | reads | new text: the elements with `sep` between them; `T` is `string` |
-| `v.get(i)`; `i: usize` | reads | `Option<T>`: the element at `i`, or `None` past the end; looked into where it is made unless `T` is a number type or `bool` (see below) |
+| `v.get(i)`; `i: usize` | reads | `Option<T>`: the element at `i`, or `None` past the end; looked into where it is made unless `T` is a Copy type (see below) |
 | `v.iter()` | reads; `v` must be stored | a chain of the elements (see [Chains](#chains)) |
 | `v[i]` | reads, or changes when assigned | the element at `i`, which is a `usize` |
 
@@ -488,8 +496,8 @@ and a value the function only borrows is an error. `v[i]` is a place, like
 a field: it can be read, assigned (`v[0] = 5;`), have its fields read or
 assigned, and have methods called on it (`tasks[0].complete()`). With `i`
 past the end, `v[i]`, `insert`, and `remove` stop the program with Rust's
-message. `sort` on floats, or `contains` or `sort` on structs, is an error,
-and so is `join` on anything but strings.
+message. `sort` on floats, `Uuid`s, or `Bytes`, or `contains` or `sort` on
+structs, is an error, and so is `join` on anything but strings.
 
 **`string`:**
 
@@ -504,12 +512,16 @@ and so is `join` on anything but strings.
 | `s.trim()` | reads; `s` must be stored, or a literal | the text of `s` without the spaces at either end: part of `s`, not a copy (see "Returning part of a parameter") |
 | `s.split(sep)`; `sep: string` read | reads; `s` must be stored, or a literal | a chain of the pieces of `s` between the places `sep` appears, each part of `s`, not a copy (see [Chains](#chains)) |
 | `s.push_str(t)`; `t: string` read | changes | nothing; `t` is added to the end of `s` |
-| `s.parse()` | reads | `Result<T, Error>`, `T` a number type or `bool` |
+| `s.parse()` | reads | `Result<T, Error>`, `T` a number type, `bool`, `Time`, or `Uuid` |
 
 `s.clone()` is the one way to copy text, and it always makes owned text.
 `parse` gives an `Err` when the text is not a value of `T`, with Rust's
 rules for what the text may look like, and its message names the text and
 the type (`` `abc` is not a number ``, `` `yes` is not `true` or `false` ``).
+A `Time` reads as `Time::from_iso` reads it, and a `Uuid` only in its
+36-character form with hyphens, hex digits in either case (see
+[Time, ids, and bytes](#time-ids-and-bytes)); `parse` into `Bytes`, or any
+other type, is an error (V0200).
 `T` comes from where the result goes, as `None`'s type does, `?` included:
 `let n: Result<i32, Error> = text.parse();`, or `let n: i32 = text.parse()?;`
 in a function returning `Result<_, Error>`. For an `Option`, write two
@@ -561,7 +573,8 @@ A call that takes its value uses it up, as `?` does: a value made right
 there is used up, a name holding its own value is given away and cannot be
 used again (V0305), and a stored value (a parameter, a field, an element,
 or another name for one) is copied out when everything inside it, a
-`Result`'s error type included, is a number or `bool`. So `o.unwrap_or(0)`
+`Result`'s error type included, is a Copy type (a number, `bool`, `Time`,
+or `Uuid`). So `o.unwrap_or(0)`
 on a parameter `o: Option<i32>` is fine, while `r.unwrap_or(0)` on a
 parameter `r: Result<i32, string>` is an error (V0304): `match` on it
 instead.
@@ -574,7 +587,7 @@ instead.
 | `m.insert(k, v)` | changes | `Option<V>`: the value `k` had before, or `None`; `k` and `v` are kept |
 | `m.contains_key(k)`; `k` read | reads | `bool` |
 | `m.len()` | reads | `usize`, the number of keys |
-| `m.get(k)`; `k` read | reads | `Option<V>`: the value of `k`, or `None`; looked into where it is made unless `V` is a number type or `bool` (see below) |
+| `m.get(k)`; `k` read | reads | `Option<V>`: the value of `k`, or `None`; looked into where it is made unless `V` is a Copy type (see below) |
 | `m.keys()`, `m.values()` | reads; `m` must be stored | a chain of the keys, or of the values, in no fixed order (see [Chains](#chains)) |
 
 A `HashMap` has no `m[k]`, and a `for` cannot go over one directly. Its
@@ -584,9 +597,10 @@ does when its values can be compared (see [Types](#types)).
 **Looked into where it is made.** `v.get(i)` and `m.get(k)` give an
 `Option` whose value is part of the `Vec` or `HashMap`, and so does `find`
 on a chain of borrowed items (see [Chains](#chains)). When that value is
-a number or `bool`, the result is a plain `Option` holding a copy, usable
-anywhere: `counts.get(word).unwrap_or(0)`. Otherwise it must be looked
-inside right where it is made, as the value of a `match`, an `if let`, or
+of a Copy type (a number, `bool`, `Time`, or `Uuid`), the result is a
+plain `Option` holding a copy, usable anywhere:
+`counts.get(word).unwrap_or(0)`. Otherwise it must be looked inside right
+where it is made, as the value of a `match`, an `if let`, or
 a `while let`:
 
 ```varyk
@@ -669,11 +683,13 @@ Operators:
 - `-x` negates a number; `!b` is "not" for a `bool`.
 - `+ - * / %` work on numbers only, and both sides must have the same type.
   `+` does not join strings: `format!("{}{}", a, b)` does.
-- `< <= > >=` compare numbers of the same type.
+- `< <= > >=` compare numbers of the same type, or two `Time`s; a `Uuid`
+  or a `Bytes` has no order (V0200).
 - `==` and `!=` compare two values of one type: numbers, `bool`, strings,
-  and a struct, an enum, an `Option`, a `Result`, a `Vec`, or a `HashMap`
-  whose contents can be compared (see [Types](#types)); anything else is
-  an error naming the field in the way (V0203).
+  `Error`, `Time`, `Uuid`, `Bytes`, and a struct, an enum, an `Option`, a
+  `Result`, a `Vec`, or a `HashMap` whose contents can be compared (see
+  [Types](#types)); anything else is an error naming the field in the way
+  (V0203).
 - `&&` is "and", `||` is "or".
 - `x as T` converts a number to another number type: any integer type,
   `usize`, `f32`, or `f64`, with Rust's rules (a float is truncated toward
@@ -781,13 +797,14 @@ an error (V0200). A chain can also end as the head of a `for` (see
 
 - **borrowed**: another name for an element of the stored value, read-only,
   like a name a `match` pattern makes: the elements of `v.iter()`, the keys
-  or values of `m.keys()` and `m.values()`, unless they are numbers or
-  `bool`s, and the pieces of `s.split(sep)`, parts of `s`;
-- **copies**: numbers and `bool`s, copied as they are read;
+  or values of `m.keys()` and `m.values()`, unless they are of a Copy
+  type, and the pieces of `s.split(sep)`, parts of `s`;
+- **copies**: values of a Copy type (numbers, `bool`s, `Time`s, and
+  `Uuid`s), copied as they are read;
 - **owned**: new values a `map` made.
 
-`filter` keeps the kind. `map` gives copies when its closure gives a number
-or `bool`, owned items when it gives something new (a call's result, a
+`filter` keeps the kind. `map` gives copies when its closure gives a value
+of a Copy type, owned items when it gives something new (a call's result, a
 `.clone()`, a `format!`, a string literal), and borrowed items when it gives
 part of its item (`users.iter().map(|u| u.name)`), or part of a name from
 outside it (`|x| other.name`), which the items are then parts of. Giving
@@ -815,7 +832,7 @@ if let Some(word) = words.iter().find(|w| w.len() > 3) {
 ```
 
 In the generated Rust a chain is written as it is, with `.copied()` after a
-source of numbers or `bool`s, `collect::<Vec<_>>()`, and `sum::<T>()`.
+source of a Copy type, `collect::<Vec<_>>()`, and `sum::<T>()`.
 
 ## Matching
 
@@ -921,7 +938,7 @@ value made right there (`make().status`) is an error: store it with `let`
 first.
 
 - Matching something stored never gives it away. A name the pattern makes
-  for a number or `bool` is a copy. A name for anything else is another
+  for a value of a Copy type is a copy. A name for anything else is another
   name for part of the stored value, with the rules of a `let` made from a
   field: while it is still used, the stored value cannot be changed or
   given away (V0307), and it cannot be stored or returned except as part of a parameter the function returns (see "Returning part of a parameter") (use
@@ -993,7 +1010,7 @@ value made right there is an error: store it with `let` first.
   `return`, or `return v` itself, is fine. After the loop, `v` can change
   again. To change elements as you
   go, loop over the positions instead: `for i in 0..v.len() { v[i] = 0; }`.
-- The loop variable is a copy when the elements are numbers or `bool`;
+- The loop variable is a copy when the elements are of a Copy type;
   otherwise it is another name for one element, with the rules of a `let`
   made from an element: it cannot be stored or returned except as part of a parameter the function returns (see "Returning part of a parameter") (use
   `.clone()` for text).
@@ -1087,7 +1104,8 @@ fn main() {
 The format string and its arguments follow `println!` exactly: the text
 is a string literal written in quotes (anything else is V0202), the
 number of `{}` must match the number of arguments (V0202), and the
-arguments are numbers, `bool`, strings, or an `Error` (V0203 otherwise).
+arguments are numbers, `bool`, strings, an `Error`, a `Time`, or a
+`Uuid` (V0203 otherwise).
 
 `LOG` sets the level, `debug`, `info`, `warn`, `error`, or `off`; it is
 `info` when unset, and a line below the level is not written. `LOG` and
@@ -1149,7 +1167,7 @@ that stops the program has no place in service code, which returns an
 A failing check stops its test and names the Varyk file and line, the
 file from the package's root, or for a single file its name alone, wherever
 `varyk` runs: `assertion failed at src/store.vr:12`. `assert_eq` adds both values when they print with `{}`
-(numbers, `bool`, strings, and `Error`): `assertion failed at
+(numbers, `bool`, strings, `Error`, `Time`, and `Uuid`): `assertion failed at
 src/store.vr:12: left is 4, right is 5`.
 
 `varyk test` shows the Rust test runner's report, which names a test in a
@@ -1169,9 +1187,12 @@ println!("{} is {} years old", name, age);
 
 The number of `{}` must match the number of arguments. Write `{{` and `}}`
 to print `{` and `}`. Nothing may go inside the braces. The arguments must be
-numbers, `bool`, strings, or an `Error`, which prints its message; a
-struct, an enum, an `Option`, a `Result`, a `Vec`, or a `HashMap` cannot be
-printed whole, even one that can be copied and compared.
+numbers, `bool`, strings, an `Error`, which prints its message, a `Time`,
+which prints as `to_iso` writes it, or a `Uuid`, which prints in lowercase
+with hyphens; a struct, an enum, an `Option`, a `Result`, a `Vec`, or a
+`HashMap` cannot be printed whole, even one that can be copied and
+compared. Nor can a `Bytes`, which has no one printed form: print
+`b.to_text()` or `b.to_base64()` instead.
 
 `format!` follows the same rules and, instead of printing, makes new text:
 `let line = format!("{} is {}", name, age);`. It is the way to join strings.
@@ -1210,11 +1231,12 @@ behaves the same as borrowing. A `mut i32` parameter changes the caller's
 number like any other `mut` parameter.
 
 **Giving a value away.** `let b = a;` gives the value of `a` to `b`, if it is
-a string or a struct. After that, `a` cannot be used, and the compiler points
-at the line where it was given away. Numbers and `bool` are copied instead.
-The same happens when a name is stored in a struct field, put inside an enum
-value, `Some`, `Ok`, or `Err`, or in a `vec!`, passed to `push`, returned,
-or passed to a Rust function that takes a `String`.
+a string, a `Bytes`, or a struct. After that, `a` cannot be used, and the
+compiler points at the line where it was given away. Numbers and `bool` are
+copied instead. The same happens when a name is stored in a struct field,
+put inside an enum value, `Some`, `Ok`, or `Err`, or in a `vec!`, passed to
+`push`, returned, or passed to a Rust function that takes a `String` or a
+`varyk_std::Bytes`.
 
 A name made with `let` from a parameter, or from any field or element, is
 another name for that same value, not a copy; so is a `let mut` text name
@@ -1237,6 +1259,11 @@ which belongs to the `Vec`. Such a value cannot be stored into a struct
 field or an element, put inside an enum value, `Some`, `Ok`, `Err`, or a
 `vec!`, or passed to `push`; the error says what to do instead. For text,
 the fix is a copy: `user.name.clone()`.
+
+A `Bytes` is passed, stored, and moved as a string is: a parameter borrows
+it, a field owns it, `let c = b` gives it away, and a function may return
+a `Bytes` parameter or one held in a parameter. Its fix is `.clone()` too,
+which copies only the handle to the bytes, not the bytes themselves.
 
 **Returning part of a parameter.** A function may return part of one of its
 parameters without copying it: every value it returns (its last value, and
@@ -1267,24 +1294,25 @@ position must be stored, or be a string literal: `make_user().display_name()`
 is an error (V0001), since the new `User` would be gone at the end of the
 line; store it with `let` first. `s.trim()` works the same way.
 
-These are errors, each fixed by returning a copy (`.clone()` for text)
-instead: returning part of a parameter in one place and something new in
-another, a string literal included, or beside a `?`, which returns a new
+These are errors, each fixed by returning a copy (`.clone()` for text and
+`Bytes`) instead: returning part of a parameter in one place and something
+new in another, a string literal included, or beside a `?`, which returns a new
 `None` or `Err` early (V0304); parts of two different
 parameters (V0308); part of a `let` of the function, or of a number or
 `bool` parameter or `for` variable, which the function gets as its own
 copy, since either ends when it returns (V0304); part of a `mut` parameter (V0304), since the caller could
 not even read what it passed while the result is used; and part of a
 parameter in a function that calls itself, directly or through other
-functions (V0304). A number or `bool` is always copied, so returning one is
-never part of anything. Varyk decides a head of a `match`, `if let`, or
+functions (V0304). A value of a Copy type is always copied, so returning
+one is never part of anything. Varyk decides a head of a `match`, `if let`, or
 `while let` by how it is written, before it knows which calls return parts,
 so a field of such a call there (`match user.info().kind`) is an error
 (V0001); store the call's result with `let` first.
 
 For Rust readers: `user: User` becomes `user: &User`, `mut user: User`
-becomes `user: &mut User`, and the call sites get `&` and `&mut`. A
-function returning part of a parameter returns `&str` or `&User`, with one
+becomes `user: &mut User`, `b: Bytes` becomes `b: &::varyk_std::Bytes`, and
+the call sites get `&` and `&mut`. A function returning part of a
+parameter returns `&str`, `&User`, or `&::varyk_std::Bytes`, with one
 lifetime written on that parameter and the return when Rust's elision would
 not pick it. In Rust,
 `mut name: T` means an owned parameter that can be rebound; Varyk uses `mut`
@@ -1714,7 +1742,15 @@ How values map:
 - a `Vec` is an array, and a `HashMap<string, V>` an object (in no
   particular key order);
 - numbers, `bool`, and `string` are themselves; a number out of range for
-  its type is an error when read (`300` for a `u8`), never a crash.
+  its type is an error when read (`300` for a `u8`), never a crash;
+- a `Time` is a string of RFC 3339 text in UTC, written as `{}` writes it
+  (`"2026-10-07T12:00:00.5Z"`) and read by the rules of `Time::from_iso`;
+  a JSON number is not a `Time`;
+- a `Uuid` is a string, written in lowercase with hyphens and read in
+  the 36-character form with hyphens, hex digits in either case;
+- a `Bytes` is a string of standard base64 with padding (RFC 4648
+  section 4), read strictly: another alphabet, missing padding, or a
+  character outside the alphabet is an error.
 
 A `#[skip]` field is never written and never read. A struct that
 `json::parse` reaches must give each of its skipped fields a value: a
@@ -1723,19 +1759,20 @@ the keys of the fields that are not skipped must all be different, and so
 must the keys of an enum's variants (V0209). These are checked only on the
 types a `json` call reaches.
 
-`json::stringify` cannot fail, so it gives a `string`, not a `Result`.
-Only these types can go through JSON: numbers, `bool`, `string`; `Option`
-and `Vec` of such a type; `HashMap<string, V>` of one; a struct whose
-fields, apart from skipped ones, are such types; and an enum whose
-variants carry no data. Anything else is an error at the call that names
-the part in the way (V0210): an enum with a variant that carries data, a
-`HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs`
-module, or a type declared in another Varyk package (a package is built
-without knowing who uses it, so convert its types there, with a `pub fn`
-such as `pub fn stop_json(stop: Stop) -> string`). For data that varies by kind, use a struct with a field of a
-plain enum marked `#[rename("type")]` and an `Option` field for each
-kind's data. The check follows the fields all the way down, and a type
-that holds itself through a `Vec` is fine.
+`json::stringify` cannot fail, so it gives a `string`, not a `Result`. Only
+these types can go through JSON: numbers, `bool`, `string`, `Time`, `Uuid`,
+`Bytes`; `Option` and `Vec` of such a type; `HashMap<string, V>` of one; a
+struct whose fields, apart from skipped ones, are such types; and an enum
+whose variants carry no data. Anything else is an error at the call that
+names the part in the way (V0210): an enum with a variant that carries
+data, a `HashMap` whose key is not `string` (a `HashMap<Uuid, V>` too,
+though it is a valid map), `Error`, a Rust type from a `.rs` module, or a
+type declared in another Varyk package (a package is built without knowing
+who uses it, so convert its types there, with a `pub fn` such as
+`pub fn stop_json(stop: Stop) -> string`). For data that varies by kind,
+use a struct with a field of a plain enum marked `#[rename("type")]` and an
+`Option` field for each kind's data. The check follows the fields all the
+way down, and a type that holds itself through a `Vec` is fine.
 
 `json::stringify` and `json::parse` only read their argument, so the
 value can be used after the call. A `.rs` function that writes its
@@ -1793,10 +1830,11 @@ fn main() {
 put in a typed `let` first.
 
 `T` must be a struct whose fields, apart from skipped ones, are numbers,
-`bool`, `string`, enums whose variants carry no data, or an `Option` of
-one of those. A nested struct, a `Vec`, or a `HashMap` field, or a `T` that
-is not a struct, or a type declared in another Varyk package, is an error
-at the call naming the part in the way (V0210); mark a field the program fills itself `#[skip]` and make it an
+`bool`, `string`, `Time`, `Uuid`, enums whose variants carry no data, or an
+`Option` of one of those. A nested struct, a `Vec`, a `HashMap`, or a
+`Bytes` field, or a `T` that is not a struct, or a type declared in
+another Varyk package, is an error at the call naming the part in the way
+(V0210); mark a field the program fills itself `#[skip]` and make it an
 `Option`.
 
 Each field reads the variable named by its key, the field's name or its
@@ -1810,10 +1848,11 @@ the same are V0209. For each field, in order:
    `Err` such as `` `PORT` is not set ``.
 
 A value is read as its field's type: a number from its text, `true` or
-`false` for a `bool`, the variant's name or `#[rename]` for an enum, and
-a `string` as written. One that does not read is an `Err` naming the
-variable and the value (`` `PORT` is not a number: `abc` ``), never a
-crash.
+`false` for a `bool`, the variant's name or `#[rename]` for an enum, a
+`Time` and a `Uuid` as `parse` reads them, and a `string` as written. One
+that does not read is an `Err` naming the variable and the value
+(`` `PORT` is not a number: `abc` ``, `` `START`: `2026-10-07 12:00` is not
+a time like 2026-10-07T12:00:00Z ``), never a crash.
 
 `.env` is read from the current directory, once, the first time it is
 needed. It is a list of `KEY=value` lines; blank lines and lines starting
@@ -1853,7 +1892,104 @@ facade function: `Value::from` copies its text as it hands the value over.
 Nothing else copies a string's text behind your back. A string that is
 already owned moves instead, with no copy.
 
-## Not in milestone 5b4
+## Time, ids, and bytes
+
+`Time`, `Uuid`, and `Bytes` are standard types, known without a
+declaration like `Error`. In the generated Rust they are
+`::varyk_std::Time`, `::varyk_std::Uuid`, and `::varyk_std::Bytes`, and
+their associated calls are written in full (`::varyk_std::Time::now()`); a
+single file that names one or calls one gets `varyk-std` as a dependency
+at exactly the compiler's version.
+
+**`Time`:** one point in time in UTC, with microsecond precision, from the
+year 0000 to the year 9999, the range RFC 3339 can write. A Copy type.
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `Time::now()` | none | the current time, cut to the microsecond |
+| `Time::from_iso(text)`; `text: string` read | none | `Result<Time, Error>`, by the rules below |
+| `Time::from_unix(seconds)`; `seconds: i64` | none | `Result<Time, Error>`; seconds since 1970-01-01T00:00:00Z; an `Err` outside the range |
+| `Time::from_unix_micros(n)`; `n: i64` | none | `Result<Time, Error>`; microseconds since 1970-01-01T00:00:00Z; an `Err` outside the range |
+| `t.to_iso()` | reads | `string`, the time written as below |
+| `t.to_unix()` | reads | `i64` seconds, rounded down, so a time before 1970 gives the second it falls in |
+| `t.to_unix_micros()` | reads | `i64` |
+| `t.add_seconds(n)`; `n: i64` | reads | `Result<Time, Error>`; `n` may be negative; an `Err` outside the range |
+| `t.seconds_since(u)`; `u: Time` | reads | `i64`, `t` minus `u` in whole seconds, rounded toward zero; negative when `u` is later |
+| `text.parse()` | reads | `Result<Time, Error>`, as `Time::from_iso` |
+
+`iso` names the familiar standard, as JavaScript's `toISOString` does; the
+form read and written is RFC 3339's form of ISO 8601. `from_iso` reads
+`YYYY-MM-DD`, `T` or `t`, `HH:MM:SS`, an optional fraction of one to nine
+digits, and `Z`, `z`, or an offset `+HH:MM` or `-HH:MM`. The time is
+converted to UTC, and digits past the sixth are cut, so a nanosecond time
+from Go reads. A leap second (`:60`), a space for the `T`, the compact form
+with no dashes or colons, week and ordinal dates, and a time outside the
+range after conversion are an `Err` whose message names the text:
+`` `2026-10-07 12:00` is not a time like 2026-10-07T12:00:00Z ``.
+`to_iso` writes UTC with `Z`, `2026-10-07T12:00:00Z`, and a fraction only
+when the time has one, with its trailing zeros dropped:
+`2026-10-07T12:00:00.5Z`, `2026-10-07T12:00:00.123456Z`. No call of `Time`
+stops the program: every one that can leave the range gives a `Result`.
+
+`{}` and `assert_eq` write a `Time` as `to_iso` does. Two times are
+compared with `==`, `!=`, `<`, `<=`, `>`, and `>=`, a later time being the
+greater; a `Vec<Time>` can be sorted, earliest first, and searched with
+`contains`. A `Time` cannot be added to or taken from (`t + u` is V0200;
+use `add_seconds` and `seconds_since`), and it is not a `HashMap` key
+(V0101).
+
+**`Uuid`:** a 128-bit identifier. A Copy type.
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `Uuid::new()` | none | a new version 7 id: time-ordered, ordered by creation within one process |
+| `Uuid::v7()` | none | the same as `Uuid::new()` |
+| `Uuid::v4()` | none | a new random version 4 id |
+| `text.parse()` | reads | `Result<Uuid, Error>`; only the 36-character form with hyphens, hex digits in either case |
+
+A version 7 id holds the millisecond it was made in, readable by anyone
+who has the id; a version 4 id holds nothing but randomness. If you publish
+ids and do not want their creation times known, make them with
+`Uuid::v4()`.
+
+`Uuid::new()`, `Uuid::v7()`, and `Uuid::v4()` stop the program, with the
+`uuid` crate's message, when the operating system cannot give random
+bytes, as Rust's own `HashMap` seeding and the start of the async runtime
+do; that cannot happen on macOS, Windows, or Linux once the system has
+booted. In a handler, `varyk-http` answers it with a 500 (see
+[Safety](#safety)). The clock never stops a program: a version 7 id takes
+its time from the reading `Time::now()` makes.
+
+`{}` and `assert_eq` write a `Uuid` in lowercase with hyphens,
+`0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e`, however it was read. Two ids are
+compared with `==` and `!=`, a `Vec<Uuid>` searched with `contains`, and a
+`Uuid` is a `HashMap` key. Ids have no order: `<` on a `Uuid`, or `sort` on
+a `Vec<Uuid>`, is V0200.
+
+**`Bytes`:** an immutable run of bytes. Not a Copy type: like a struct, a
+parameter borrows it, a field owns it, and `let c = b` moves it.
+
+| Call | Uses the value | Result |
+|---|---|---|
+| `Bytes::from_text(text)`; `text: string` read | none | the UTF-8 bytes of `text`, a copy |
+| `Bytes::from_base64(text)`; `text: string` read | none | `Result<Bytes, Error>`; standard base64 with padding (RFC 4648 section 4), read strictly: another alphabet, missing padding, or a character outside the alphabet is an `Err` |
+| `b.to_text()` | reads | `Result<string, Error>`, a copy; an `Err` when the bytes are not UTF-8 |
+| `b.to_base64()` | reads | `string`, standard base64 with padding |
+| `b.len()` | reads | `usize`, the number of bytes |
+| `b.is_empty()` | reads | `bool` |
+
+The `Err` of `from_base64` or `to_text` says what is wrong without
+repeating the text or the bytes, which can be a whole request body.
+
+`b.clone()` gives a second `Bytes` that shares the first one's buffer: no
+byte is copied. Two `Bytes` are compared with `==` and `!=`, byte by byte,
+and a `Vec<Bytes>` searched with `contains`; `assert_eq` on them says only
+that they differ. `{}` on a `Bytes` is V0203, since bytes have no one
+printed form: print `b.to_text()` or `b.to_base64()`. A `Bytes` has no
+order, is not a `HashMap` key (V0101), and cannot be read with `parse`
+(V0200).
+
+## Not in milestone 5c
 
 These do not exist yet; where one can be written, it is an error that names
 what is not supported. They are left out because no program has needed
@@ -1899,8 +2035,15 @@ made; a handler that is a method, a function of a `.rs` file, or a function
 of another package; `serve` taking an address (the address is a setting,
 in the package's README); TLS in the server, which is the job of the proxy
 in front of it; request and response bodies sent in pieces as they come;
-an OpenAPI document written from the routes; and types for dates, times,
-UUIDs, and bytes, which come in milestone 5c.
+and an OpenAPI document written from the routes.
+
+Also not yet, from time, ids, and bytes (see
+[Time, ids, and bytes](#time-ids-and-bytes)): a calendar date, a time of
+day, a duration type, time zones and local time, formatting a `Time` by a
+pattern, and a monotonic clock; ordering `Uuid`s, the nil id, and other
+versions; indexing, slicing, or building `Bytes` piece by piece, and
+`Bytes` from a `Vec<u8>`; `Bytes` in `env::parse`; `Time` or `Bytes` as a
+map key; and a handler parameter bound to the raw body.
 
 Also not yet, from facades (see [A facade for a package](#a-facade-for-a-package)):
 two type parameters, a `where` clause, or another bound; a `u64`, a struct, a
@@ -2069,7 +2212,9 @@ parameters gets its value from the request by the first of these rules
 that fits:
 
 1. a parameter with the name of a `{name}` of the path is that part of the
-   path; its type is an integer type, `bool`, or `string`;
+   path; its type is an integer type, `bool`, `string`, `Time`, or `Uuid`;
+   a `Time` is written as `Time::from_iso` reads it, a `Uuid` in its
+   hyphenated form (`/orders/{id}` with `id: Uuid`);
 2. a parameter of type `Shared<State>`, where `State` is the struct given
    to `http::App::new`, is the app's state; there is at most one;
 3. a parameter of type `http::Request` is the request itself, to read its
@@ -2077,27 +2222,28 @@ that fits:
 4. on `post`, `put`, and `patch`, one parameter of a type JSON can hold, a
    struct, an enum, or a `Vec` or `HashMap`, is the request's body, read as
    JSON with the rules and attribute checks of `json::parse` (V0209, V0210);
-5. any other parameter of an integer type, `bool`, `string`, or an
-   `Option` of one is read by its name from the query string, the part of
-   the address after `?`: `search(prefix: Option<string>, exact: bool)`
-   reads `/search?prefix=A&exact=true`. A plain type must be there; an
-   `Option` is `None` when it is not.
+5. any other parameter of an integer type, `bool`, `string`, `Time`,
+   `Uuid`, or an `Option` of one is read by its name from the query
+   string, the part of the address after `?`: `search(prefix:
+   Option<string>, exact: bool)` reads `/search?prefix=A&exact=true`. A
+   plain type must be there; an `Option` is `None` when it is not.
 
 A parameter that fits none of these, a `{name}` with no parameter, a body
 on `get` or `delete`, two bodies, two states, or two `http::Request`s, a
-`Shared` of another struct, or a path parameter of another type is V0219, one for each
-problem, at the route, naming the parameter or the part. So renaming a
-parameter cannot quietly stop it from getting its value. A query
+`Shared` of another struct, or a path parameter of another type (a `Bytes`
+among them, which is neither a path nor a query parameter) is V0219, one
+for each problem, at the route, naming the parameter or the part. So
+renaming a parameter cannot quietly stop it from getting its value. A query
 parameter's name is part of the address clients write, so renaming one
 changes what they must send.
 
 The request is read before the handler runs. A part of the path or a query
-value that is not a value of its type (`abc` for an `i64`), a missing query
-value, or a body that is not JSON of its type is answered with a 400 whose
-body names the parameter and what is wrong, and the handler is not called:
-inside a handler, every parameter is a real value of its type. A path no
-route matches is answered with a 404, and a known path asked for with
-another method with a 405.
+value that is not a value of its type (`abc` for an `i64`, `42` for a
+`Uuid`), a missing query value, or a body that is not JSON of its type is
+answered with a 400 whose body names the parameter and what is wrong, and
+the handler is not called: inside a handler, every parameter is a real
+value of its type. A path no route matches is answered with a 404, and a
+known path asked for with another method with a 405.
 
 A handler is called as any Varyk function is: its parameters borrow what
 they are given, and a `mut` parameter (`mut user: NewUser`) may be changed.
@@ -2294,7 +2440,7 @@ the return type is one of these:
 | `&str` | a borrowed `string` |
 | `&mut String` | a `mut string` |
 | `&'static str` parameter | a `string` that takes only text written in the program: a string literal, escapes included, and nothing else (V0217), so no input can reach it |
-| `Vec<varyk_std::Value>` as the last parameter, written by that full path | any number of values after the other arguments, none included: each a `bool`, `string`, `f32`, `f64`, `i8` to `i64`, `u8` to `u32`, or an `Option` of one of those (V0218; write `n as i64` for a `u64` or `usize`, and give a `None` a type with `let` first). Each is read, not given away, so a name passed stays usable; a string is copied into the value, the one copy besides a literal placed into an owned slot. A program needs `varyk-std` when its own `.rs` module has such a function, called or not, and when it calls one of a dependency package |
+| `Vec<varyk_std::Value>` as the last parameter, written by that full path | any number of values after the other arguments, none included: each a `bool`, `string`, `f32`, `f64`, `i8` to `i64`, `u8` to `u32`, `Time`, `Uuid`, `Bytes`, or an `Option` of one of those (V0218; write `n as i64` for a `u64` or `usize`, and give a `None` a type with `let` first). Each is read, not given away, so a name passed stays usable; a string is copied into the value, the one copy besides a literal placed into an owned slot. A `Bytes` is lent and not copied: the value shares its buffer, as `.clone()` on a `Bytes` does. A program needs `varyk-std` when its own `.rs` module has such a function, called or not, and when it calls one of a dependency package |
 | `String` parameter | an owned `string`: a literal is copied, an owned string moves |
 | `String` return | `string` |
 | `&str` or `&S` return, where lifetime elision names the parameter it borrows from (below) | a borrowed return of that argument: `string`, or the struct or enum |
@@ -2302,9 +2448,12 @@ the return type is one of these:
 | `Vec<T>`, `Option<T>`, `Result<T, E>` where `T` and `E` are in this table | the same Varyk type, given away (moved) |
 | `Result<T, varyk_std::Error>` return, written by that full path, where `T` is in this table | `Result<T, Error>`: `?` opens it in a function returning `Result<_, Error>`, and `match` reads `e.message()`; a program needs `varyk-std` when its own `.rs` module has such a function, called or not, and when it calls one of a dependency package |
 | `varyk_std::Error` as the whole return, written by that full path (not in a parameter, a field, or inside another type) | `Error`, for a facade that makes an error of its own (`varyk-http`'s own constructors are Varyk over `Error::with_status`); a program needs `varyk-std` for such a function as for the `Result` return above |
+| `varyk_std::Time`, `varyk_std::Uuid`, written by that full path (a leading `::` allowed), as a parameter, a return, a `pub` field, the field of an enum's variant, or inside `Option`, `Vec`, or `Result` | `Time`, `Uuid`, copied (see [Time, ids, and bytes](#time-ids-and-bytes)); a program needs `varyk-std` for such a function as for `varyk_std::Error` |
+| `&varyk_std::Bytes` parameter, written by that full path (a leading `::` allowed) | a borrowed `Bytes`, read; a program needs `varyk-std` for such a function as for `varyk_std::Error` |
+| `varyk_std::Bytes`, written by that full path (a leading `::` allowed), in the same places as `varyk_std::Time` | `Bytes`, given away (moved); a program needs `varyk-std` for such a function as for `varyk_std::Error` |
 | `Result<T, varyk_std::Error>`, `Result<Option<T>, varyk_std::Error>`, or `Result<Vec<T>, varyk_std::Error>` return of a `pub fn` or method with one type parameter `T: serde::de::DeserializeOwned` (or `varyk_std::serde::de::DeserializeOwned`, which needs no `serde` dependency), written inline by that full path, and `T` nowhere else | `T` is the type the result is used as, found as for `json::parse`: a `let` with a written type, an argument, a return value, or a field, through `?` and `.await`; with none, or for a started call (no `.await`), it is V0207. `T` is any type `json::parse` reads, with the same attribute checks (V0209), and a Rust type from a `.rs` module or a type of another package is V0210. The generated Rust writes `T` after the name, as in `crate::db::Store::one::<User>(&db, ..)`. The result is a new value the caller owns; a program needs `varyk-std` for such a function as for `varyk_std::Error` |
-| `&T` parameter of a `pub fn` or method with one type parameter `T: serde::Serialize + ?Sized` (or `varyk_std::serde::Serialize + ?Sized`), written inline by that full path, and `T` nowhere else | any type `json::stringify` writes, typed from the argument: a number, `bool`, `string`, an `Option`, `Vec`, or `HashMap` of those, or a struct or enum of the current package, with the same attribute checks (V0209); a Rust type from a `.rs` module or a type of another package is V0210. The argument of an awaited or plain call is read, not given away, as `json::stringify`'s is, so a name passed stays usable; a started call (no `.await`) gives it to its task, as it gives every argument (see [Two ways to call](#two-ways-to-call)). The generated Rust lends it as `json::stringify` does, where a string may be a `&str`, which is why the bound needs `?Sized` (V0108 without it). Rust works out `T` from the argument, so nothing is written after the name. A program needs `varyk-std` for such a function as for `varyk_std::Error` |
-| `&T` or `&mut T` where `T` is one of the value types above but `String` | borrowed, or `mut` |
+| `&T` parameter of a `pub fn` or method with one type parameter `T: serde::Serialize + ?Sized` (or `varyk_std::serde::Serialize + ?Sized`), written inline by that full path, and `T` nowhere else | any type `json::stringify` writes, typed from the argument: a number, `bool`, `string`, `Time`, `Uuid`, `Bytes`, an `Option`, `Vec`, or `HashMap` of those, or a struct or enum of the current package, with the same attribute checks (V0209); a Rust type from a `.rs` module or a type of another package is V0210. The argument of an awaited or plain call is read, not given away, as `json::stringify`'s is, so a name passed stays usable; a started call (no `.await`) gives it to its task, as it gives every argument (see [Two ways to call](#two-ways-to-call)). The generated Rust lends it as `json::stringify` does, where a string may be a `&str`, which is why the bound needs `?Sized` (V0108 without it). Rust works out `T` from the argument, so nothing is written after the name. A program needs `varyk-std` for such a function as for `varyk_std::Error` |
+| `&T` or `&mut T` where `T` is one of the value types above but `String`, `Time`, `Uuid`, and `Bytes` | borrowed, or `mut` |
 | `()` return, or none | nothing |
 
 Any other signature cannot be called: `&String` (take `&str` instead),
@@ -2312,38 +2461,42 @@ generics other than the two type parameters just above (two of them, both
 kinds at once, a `where` clause, another bound, a lifetime parameter, a
 `DeserializeOwned` `T` in a parameter or elsewhere in the return, or a
 `Serialize` `T` anywhere but once as `&T` in one parameter; the note says
-which), lifetimes (`&'static str`
-anywhere but a parameter included), trait objects, `HashMap` and other `std` types,
-`varyk_std::Value` anywhere but in a last `Vec<varyk_std::Value>` parameter,
-references in the return type other than the ones just above (return an
-owned value such as `String`),
+which), lifetimes (`&'static str` anywhere but a parameter included), trait
+objects, `HashMap` and other `std` types, `varyk_std::Value` anywhere but
+in a last `Vec<varyk_std::Value>` parameter, references in the return type
+other than the ones just above (return an owned value such as `String`),
 `()` inside another type (`Result<(), String>`; use `bool` or a struct
 instead), `varyk_std::Error` anywhere but as the error of the returned
-`Result` or as the whole return (or as a bare `Error` a `use` brings in: write the full path),
-and unknown types. Calling such a function is an error that shows its Rust
-signature and what to change. `unsafe fn`, `const fn`, trait
-methods, names a `pub use` brings in, and functions, methods, structs, and
-enums marked `pub(crate)`, `pub(super)`, `pub(self)`, or `pub(in ..)` are
-not imported: Varyk imports only plain `pub`. A function, method, struct,
-or enum behind `#[cfg(..)]` or `#[cfg_attr(..)]`, or a function or method
-with a parameter or `self` behind one, may not exist in the build, so it is
-not imported either, and neither is a `#[test]` function. Calling or naming any of these is an error with a note
-saying why; for a `pub(..)` function the note says to make it plain `pub`. A module that uses a glob import
-(`use ...::*`) cannot expose functions with these built-in parameter or
-return types, because the glob could redefine any of their names; replace
-the glob with the names the file needs. The same goes for a top-level macro
-call in the file that could define names: a call of a `macro_rules!` of the
-same file (at any depth, inside an inline module too) whose text, or the
-text the call gives it, includes `struct`, `enum`, `union`, `type`, `use`,
-`trait`, `fn`, `mod`, `impl`, or `Drop`, or calls another macro; and a call
-of any macro not defined in the file (`crate::make!()`, a macro a `use`
-brings in, one of another file or crate, or any after `#[macro_use] extern
-crate`), except `thread_local!`. Such a call could define any name, so the
-error names the macro and its line; move the macro and its uses to another
-`.rs` file. A call of a macro of the file's own where none of that text
-has those words or calls a macro, a call of `thread_local!` whose text has
-none of those words, and a `macro_rules!` that is never called as an item
-change nothing.
+`Result` or as the whole return (or as a bare `Error` a `use` brings in:
+write the full path), `&varyk_std::Time` and `&varyk_std::Uuid` (take them
+by value), `&mut varyk_std::Bytes` (take `&varyk_std::Bytes` or
+`varyk_std::Bytes`), a borrowed one of the three returned (return it by
+value), a bare `Time`, `Uuid`, or `Bytes` a `use` brings in (write the full
+path, as in `varyk_std::Time`), and unknown types. Calling such a function
+is an error that shows its Rust signature and what to change. `unsafe fn`,
+`const fn`, trait methods, names a `pub use` brings in, and functions,
+methods, structs, and enums marked `pub(crate)`, `pub(super)`, `pub(self)`,
+or `pub(in ..)` are not imported: Varyk imports only plain `pub`. A
+function, method, struct, or enum behind `#[cfg(..)]` or `#[cfg_attr(..)]`,
+or a function or method with a parameter or `self` behind one, may not
+exist in the build, so it is not imported either, and neither is a
+`#[test]` function. Calling or naming any of these is an error with a note
+saying why; for a `pub(..)` function the note says to make it plain `pub`.
+A module that uses a glob import (`use ...::*`) cannot expose functions
+with these built-in parameter or return types, because the glob could
+redefine any of their names; replace the glob with the names the file
+needs. The same goes for a top-level macro call in the file that could
+define names: a call of a `macro_rules!` of the same file (at any depth,
+inside an inline module too) whose text, or the text the call gives it,
+includes `struct`, `enum`, `union`, `type`, `use`, `trait`, `fn`, `mod`,
+`impl`, or `Drop`, or calls another macro; and a call of any macro not
+defined in the file (`crate::make!()`, a macro a `use` brings in, one of
+another file or crate, or any after `#[macro_use] extern crate`), except
+`thread_local!`. Such a call could define any name, so the error names the
+macro and its line; move the macro and its uses to another `.rs` file. A
+call of a macro of the file's own where none of that text has those words
+or calls a macro, a call of `thread_local!` whose text has none of those
+words, and a `macro_rules!` that is never called as an item change nothing.
 
 A `pub async fn` and an `async` method are imported under the same rules
 and called as a Varyk async function is: awaited with `.await`, or started
@@ -2473,7 +2626,11 @@ imported; naming one is an error that says why.
 A `pub enum` with no type or lifetime parameters, whose variants are all
 unit or tuple variants with types from the table above, is a Varyk enum:
 nameable, constructible, and matchable exactly like one declared in Varyk,
-including exhaustiveness.
+including exhaustiveness. A variant may hold a `varyk_std::Time`,
+`varyk_std::Uuid`, or `varyk_std::Bytes`, written by that full path, as
+`varyk-http`'s WebSocket message holds `Text(String)` or
+`Binary(varyk_std::Bytes)`; a `match` binds it as a `Time`, `Uuid`, or
+`Bytes`.
 
 ```rust
 // kind.rs
@@ -2647,7 +2804,11 @@ first back as a `User`. Each shape does one thing:
 - `varyk_std::Error` is Varyk's own `Error`, so `?` and `e.message()` work;
   a function returning a bare `varyk_std::Error` makes one, for a facade
   that makes an error of its own (`http::bad_request` is Varyk over
-  `Error::with_status`, not such a function).
+  `Error::with_status`, not such a function);
+- `varyk_std::Time`, `varyk_std::Uuid`, and `varyk_std::Bytes` are Varyk's
+  `Time`, `Uuid`, and `Bytes`, so a facade takes and gives them, holds them
+  in `pub` fields and enum variants, and reads a `Bytes` it is lent as
+  `&varyk_std::Bytes`.
 
 The `pub use` lines (see [Files and modules](#files-and-modules)) give the
 program the short names `store::open` and `store::Store`. The real
@@ -3060,33 +3221,33 @@ Every error has a code. A code is never reused for a different meaning.
 | V0010 | `&x` or `&mut x` written at a call; Varyk works out references itself |
 | V0011 | `&T` or `&mut T` written in a parameter type or a return type; write `name: T` or `mut name: T`, and `-> T` (`-> string` for `-> &str`) |
 | V0012 | lifetime syntax such as `<'a>` or `&'a T`; lifetimes are worked out by the compiler |
-| V0100 | unknown name, or a variant, method, or associated function the type does not have; for `Vec`, `string`, `Option`, `Result`, `HashMap`, and a chain the message lists their calls; for an imported struct, a note says when the `.rs` file has the method but Varyk does not import it (a trait method, `unsafe`, `const`, behind `#[cfg]`, or `pub(crate)` or another `pub(..)`), and likewise for a function or `pub use` name of a `.rs` module and for any method of an imported enum, which Varyk does not import yet; a path into an inline `mod` of a `.rs` file, whose items Varyk does not read, says so; also naming a variant of an opaque imported enum, saying why it is opaque; `.clone()` on a number or `bool`, which is copied on use |
-| V0101 | unknown type, or `Option`, `Result`, `Vec`, or `HashMap` with the wrong number of types, a `HashMap` key type that is not an integer type, `bool`, or `string`, or a Rust struct or enum Varyk does not import (a tuple or unit struct, one with type or lifetime parameters, a `#[repr(packed)]` struct or one with no fixed size, one behind `#[cfg]`, or one marked `pub(crate)` or another `pub(..)`), or a type a `pub use` of the `.rs` file brings in, saying why |
+| V0100 | unknown name, or a variant, method, or associated function the type does not have; for `Vec`, `string`, `Option`, `Result`, `HashMap`, and a chain the message lists their calls; for an imported struct, a note says when the `.rs` file has the method but Varyk does not import it (a trait method, `unsafe`, `const`, behind `#[cfg]`, or `pub(crate)` or another `pub(..)`), and likewise for a function or `pub use` name of a `.rs` module and for any method of an imported enum, which Varyk does not import yet; a path into an inline `mod` of a `.rs` file, whose items Varyk does not read, says so; also naming a variant of an opaque imported enum, saying why it is opaque; `.clone()` on a number, `bool`, `Time`, or `Uuid`, which is copied on use |
+| V0101 | unknown type, or `Option`, `Result`, `Vec`, or `HashMap` with the wrong number of types, a `HashMap` key type that is not an integer type, `bool`, `string`, or `Uuid` (a `Time` or `Bytes` among them), or a Rust struct or enum Varyk does not import (a tuple or unit struct, one with type or lifetime parameters, a `#[repr(packed)]` struct or one with no fixed size, one behind `#[cfg]`, or one marked `pub(crate)` or another `pub(..)`), or a type a `pub use` of the `.rs` file brings in, saying why |
 | V0102 | unknown field, of a struct or of a variant with named fields, in a value or a pattern |
 | V0103 | a name defined more than once (a method included, a `use` or `pub use` name the module already declares or brings in, a field of a variant, a field named twice in a value or a pattern, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
 | V0104 | a module file that is missing, present as both `.vr` and `.rs` (in a Varyk package this build uses, the `.vr` is loaded and the `.rs` ignored instead) or as both `shop.vr` and `shop/mod.vr`, unreadable, a `.rs` file that cannot be parsed as Rust, or named `main` or `lib` (or `bin` in the entry file), in any capitalization; a `.rs` file that uses a crate not in `[dependencies]` (or only in `[dev-dependencies]`, or any crate in a single file) in a `use` or `extern crate` item (a crate named only in a path, `other::f()`, is rustc's to report, at build), declares a module of its own, or uses `include!`, shown at that line of the `.rs` file |
 | V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see (in a library, the packages that use it included: a `pub` item in `pub` modules, or a `pub` function, method, or field of a `.rs` module they can reach, naming a type in a private module); a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub`; a `pub use` of an item without `pub`, or of one in a module that is not `pub` all the way from the root; a function named as a route's handler or a hook that is not visible from the route or hook call |
 | V0106 | a missing `fn main()`, or a `main` with parameters or returning anything but nothing or a `Result` whose error is `Error`, `main` defined in a library's `src/lib.vr`, a call to an async `main` or to a `main` that returns a `Result`, or `main` named as a route's handler or a hook |
 | V0107 | `String` or `str` written where `string` is meant |
-| V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change, for a generic one which part is outside the two type parameter shapes of "Calling Rust" (a `Serialize` bound without `?Sized` says to add it). Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path, and a type in a `.rs` file with a glob `use` or a macro that could define names |
+| V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change, for a generic one which part is outside the two type parameter shapes of "Calling Rust" (a `Serialize` bound without `?Sized` says to add it). Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path (for `Time`, `Uuid`, and `Bytes` the note gives `varyk_std::Time` and the like), a `&varyk_std::Time`, `&varyk_std::Uuid`, or `&mut varyk_std::Bytes` parameter or a borrowed one of the three returned (the note gives the accepted form), and a type in a `.rs` file with a glob `use` or a macro that could define names |
 | V0109 | a struct or enum that contains itself, directly or through other structs, enums, `Option`, or `Result`; a `Vec` or `HashMap` breaks the cycle |
 | V0110 | a `use` naming a crate this compiler recognizes by name (`std`, `core`, `alloc`), or a path or a `use` starting at a dependency in `[dependencies]` that is a Rust crate and not a Varyk package; call a crate from a `.rs` module in the package instead |
 | V0111 | a path Varyk cannot follow: `super` in the entry file, a `use` ending at an enum variant or at a type's method or associated function, a `use` whose leading name, or whose only name (`use shop;`), is a module declared elsewhere in the package (write it from `crate::` or `super::`), or a `use` whose leading name another `use` made; a `use` of a package's name alone (`use units;`), which can already be used; when its leading name is also a dependency that a module or a standard name hides, a note gives the `Cargo.toml` line that renames the dependency (as V0100 and V0113 do) |
 | V0112 | an attribute Varyk does not have (the message lists the four; `derive` gets a note that `.clone()`, `==`, and JSON need none), one in a place it cannot go (the note says where it goes), the same attribute twice on one item, or a value missing (`#[rename]`, `#[default]`) or not expected (`#[skip(1)]`, `#[test(1)]`) |
-| V0113 | the name `Error`, the standard error type, or `Task` or `Shared`, the standard types of async code, given to a struct, an enum, a module, or a `use`, or to a `pub` struct or enum of a `.rs` module; `json`, `env`, `log`, or `time`, the standard modules, given to a module, a struct, an enum, or a `use`, or a `use` of one (`use json;`, `use json::parse;`); `assert` or `assert_eq` given to a function or a `use`; a function, method, struct, enum, module, or `use` name starting with `varyk_`, kept for what Varyk adds to the Rust it writes |
+| V0113 | the name `Error`, the standard error type, `Task` or `Shared`, the standard types of async code, or `Time`, `Uuid`, or `Bytes`, the standard types for a point in time, an id, and a run of bytes, given to a struct, an enum, a module, or a `use`, or to a `pub` struct or enum of a `.rs` module; `json`, `env`, `log`, or `time`, the standard modules, given to a module, a struct, an enum, or a `use`, or a `use` of one (`use json;`, `use json::parse;`); `assert` or `assert_eq` given to a function or a `use`; a function, method, struct, enum, module, or `use` name starting with `varyk_`, kept for what Varyk adds to the Rust it writes |
 | V0114 | a `#[test]` function with parameters or a return type, a call to or `use` of one, one named as a route's handler or a hook, or `main` of the entry file marked `#[test]`; `assert` or `assert_eq` outside a `#[test]` function |
 | V0115 | a value whose type is, or holds, a struct or enum declared in a Varyk package this package does not list in `[dependencies]`, or in another version of one it does (two versions are two packages; the note names both); the note gives the line for `Cargo.toml` |
-| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool`; `Task::all` or `Task::all_settled` given anything but a `Vec` of tasks, and `Task::all_settled` on tasks that do not give a `Result`; a `Shared` given where the struct it holds is expected; an argument of `http::App::new` that is not a `Shared`; a `Result` with `Error` where its value is wanted, with a help that adds `?` in a function that returns a `Result` with `Error` |
+| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `<`, `<=`, `>`, or `>=` on anything but numbers and `Time`s (a `Uuid` or `Bytes` among them), and arithmetic on a `Time`; `sort` on floats, `Uuid`s, `Bytes`, or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number, `bool`, `Time`, or `Uuid` (`Bytes` among them); `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool`; `Task::all` or `Task::all_settled` given anything but a `Vec` of tasks, and `Task::all_settled` on tasks that do not give a `Result`; a `Shared` given where the struct it holds is expected; an argument of `http::App::new` that is not a `Shared`; a `Result` with `Error` where its value is wanted, with a help that adds `?` in a function that returns a `Result` with `Error` |
 | V0201 | wrong number of arguments, or of values in an enum value; a variant value with named fields that leaves one out, or with the wrong kind of brackets; a closure with more or fewer than one parameter |
 | V0202 | `println!`, `format!`, or a `log` call with the wrong number of `{}`, or something other than `{}` in braces; a `log` call whose text is not a string literal written in quotes |
-| V0203 | `{}` used on anything but a number, `bool`, string, or `Error`; `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file; `==` or `!=` on a `Shared`, or on a type holding one |
+| V0203 | `{}` used on anything but a number, `bool`, string, `Error`, `Time`, or `Uuid` (a `Bytes` among them, whose note names `to_text` and `to_base64`); `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file; `==` or `!=` on a `Shared`, or on a type holding one |
 | V0204 | a `match` that does not handle every value: a variant at any depth, a `bool` value, or, on a number or a string, the catch-all it always needs; the message names a value shape it misses |
 | V0205 | a pattern that does not fit the value: a variant of another type, the wrong number of positions in a variant, a variant pattern leaving out a named field, a literal or range of another type or not fitting it, a range whose ends are reversed, a float literal, or a string literal inside another pattern; an arm that can never run, such as one after `_` or a name; or a `match`, `if let`, or `while let` on something that is not an enum, `Option`, `Result`, number, `bool`, or string |
 | V0206 | `?` in a function that does not return a `Result` or an `Option`, on a `Result` in a function returning an `Option` or the reverse, or on a value that is not a `Result` with the function's error type |
 | V0207 | a `None`, `Vec::new()`, `HashMap::new()`, empty `vec![]`, `Ok`, `Err`, `parse()`, `json::parse(..)`, `env::parse()`, or a call of a `.rs` function whose result type has a `DeserializeOwned` type parameter whose type cannot be worked out where it is written (a started call of one included), `Err(e)?;`, `text.parse().ok()`, and a closure giving one with nothing to take its type from included; write the type in a `let` |
 | V0208 | a value that must be used where it is made: an `Option` from `get`, or from `find` on a chain of borrowed items, holding part of a stored value, stored in a `let`, passed, returned, used with `?`, given any method, or named whole by a pattern (look inside it with `match` or `if let`); an unfinished chain anywhere but as the value the next call of the chain is made on or the head of a `for` (finish the chain there) |
 | V0209 | a `#[rename]` value that is not a string in quotes, or is empty; a `#[default]` value that does not fit its field's type (`"x"` on an `i32`, `300` on a `u8`, `1` on an `f64`); `#[default]` on an `Option` field or on a field that is not a number, `string`, or `bool`; on a type a `json` call reaches, a skipped field with no `#[default]` that is not an `Option` when the type is read, or two fields that are not skipped, or two variants, with the same key once renamed, and, on a type `env::parse` reaches, two fields whose upper-cased keys are the same variable |
-| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, a call of a `.rs` function with a `DeserializeOwned` type parameter, the argument of a `.rs` function's `&T` parameter with `T: Serialize`, or a route whose handler's body or return type is one, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, or `HashMap`): an enum with a variant that carries data, a `HashMap` whose key is not `string`, `Error`, a Rust type from a `.rs` module, a type declared in another Varyk package (convert it in that package), a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
+| V0210 | a type that cannot go through JSON at a `json::parse` or `json::stringify` call, a call of a `.rs` function with a `DeserializeOwned` type parameter, the argument of a `.rs` function's `&T` parameter with `T: Serialize`, or a route whose handler's body or return type is one, or be read from the environment at an `env::parse` call (a `T` that is not a struct, or a field that is a struct, `Vec`, `HashMap`, or `Bytes`): an enum with a variant that carries data, a `HashMap` whose key is not `string` (a `Uuid` key included), `Error`, a Rust type from a `.rs` module, a type declared in another Varyk package (convert it in that package), a `Shared`, or a `Result`, anywhere inside it apart from skipped fields; the message names the part in the way |
 | V0211 | a call to an async function, or `.await`, in a function that is not `async`; `.await` inside a closure |
 | V0212 | `.await` after something that is not a call to an async function, `Task::all`, `Task::all_settled`, or a name holding a task; `Task::all` or `Task::all_settled` without `.await` |
 | V0213 | a started call anywhere but a `let` with a name, the value `.detach()` is called on, a `vec!` element, or the value of a collected `map`'s closure, `let _ =` included; a name holding a task, or a `Vec` of tasks, that nothing awaits, detaches, or gives to `Task::all` or `Task::all_settled`: its task would be thrown away |
@@ -3094,8 +3255,8 @@ Every error has a code. A code is never reused for a different meaning.
 | V0215 | a name holding a task used other than by `.await` or `.detach()`, or a `Vec` of tasks used other than by `Task::all` or `Task::all_settled` (indexed, given `push`, looped over, passed, returned, given to another name, or followed by `.await`); `Task` written as a type |
 | V0216 | `Shared` of anything but a struct, at `Shared::new` or written, or `Shared` written anywhere but a parameter's or a `let`'s type (a field, a return type, or inside another type) |
 | V0217 | an argument to a `.rs` parameter of type `&'static str`, which takes only text written in the program, that is not a string literal (a name, a parameter, or a `format!`; pass the values after the text instead); a route's path or a `before_on` prefix that is not a string literal |
-| V0218 | a value passed after the other arguments to a `.rs` function whose last parameter is `Vec<varyk_std::Value>`, of a type that cannot be one: anything but `bool`, `string`, `f32`, `f64`, `i8` to `i64`, `u8` to `u32`, or an `Option` of one of those (a struct, a `Vec`, a `HashMap`, a `u64`, or a `usize`, for which the help writes `as i64`) |
-| V0219 | a route whose path and handler do not fit, one diagnostic per problem at the route call: a `{name}` of the path with no parameter, a parameter that gets no value from the request (an `http::Response`, `http::App`, or `http::Client` among them), a body on `get` or `delete`, two bodies, two states, two parameters of one type the package gives (`http::Request`), a `Shared` of another type than the app's state, or a path parameter that is not an integer, `bool`, or `string` |
+| V0218 | a value passed after the other arguments to a `.rs` function whose last parameter is `Vec<varyk_std::Value>`, of a type that cannot be one: anything but `bool`, `string`, `f32`, `f64`, `i8` to `i64`, `u8` to `u32`, `Time`, `Uuid`, `Bytes`, or an `Option` of one of those (a struct, a `Vec`, a `HashMap`, a `u64`, or a `usize`, for which the help writes `as i64`) |
+| V0219 | a route whose path and handler do not fit, one diagnostic per problem at the route call: a `{name}` of the path with no parameter, a parameter that gets no value from the request (an `http::Response`, `http::App`, or `http::Client` among them), a body on `get` or `delete`, two bodies, two states, two parameters of one type the package gives (`http::Request`), a `Shared` of another type than the app's state, or a path parameter that is not an integer, `bool`, `string`, `Time`, or `Uuid` (a `Bytes` is neither a path nor a query parameter) |
 | V0220 | a route's handler or a hook of the wrong shape: not an async function, a method or associated function, a Rust function, a function of another package, a closure, or a local; a handler's return type outside the list (nothing, a type JSON can hold, an `Option` of one, `http::Response`, or a `Result` of one of those with `Error`); or a hook whose parameters are not, in order, the request (`http::Request`, not `mut`), for `after` the response (`http::Response`), then optionally the app's state as a `Shared`, or whose return is not `Result<bool, Error>` for `before` and `before_on` and nothing for `after` |
 | V0221 | a route or hook call on an app that is not a local bound to `App::new` in the same function (a parameter, a field, another local), inside a loop, a loop's condition or `while let` value, or a closure, or used as a value rather than a statement of its own; or an assignment to any name holding an app |
 | V0222 | a route path that is not valid (one not starting with `/`, an empty segment, a trailing `/` other than `"/"` itself, a character other than ASCII letters, digits, `-`, `_`, `.`, and `~` in a literal segment, a `{name}` that is not an identifier, or a name twice), a `before_on` prefix that is not such a path or holds a `{name}`, or a method and path the app already has a route for |
@@ -3103,7 +3264,7 @@ Every error has a code. A code is never reused for a different meaning.
 | V0301 | changing a `let` name that was declared without `mut`, or a name a `match` pattern or a `for` made, by assigning to it or calling `push` or `pop` on it; also changing, inside a closure, a name from outside it or the closure's parameter |
 | V0302 | a `let` name without `mut` passed to a `mut` parameter or used to call a `mut self` method or to add a route or a hook |
 | V0303 | a parameter without `mut`, or a name a `match` pattern or a `for` made, passed to a `mut` parameter or used to call a `mut self` method; also, inside a closure, a name from outside it or the closure's parameter so passed |
-| V0304 | a value the function only borrows, stored in a struct, an element, an enum value, `Some`, `Ok`, `Err`, or a `vec!`, passed to `push`, used with `?`, or returned; a stored `Option` or `Result` with more than numbers and `bool`s inside, used up by `unwrap_or`, `ok_or`, or `ok`; returns that mix part of a parameter with something new, or that are part of a `let` of the function, of a number or `bool` parameter or `for` variable, of a `mut` parameter, or of a parameter of a function that calls itself; also a binding of a `match` on an enum that runs code when it is thrown away (an `impl Drop`), kept or given away; a name from outside a closure kept inside it, or given by a closure of `map` or `map_err`, as is part of its parameter; `collect` on a chain of borrowed items (copy them with `.map(\|w\| w.clone())`); the item a closure of `filter`, `any`, `all`, or `find` looks at, kept or given away; a chain's `map` closure giving part of an owned item, or something new beside a part; a value the function only borrows given to a started call, whose task keeps it, or a task detached inside a closure; for text the fix is `.clone()` |
+| V0304 | a value the function only borrows, stored in a struct, an element, an enum value, `Some`, `Ok`, `Err`, or a `vec!`, passed to `push`, used with `?`, or returned; a stored `Option` or `Result` with more than numbers and `bool`s inside, used up by `unwrap_or`, `ok_or`, or `ok`; returns that mix part of a parameter with something new, or that are part of a `let` of the function, of a number or `bool` parameter or `for` variable, of a `mut` parameter, or of a parameter of a function that calls itself; also a binding of a `match` on an enum that runs code when it is thrown away (an `impl Drop`), kept or given away; a name from outside a closure kept inside it, or given by a closure of `map` or `map_err`, as is part of its parameter; `collect` on a chain of borrowed items (copy them with `.map(\|w\| w.clone())`); the item a closure of `filter`, `any`, `all`, or `find` looks at, kept or given away; a chain's `map` closure giving part of an owned item, or something new beside a part; a value the function only borrows given to a started call, whose task keeps it, or a task detached inside a closure; for text and `Bytes` the fix is `.clone()` |
 | V0305 | a value used after it was given away, to a started call's task among others, or a task awaited or detached twice, or a `Vec` of tasks given to `Task::all` or `Task::all_settled` twice |
 | V0306 | a later argument changes or gives away a value that an earlier argument of the same call still borrows, or uses the value a method is called on while the method may change it, as in `v.push(v.len())`, or an index changes the `Vec` it indexes, as in `v[g(v)]` with `g` taking `mut v` |
 | V0307 | a value changed or given away while another name for part of it is still used later (a name bound inside a looked-into `get` or `find`, or the result of a call returning part of it, included), or inside a `for` that goes over it or whose head reads it (the argument of `split`, or a name a closure of a chain in the head reads) |

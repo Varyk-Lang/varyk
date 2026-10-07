@@ -19,7 +19,7 @@
 use varyk_syntax::{FixIt, Span};
 
 use super::returns::Classification;
-use super::slots::BORROWED_NOTE;
+use super::slots::{BORROWED_NOTE, clones};
 use super::{FnAnalyzer, borrowed_receiver, place_root, push_unique, roots};
 use crate::builtins::{Builtin, Owner, ResultKind};
 use crate::diagnostics::{Diagnostic, codes};
@@ -336,7 +336,8 @@ impl FnAnalyzer<'_> {
 
     /// V0304 for `call`, a `collect` of `incoming`, when the items are
     /// borrowed: a `Vec` of borrowed values has no Varyk type (M4 spec
-    /// 3.3). Text is copied with `.map(|w| w.clone())`, the fix-it.
+    /// 3.3). Text and `Bytes` are copied with `.map(|w| w.clone())`, the
+    /// fix-it.
     fn collected(&mut self, call: &HirExpr, receiver: &HirExpr, incoming: &Items) {
         let ItemKind::Borrowed(roots) = &incoming.kind else {
             return;
@@ -346,8 +347,8 @@ impl FnAnalyzer<'_> {
             None => "parts of the text they come from".to_string(),
         };
         let at = Span::new(call.span.file, receiver.span.end, call.span.end);
-        let text = item_type(&receiver.ty) == Ty::String;
-        let (message, note) = if text {
+        let copied = clones(&item_type(&receiver.ty));
+        let (message, note) = if copied {
             (
                 format!(
                     "these items are {parts}, and a `Vec` must own what it holds; copy them \
@@ -367,7 +368,7 @@ impl FnAnalyzer<'_> {
         let mut diagnostic = Diagnostic::new(codes::V0304, at, message)
             .with_note(note)
             .with_note(BORROWED_NOTE);
-        if text {
+        if copied {
             let end = Span::new(call.span.file, receiver.span.end, receiver.span.end);
             diagnostic = diagnostic.with_fix_it(FixIt {
                 span: end,

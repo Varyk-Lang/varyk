@@ -1,0 +1,62 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+mod ext;
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct Upload {
+    data: ::varyk_std::Bytes,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn size(data: &::varyk_std::Bytes) -> usize {
+    data.len()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn body(data: &::varyk_std::Bytes) -> &::varyk_std::Bytes {
+    data
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn content(upload: &Upload) -> &::varyk_std::Bytes {
+    &upload.data
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn copy(data: &::varyk_std::Bytes) -> ::varyk_std::Bytes {
+    data.clone()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn make_upload(data: &::varyk_std::Bytes) -> Upload {
+    Upload { data: body(data).clone() }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn forward(message: &crate::ext::Message) -> usize {
+    match message {
+        crate::ext::Message::Binary(data) => crate::ext::keep(data.clone()).len(),
+        crate::ext::Message::Text(text) => text.len(),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let data = ::varyk_std::Bytes::from_text("hello");
+    ::std::println!("{}", size(&data));
+    let moved = data;
+    let upload = Upload { data: moved };
+    let inner = content(&upload);
+    ::std::println!("{}", crate::ext::size(inner));
+    let same = body(inner);
+    let copied = copy(same);
+    let kept = crate::ext::keep(copied);
+    ::std::println!("{}", kept.to_base64());
+    let again = make_upload(&kept);
+    ::std::println!("{}", size(&again.data));
+    ::std::println!("{}", forward(&crate::ext::Message::Binary(::varyk_std::Bytes::from_text("abc"))));
+    ::std::println!("{}", forward(&crate::ext::Message::Text("hi".to_string())));
+}

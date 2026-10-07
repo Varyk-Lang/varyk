@@ -651,6 +651,9 @@ pub(super) fn rust_type(program: &HirProgram, ty: &Ty, from: ModuleId) -> String
         // In full, so that no module of the program can shadow it (M5a
         // spec 7.5).
         Ty::Error => "::varyk_std::Error".to_string(),
+        Ty::Time => "::varyk_std::Time".to_string(),
+        Ty::Uuid => "::varyk_std::Uuid".to_string(),
+        Ty::Bytes => "::varyk_std::Bytes".to_string(),
         // Never spelled for a program `check` accepts (V0215).
         Ty::Task(t) => format!("::varyk_std::Task<{}>", rust_type(program, t, from)),
         // Std's own pointer, in full (milestone 5b1 spec 5).

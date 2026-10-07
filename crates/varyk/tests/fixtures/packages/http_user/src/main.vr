@@ -8,6 +8,9 @@
 // GET /search?prefix=A -> 400 {"error":"the query parameter `exact` is missing"}
 // GET /search?prefix=Bo&exact=true -> 200 ["Bo"]
 // GET /search?exact=true -> 400 {"error":"an exact search needs a prefix"}
+// GET /orders/0192e1c4-5b8a-7c3d-9e4f-0123456789ab?since=2026-10-07T12:00:00Z -> 200 order 0192e1c4-5b8a-7c3d-9e4f-0123456789ab since 2026-10-07T12:00:00Z
+// GET /orders/0192e1c4-5b8a-7c3d-9e4f-0123456789ab -> 200 order 0192e1c4-5b8a-7c3d-9e4f-0123456789ab
+// GET /orders/42 -> 400 {"error":"the path parameter `id` cannot be read from `42`"}
 // POST /users -> 201 {"id":3,"name":"Cy"}
 // POST /users -> 400 {"error":"a user needs a name"}
 // POST /users -> 400 {"error":"the body `user` is not valid: missing field `name` at line 1 column 13"}
@@ -89,6 +92,15 @@ async fn search(state: Shared<State>, prefix: Option<string>, exact: bool) -> Re
     Ok(names)
 }
 
+// A `Uuid` path parameter and an `Option<Time>` query parameter: an id
+// that does not read as a `Uuid` is a 400, the handler not called.
+async fn get_order(id: Uuid, since: Option<Time>) -> http::Response {
+    match since {
+        Some(at) => http::Response::text(format!("order {} since {}", id, at)),
+        None => http::Response::text(format!("order {}", id)),
+    }
+}
+
 // A body, answered with a 201.
 async fn create_user(user: NewUser, state: Shared<State>) -> Result<http::Response, Error> {
     if user.name.is_empty() {
@@ -151,6 +163,7 @@ fn build_app(state: Shared<State>) -> http::App {
     app.get("/users/{id}", get_user);
     app.get("/names/{name}", find_by_name);
     app.get("/search", search);
+    app.get("/orders/{id}", get_order);
     app.post("/users", create_user);
     app.put("/users/{id}", rename);
     app.get("/echo", echo);
@@ -196,6 +209,9 @@ async fn main() {
     send(app, "GET", "/search?prefix=A", "").await;
     send(app, "GET", "/search?prefix=Bo&exact=true", "").await;
     send(app, "GET", "/search?exact=true", "").await;
+    send(app, "GET", "/orders/0192e1c4-5b8a-7c3d-9e4f-0123456789ab?since=2026-10-07T12:00:00Z", "").await;
+    send(app, "GET", "/orders/0192e1c4-5b8a-7c3d-9e4f-0123456789ab", "").await;
+    send(app, "GET", "/orders/42", "").await;
     send(app, "POST", "/users", "{\"name\": \"Cy\"}").await;
     send(app, "POST", "/users", "{\"name\": \"\"}").await;
     send(app, "POST", "/users", "{\"nom\": \"Cy\"}").await;

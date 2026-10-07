@@ -187,8 +187,13 @@ impl Value {
 impl<'de> Deserializer<'de> for Value {
     type Error = DeError;
 
+    // A field's own deserializer (`Time`'s, `Uuid`'s) gives a message
+    // about the text; the variable's name goes before it.
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, DeError> {
-        visitor.visit_string(self.text)
+        let variable = self.variable;
+        visitor
+            .visit_string(self.text)
+            .map_err(|e: DeError| DeError(format!("`{variable}`: {}", e.0)))
     }
 
     number! {
@@ -501,6 +506,40 @@ mod tests {
             "`SMALL` is not a number: `NaN`"
         );
         assert_eq!(message::<F>(&[("SMALL", "0")], &[]), "ok F { small: 0.0 }");
+    }
+
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct Stamped {
+        started: crate::Time,
+        request: Option<crate::Uuid>,
+    }
+
+    #[test]
+    fn a_time_and_an_optional_uuid_read() {
+        let id = "01890a5d-ac96-774b-bcce-b302099a8057";
+        assert_eq!(
+            message::<Stamped>(&[("STARTED", "2026-10-07T14:00:00+02:00")], &[]),
+            "ok Stamped { started: 2026-10-07T12:00:00Z, request: None }"
+        );
+        assert_eq!(
+            message::<Stamped>(&[("STARTED", "2026-10-07T12:00:00Z"), ("REQUEST", id)], &[]),
+            format!("ok Stamped {{ started: 2026-10-07T12:00:00Z, request: Some({id}) }}")
+        );
+    }
+
+    #[test]
+    fn a_bad_time_or_uuid_names_its_variable() {
+        assert_eq!(
+            message::<Stamped>(&[("STARTED", "yesterday")], &[]),
+            "`STARTED`: `yesterday` is not a time like 2026-10-07T12:00:00Z"
+        );
+        assert_eq!(
+            message::<Stamped>(
+                &[("STARTED", "2026-10-07T12:00:00Z"), ("REQUEST", "7")],
+                &[]
+            ),
+            "`REQUEST`: `7` is not a Uuid like 01890a5d-ac96-774b-bcce-b302099a8057"
+        );
     }
 
     #[test]

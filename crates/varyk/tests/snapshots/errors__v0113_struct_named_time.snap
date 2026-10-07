@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `Time` is already taken by the standard type of a point in time
+ --> crates/varyk/tests/fixtures/errors/v0113_struct_named_time/main.vr:1:8
+  |
+1 | struct Time {
+  |        ^^^^ the name `Time` is already taken by the standard type of a point in time
+  |
+  = note: `Time` is always the standard one wherever it is written, so a type of your own needs another name, such as `Moment` or `Timestamp`

@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0200]: `parse` reads a number, `bool`, `Time`, or `Uuid` from text, and cannot make a `Bytes`
+ --> crates/varyk/tests/fixtures/errors/v0200_parse_into_bytes/main.vr:3:38
+  |
+3 |     let data: Result<Bytes, Error> = text.parse();
+  |                                      ^^^^^^^^^^^^ `parse` reads a number, `bool`, `Time`, or `Uuid` from text, and cannot make a `Bytes`

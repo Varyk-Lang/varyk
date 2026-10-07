@@ -5,6 +5,7 @@ pub struct Acc {
 pub enum Guard {
     Held(String),
     Box(Acc),
+    Data(varyk_std::Bytes),
     Empty,
 }
 

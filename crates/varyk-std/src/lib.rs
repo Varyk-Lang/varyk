@@ -1,23 +1,29 @@
 //! The runtime that generated Varyk programs call into. Generated Rust
 //! names only this crate (`::varyk_std::...`), never serde or tracing.
 
+mod buffer;
 mod dotenv;
 pub mod env;
 mod error;
+mod ids;
 pub mod json;
 mod log;
 mod parse;
 mod runtime;
 mod task;
 pub mod time;
+mod timestamp;
 mod value;
 
+pub use buffer::Bytes;
 pub use error::Error;
+pub use ids::Uuid;
 pub use log::start;
 pub use parse::{Parse, parse};
 pub use runtime::run;
 pub use serde;
 pub use task::Task;
+pub use timestamp::Time;
 pub use tracing;
 pub use value::Value;
 

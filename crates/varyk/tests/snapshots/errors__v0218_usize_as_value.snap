@@ -8,6 +8,6 @@ error[V0218]: a value of type `usize` cannot be passed here
 5 |     println!("{}", ext::run("select ? as count", names.len()));
   |                                                  ^^^^^^^^^^^ a value of type `usize` cannot be passed here
   |
-  = note: after its other arguments, `ext::run` takes values of type `bool`, `string`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, or an `Option` of one of those
+  = note: after its other arguments, `ext::run` takes values of type `bool`, `string`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `Time`, `Uuid`, `Bytes`, or an `Option` of one of those
   = note: a `usize` can be larger than an `i64` holds; write `as i64` to pass it as an `i64`
 help: insert `as i64`

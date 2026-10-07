@@ -1,0 +1,19 @@
+mod ext;
+
+// A `Bytes` and an `Option<Bytes>` parameter, each lent as it is.
+fn pass(b: Bytes, o: Option<Bytes>) -> usize {
+    ext::run("q", b, o)
+}
+
+fn main() {
+    let t = Time::now();
+    let u = Uuid::new();
+    let b = Bytes::from_text("abc");
+    let ot: Option<Time> = Some(t);
+    let ou: Option<Uuid> = None;
+    let ob: Option<Bytes> = Some(Bytes::from_text("d"));
+    let values = ext::run("q", t, u, b, ot, ou, ob);
+    let wrapped = ext::run("q", Some(t), Some(u), Some(b));
+    // Each `Bytes` was lent, not given away.
+    println!("{} {} {} {}", values, wrapped, b.len(), pass(b, ob));
+}

@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0108]: unsupported Rust signature: `ext::year_of` cannot be called from Varyk
+ --> crates/varyk/tests/fixtures/errors/v0108_reference_to_time/main.vr:5:16
+  |
+5 |     let year = ext::year_of(now);
+  |                ^^^^^^^^^^^^^^^^^ unsupported Rust signature: `ext::year_of` cannot be called from Varyk
+  |
+  = note: the Rust signature is `fn year_of(t: &varyk_std::Time) -> i64`
+  = note: `varyk_std::Time` is copied rather than borrowed: take it by value, as in `t: varyk_std::Time`

@@ -437,6 +437,91 @@ struct Team {
 fn mk_team() -> Team {
     Team { names: vec![\"ann\", \"bo\"], users: vec![mk_g()] }
 }
+
+struct Bp {
+    b: Bytes,
+    n: i32,
+}
+
+enum Eb {
+    Data(Bytes),
+    Empty,
+}
+
+fn mk_b() -> Bytes {
+    Bytes::from_text(\"b\")
+}
+
+fn mk_bp() -> Bp {
+    Bp { b: mk_b(), n: 1 }
+}
+
+fn read_b(b: Bytes) {}
+
+fn change_b(mut b: Bytes) {
+    b = mk_b();
+}
+
+fn change_bp(mut p: Bp) {
+    p.b = mk_b();
+}
+
+fn b_of(p: Bp) -> Bytes {
+    p.b
+}
+
+fn same_b(b: Bytes) -> Bytes {
+    b
+}
+
+fn copy_b(b: Bytes) -> Bytes {
+    b.clone()
+}
+
+async fn a_b(b: Bytes) -> usize {
+    b.len()
+}
+
+fn b_from(p: Bp, b: Bytes, n: i32) -> Bytes {
+    p.b
+}
+
+fn second_b(a: Bytes, b: Bytes) -> Bytes {
+    b
+}
+
+impl Bp {
+    fn pick(self, other: Bytes) -> Bytes {
+        self.b
+    }
+}
+
+fn take_ob(o: Option<Bytes>) {}
+
+fn mk_rb() -> Result<Bytes, string> {
+    Ok(mk_b())
+}
+
+fn mk_ob() -> Option<Bytes> {
+    Some(mk_b())
+}
+
+fn b_try(c: bool) -> Result<usize, string> {
+    let b = mk_rb()?;
+    let p = Bp { b: mk_rb()?, n: 1 };
+    let mut v = vec![mk_rb()?];
+    v.push(b);
+    read_b(mk_rb()?);
+    let n = (if c { mk_rb()? } else { mk_b() }).len();
+    Ok(p.b.len() + v.len() + n)
+}
+
+fn ob_try() -> Option<usize> {
+    let b = mk_ob()?;
+    let e = Eb::Data(mk_ob()?);
+    read_b(mk_ob()?);
+    Some(b.len())
+}
 ";
 
 const EXT_RS: &str = "pub fn take_str(s: &str) -> usize { s.len() }
@@ -470,6 +555,9 @@ pub fn bind(q: &'static str, values: Vec<varyk_std::Value>) -> usize { q.len() +
 pub async fn a_one(q: &'static str) -> usize { q.len() }
 pub async fn a_bind(q: &'static str, values: Vec<varyk_std::Value>) -> usize { q.len() + values.len() }
 pub fn send<T: varyk_std::serde::Serialize + ?Sized>(value: &T) -> usize { varyk_std::json::stringify(value).len() }
+pub fn size_b(b: &varyk_std::Bytes) -> usize { b.len() }
+pub fn keep_b(b: varyk_std::Bytes) -> usize { b.len() }
+pub enum Msg { Text(String), Binary(varyk_std::Bytes) }
 pub async fn a_send<T: varyk_std::serde::Serialize + ?Sized>(value: &T) -> usize { varyk_std::json::stringify(value).len() }
 impl Tally {
     pub fn send<T: varyk_std::serde::Serialize + ?Sized>(&self, value: &T) -> usize { varyk_std::json::stringify(value).len() }
@@ -477,7 +565,7 @@ impl Tally {
 ";
 
 /// Every case function's parameters: one of each kind of place.
-const PARAMS: &str = "c: bool, ps: string, mut ms: string, pp: P, mut mp: P, pi: i32, mut mi: i32, mut mq: Q, pe: E, mut me: E, pv: Vec<P>, mut mv: Vec<P>, pr: Result<P, string>, pt: ext::Tally";
+const PARAMS: &str = "c: bool, ps: string, mut ms: string, pp: P, mut mp: P, pi: i32, mut mi: i32, mut mq: Q, pe: E, mut me: E, pv: Vec<P>, mut mv: Vec<P>, pr: Result<P, string>, pt: ext::Tally, pb: Bytes, mut mb: Bytes";
 
 /// Owned locals every case starts with.
 const SETUP: &str = "    let mut li = mk_i();
@@ -496,6 +584,9 @@ const SETUP: &str = "    let mut li = mk_i();
     let mut lrv = vec![mk_r()];
     let mut loe = mk_oe();
     let mut lf = mk_f();
+    let mut lb = mk_b();
+    let mut lbp = mk_bp();
+    let mut lvb = vec![mk_b()];
 ";
 
 /// Uses of the `mut` parameters after the case: a case that moved a
@@ -506,6 +597,7 @@ const EPILOGUE: &str = "    read_s(ms);
     read_p(mq.p);
     read_e(me);
     read_v(mv);
+    read_b(mb);
 ";
 
 /// A context: a statement template around `{v}`, the case function's
@@ -1530,6 +1622,23 @@ const MUST_PASS: &[&str] = &[
     "let mut u = mk_p();\n    let a = ext::send(u) + pt.send(u) + ext::send(lp) + ext::send(pp) + ext::send(mp) + ext::send(lp.s) + ext::send(ls) + ext::send(ll) + ext::send(ps) + ext::send(\"lit\") + ext::send(li) + ext::send(lk) + ext::send(lv) + ext::send(lv[0]) + ext::send(mk_p()) + ext::send(if c { lp } else { pp }) + pt.send(ps);\n    u.n = u.n + 1;\n    u.s = \"x\";\n    read_p(u);\n    read_p(lp);\n    read_s(ls);\n    lv.push(mk_p());",
     "async: let t = ext::a_send(mk_p());\n    let n = t.await + ext::a_send(\"q\").await + ext::a_send(lp).await;\n    read_p(lp);",
     "let b = lp == pp && pp == lp && mp == pp && lp == first_of(pv) && first_of(lv) == mp && lv[0] == pp && lq.p == pp && pp == lq.p && (if c { lp } else { pp }) == mp && pp == { mk_p() } && (if c { mk_p() } else { mk_p() }) == lp;\n    let p2 = pp.clone();\n    read_p(p2);\n    let v2 = pv.clone();\n    read_v(v2);\n    let p3 = first_of(pv).clone();\n    let mut q = Q { p: p3, n: 1, e: pe.clone(), v: mv.clone() };\n    change_q(q);\n    let copies: Vec<P> = lv.iter().map(|p| p.clone()).collect();\n    let same = copies == lv && lv.iter().any(|p| p == pp) && lv.iter().filter(|p| p != mp).count() > 0;\n    lv.push(pp.clone());\n    let last = lv[0].clone();\n    read_p(last);",
+    // `Bytes` is owned, moved, and borrowed as `string` is (milestone 5c
+    // spec 2.3): `==` in every mix of places, and each place read by a
+    // Varyk and a `&varyk_std::Bytes` parameter; an owned local moved into
+    // each owned slot, and a borrowed one cloned into them; an alias used
+    // before its root changes, assignments, and `match` and `for` on
+    // places and temporaries; an imported enum's payload, borrowed and
+    // cloned returns, closures and chains, and `Shared`; async calls.
+    "let b = lb == pb && pb == lb && mb == lb && lbp.b == pb && lvb[0] == lb && mk_b() == pb && lbp.b == mb && b_of(lbp) == same_b(pb) && lvb.contains(pb);\n    read_b(lb);\n    read_b(pb);\n    read_b(mb);\n    read_b(lbp.b);\n    read_b(lvb[0]);\n    read_b(mk_b());\n    read_b(b_of(lbp));\n    let n = ext::size_b(pb) + ext::size_b(lb) + ext::size_b(mb) + ext::size_b(lbp.b) + ext::size_b(lvb[0]) + ext::size_b(mk_b()) + lb.len() + pb.len() + lbp.b.len();",
+    "let c = lb;\n    let p = Bp { b: c, n: 1 };\n    let e = Eb::Data(mk_b());\n    let o = Some(mk_b());\n    lvb.push(copy_b(pb));\n    let n = ext::keep_b(mk_b()) + ext::keep_b(p.b.clone());\n    let p2 = Bp { b: pb.clone(), n: 1 };\n    lvb.push(lbp.b.clone());\n    let e2 = Eb::Data(mb.clone());\n    let o2 = Some(lvb[0].clone());\n    let q = Bp { b: same_b(pb).clone(), n: 2 };\n    let n2 = ext::keep_b(pb.clone()) + ext::keep_b(b_of(lbp).clone());",
+    "let a = lbp.b;\n    read_b(a);\n    change_bp(lbp);\n    read_b(lbp.b);\n    let f = lvb[0];\n    read_b(f);\n    lvb.push(mk_b());\n    lbp.b = mk_b();\n    lb = lbp.b.clone();\n    change_b(lb);\n    mb = mk_b();\n    change_b(mb);\n    let eb = Eb::Data(mk_b());\n    match eb {\n        Eb::Data(b) => read_b(b),\n        Eb::Empty => {}\n    }\n    match Some(mk_b()) {\n        Some(b) => lvb.push(b),\n        None => {}\n    }\n    match eb {\n        Eb::Data(b) => lvb.push(b.clone()),\n        Eb::Empty => {}\n    }\n    for b in lvb {\n        read_b(b);\n        let n = ext::size_b(b);\n    }\n    lvb.push(mk_b());\n    for b in vec![mk_b()] {\n        lvb.push(b);\n    }\n    mb = lb;",
+    "match ext::Msg::Binary(mk_b()) {\n        ext::Msg::Binary(b) => read_i(ext::keep_b(b) as i32),\n        _ => {}\n    }\n    let m = ext::Msg::Binary(mk_b());\n    match m {\n        ext::Msg::Binary(b) => read_i((ext::size_b(b) + ext::keep_b(b.clone())) as i32),\n        ext::Msg::Text(t) => read_s(t),\n    }\n    let r = b_of(lbp);\n    read_b(r);\n    let s = same_b(pb);\n    let n = ext::size_b(s) + ext::size_b(same_b(lb));\n    let owned = copy_b(pb);\n    lvb.push(owned);\n    let lens = lk.map(|x| pb.len() + lb.len());\n    let o = Some(1).map(|x| mk_b());\n    let v: Vec<usize> = lvb.iter().map(|b| b.len()).collect();\n    let k = lvb.iter().filter(|b| b == pb).count();\n    let copies: Vec<Bytes> = lvb.iter().map(|b| b.clone()).collect();\n    let sh = Shared::new(mk_bp());\n    read_b(sh.b);\n    let shared = ext::size_b(sh.b) + ext::keep_b(sh.b.clone());",
+    "async: let n = a_b(pb).await + a_b(lb).await + a_b(lbp.b).await + a_b(mk_b()).await;\n    let t = a_b(mk_b());\n    let u = a_b(lb);\n    let m = t.await + u.await;",
+    // `Bytes` in an `if`, block, or `match` read as a value, in `let`, in
+    // a changeable alias, and in owned slots; the rows of a `Vec<Bytes>`;
+    // a `HashMap` with `Bytes` values; and borrowed returns written with
+    // a lifetime beside other reference parameters.
+    "read_b({ let a = mk_bp(); a.b });\n    read_b(if c { mk_b() } else { mk_bp().b });\n    let eb = Eb::Data(mk_b());\n    read_b(match eb { Eb::Data(b) => b, _ => pb });\n    read_b(match Some(mk_b()) { Some(b) => b, None => mk_b() });\n    read_b(if c { lvb[0] } else { pb });\n    read_b(if c { b_of(lbp) } else { pb });\n    let n1 = ext::size_b(if c { mk_b() } else { mk_bp().b }) + ext::keep_b({ let a = mk_b(); a }) + (if c { mk_bp() } else { mk_bp() }).b.len();\n    let same = ({ let t = mk_b(); t }) == pb;\n    let x1 = if c { lb } else { lbp.b };\n    read_b(x1);\n    let x2 = if c { mk_bp().b } else { lbp.b };\n    read_b(x2);\n    let x3 = if c { mk_b() } else { b_of(lbp) };\n    read_b(x3);\n    let x4 = if c { pb } else { lbp.b };\n    read_b(x4);\n    let x5 = match eb { Eb::Data(b) => b, _ => pb };\n    read_b(x5);\n    let mut x6 = if c { mb } else { lbp.b };\n    change_b(x6);\n    x6 = mk_b();\n    let mut lb3 = mk_b();\n    let mut x7 = if c { lb3 } else { lbp.b };\n    change_b(x7);\n    x7 = mk_b();\n    let mut x8 = if c { mb } else { lvb[0] };\n    change_b(x8);\n    x8 = mk_b();\n    let e = Eb::Data({ let a = mk_b(); a });\n    let o = Some(if c { mk_b() } else { copy_b(pb) });\n    mb = { let a = mk_b(); a };\n    lbp.b = if c { mk_b() } else { copy_b(pb) };\n    lvb.insert(0, mk_b());\n    let x = lvb.remove(0);\n    read_b(x);\n    let popped = lvb.pop();\n    match lvb.get(0) {\n        Some(b) => read_b(b),\n        None => {}\n    }\n    if let Some(b) = lvb.get(0) {\n        read_i(ext::size_b(b) as i32);\n    }\n    lvb.push(mk_b());\n    let mut hb: HashMap<string, Bytes> = HashMap::new();\n    hb.insert(\"k\", mk_b());\n    let lb2 = mk_b();\n    hb.insert(ls, lb2);\n    if let Some(b) = hb.get(\"k\") {\n        read_b(b);\n    }\n    match hb.get(ps) {\n        Some(b) => read_i(ext::size_b(b) as i32),\n        None => {}\n    }\n    let old = hb.insert(\"j\", pb.clone());\n    read_b(b_from(lbp, pb, 1));\n    let s2 = second_b(lbp.b, pb);\n    read_b(s2);\n    read_b(lbp.pick(pb));\n    let lb4 = mk_b();\n    let v = vec![if c { lb4 } else { mk_b() }];",
 ];
 
 /// Programs `check` must reject, as (body, the code `check` must reject
@@ -2101,6 +2210,196 @@ const MUST_REJECT: &[(&str, &str, &str)] = &[
     // `trim` on a value made right there, and its result stored.
     ("let t = mk_s().trim();\n    read_s(t);", "V0001", "E0716"),
     ("lw.push(ls.trim());", "V0304", ""),
+    // `Bytes` is owned, moved, and borrowed as `string` is (milestone 5c
+    // spec 2.3): an owned local used after a move; a parameter, an
+    // element, a `match` or `for` binding on a place, and what a function
+    // returns from a borrowed parameter, each into an owned slot; an
+    // alias whose root changes or moves; a `mut` parameter or an element
+    // changed while an alias is used; a parameter given to a started call
+    // or a `mut` parameter; and a `Bytes` reached through a `Shared`
+    // assigned.
+    ("let c = lb;\n    read_b(lb);", "V0305", "E0382"),
+    ("let v = vec![lb, lb];", "V0305", "E0382"),
+    ("let a = lk.map(|x| lb);\n    read_b(lb);", "V0304", "E0382"),
+    ("let p = Bp { b: pb, n: 1 };", "V0304", "E0308"),
+    ("let o = Some(mb);", "V0304", "E0308"),
+    ("lvb.push(pb);", "V0304", "E0308"),
+    ("let e = Eb::Data(lvb[0]);", "V0304", "E0507"),
+    ("let n = ext::keep_b(pb);", "V0304", "E0308"),
+    ("let p = Bp { b: b_of(lbp), n: 1 };", "V0304", "E0308"),
+    ("lvb.push(same_b(pb));", "V0304", "E0308"),
+    (
+        "let m = ext::Msg::Binary(mk_b());\n    match m {\n        ext::Msg::Binary(b) => {\n            let n = ext::keep_b(b);\n        }\n        _ => {}\n    }",
+        "V0304",
+        "E0308",
+    ),
+    (
+        "for b in lvb {\n        let p = Bp { b: b, n: 1 };\n    }",
+        "V0304",
+        "E0308",
+    ),
+    (
+        "let a = lbp.b;\n    change_bp(lbp);\n    read_b(a);",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let a = lbp.b;\n    let moved = lbp;\n    read_b(a);",
+        "V0307",
+        "E0505",
+    ),
+    (
+        "let n = b_of(lbp);\n    change_bp(lbp);\n    read_b(n);",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let a = lvb[0];\n    lvb.push(mk_b());\n    read_b(a);",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let a = mb;\n    mb = mk_b();\n    read_b(a);",
+        "V0307",
+        "E0506",
+    ),
+    ("async: let t = a_b(pb);\n    t.await;", "V0304", "E0521"),
+    ("change_b(pb);", "V0303", "E0596"),
+    (
+        "let mut s = Shared::new(mk_bp());\n    s.b = mk_b();",
+        "V0310",
+        "E0594",
+    ),
+    // `Bytes` in an `if`, block, or `match` mixing something gone with
+    // something lasting, or an element of a `Vec` gone with it; the rows
+    // of a `Vec<Bytes>` and a `HashMap` with `Bytes` values; and a
+    // borrowed return's root changed or moved while it is used.
+    ("read_b(if c { mk_bp().b } else { pb });", "V0304", "E0716"),
+    (
+        "let eb = Eb::Data(mk_b());\n    read_b(match eb { Eb::Data(b) => b, _ => mk_b() });",
+        "V0304",
+        "E0716",
+    ),
+    ("read_b({ let v = vec![mk_b()]; v[0] });", "V0304", "E0507"),
+    (
+        "read_b(if c { mk_b() } else { b_of(lbp) });",
+        "V0304",
+        "E0716",
+    ),
+    (
+        "let n = ext::size_b(if c { mk_bp().b } else { pb });",
+        "V0304",
+        "E0716",
+    ),
+    (
+        "let n = ext::keep_b(if c { mk_b() } else { mk_bp().b });",
+        "V0304",
+        "",
+    ),
+    (
+        "let n = (if c { mk_bp() } else { lbp }).b.len();",
+        "V0304",
+        "E0716",
+    ),
+    (
+        "let b = (if c { mk_bp().b } else { pb }) == lb;",
+        "V0304",
+        "E0716",
+    ),
+    ("if c { mk_bp().b } else { pb };", "V0304", ""),
+    (
+        "let x = { let a = mk_bp(); a.b };\n    read_b(x);",
+        "V0304",
+        "E0597",
+    ),
+    (
+        "let x = match Some(mk_bp()) { Some(p) => p.b, None => mk_b() };\n    read_b(x);",
+        "V0304",
+        "E0597",
+    ),
+    (
+        "let mut x = if c { pb } else { lbp.b };\n    change_b(x);",
+        "V0303",
+        "E0596",
+    ),
+    (
+        "let p = Bp { b: if c { mk_b() } else { mk_bp().b }, n: 1 };",
+        "V0304",
+        "",
+    ),
+    (
+        "let v = vec![if c { pb } else { mk_b() }];",
+        "V0304",
+        "E0308",
+    ),
+    (
+        "let mut x = mk_b();\n    x = if c { mk_bp().b } else { mk_b() };\n    read_b(x);",
+        "V0304",
+        "",
+    ),
+    (
+        "let o: Option<Bytes> = lvb.get(0);\n    take_ob(o);",
+        "V0208",
+        "E0308",
+    ),
+    ("take_ob(lvb.get(0));", "V0208", "E0308"),
+    ("lvb.insert(0, pb);", "V0304", "E0308"),
+    ("lvb.insert(0, lb);\n    read_b(lb);", "V0305", "E0382"),
+    (
+        "match lvb.get(0) {\n        Some(b) => {\n            lvb.push(mk_b());\n            read_b(b);\n        }\n        None => {}\n    }",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let t = lvb[0];\n    let o = lvb.pop();\n    read_b(t);",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let o = lvb.pop();\n    match o {\n        Some(b) => lvb.push(b),\n        None => {}\n    }",
+        "V0304",
+        "E0308",
+    ),
+    (
+        "let mut hb: HashMap<string, Bytes> = HashMap::new();\n    hb.insert(\"k\", pb);",
+        "V0304",
+        "E0308",
+    ),
+    (
+        "let mut hb: HashMap<string, Bytes> = HashMap::new();\n    hb.insert(\"k\", lb);\n    read_b(lb);",
+        "V0305",
+        "E0382",
+    ),
+    (
+        "let mut hb: HashMap<string, Bytes> = HashMap::new();\n    hb.insert(\"k\", lbp.b);",
+        "V0304",
+        "",
+    ),
+    (
+        "let mut hb: HashMap<string, Bytes> = HashMap::new();\n    hb.insert(\"k\", mk_b());\n    let o: Option<Bytes> = hb.get(\"k\");\n    take_ob(o);",
+        "V0208",
+        "E0308",
+    ),
+    (
+        "let mut hb: HashMap<string, Bytes> = HashMap::new();\n    hb.insert(\"k\", mk_b());\n    match hb.get(\"k\") {\n        Some(b) => {\n            hb.insert(\"j\", mk_b());\n            read_b(b);\n        }\n        None => {}\n    }",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let s = second_b(lb, lbp.b);\n    change_bp(lbp);\n    read_b(s);",
+        "V0307",
+        "E0502",
+    ),
+    (
+        "let s = b_from(lbp, lb, 1);\n    let moved = lbp;\n    read_b(s);",
+        "V0307",
+        "E0505",
+    ),
+    (
+        "let s = lbp.pick(lb);\n    change_bp(lbp);\n    read_b(s);",
+        "V0307",
+        "E0502",
+    ),
 ];
 
 /// The [`MUST_REJECT`] cases rustc accepts in the Rust the backend makes
@@ -2130,6 +2429,14 @@ const STRICTER_THAN_RUST: &[&str] = &[
     "read_s(first_sign(vec![1, -2]));",
     "let ns = Ns { ns: vec![1] };\n    read_s(ns.sign());",
     "read_s(grid_sign(vec![vec![1]]));",
+    // A `Bytes` field of a temporary or of an owned local, which Rust moves
+    // out and Varyk does not (spec 3.4), and a discarded `if` mixing one
+    // with a parameter (milestone 5c spec 2.3).
+    "let n = ext::keep_b(if c { mk_b() } else { mk_bp().b });",
+    "if c { mk_bp().b } else { pb };",
+    "let p = Bp { b: if c { mk_b() } else { mk_bp().b }, n: 1 };",
+    "let mut x = mk_b();\n    x = if c { mk_bp().b } else { mk_b() };\n    read_b(x);",
+    "let mut hb: HashMap<string, Bytes> = HashMap::new();\n    hb.insert(\"k\", lbp.b);",
 ];
 
 /// The [`MUST_REJECT`] and [`MUST_REJECT_QUESTION`] cases that have no
@@ -2181,6 +2488,23 @@ const MUST_REJECT_QUESTION: &[(&str, &str, &str)] = &[
         "V0304",
         "",
     ),
+    // A `Bytes` result (milestone 5c spec 2.3): an element, a loop
+    // variable over a `Vec`, and an owned local used twice.
+    (
+        "let rv = vec![mk_rb()];\n    let x = rv[0]?;\n    Ok(x.len() as i32)",
+        "V0304",
+        "E0507",
+    ),
+    (
+        "let rv = vec![mk_rb()];\n    for r in rv {\n        let x = r?;\n    }\n    Ok(1)",
+        "V0304",
+        "E0277",
+    ),
+    (
+        "let r = mk_rb();\n    let x = r?;\n    let y = r?;\n    Ok(1)",
+        "V0305",
+        "E0382",
+    ),
 ];
 
 /// The return type of a case returning an `Option`.
@@ -2196,6 +2520,12 @@ const MUST_REJECT_OPTION: &[(&str, &str, &str)] = &[
     ("return lw.iter().find(|w| w.len() > 0);", "V0208", "E0308"),
     (
         "let s: string = lw.iter().find(|w| w.len() > 0)?;\n    Some(s)",
+        "V0208",
+        "E0308",
+    ),
+    // The same on a `Vec<Bytes>`.
+    (
+        "let b = lvb.get(0)?;\n    lvb.push(b);\n    Some(mk_s())",
         "V0208",
         "E0308",
     ),
@@ -2294,6 +2624,27 @@ const MUST_REJECT_ITEMS: &[(&str, &str, &str, &str)] = &[
         "read_s(grid_sign(vec![vec![1]]));",
         "V0304",
         "",
+    ),
+    // The same for a function returning `Bytes` (milestone 5c spec 2.3):
+    // part of a parameter beside a new value, parts of two parameters,
+    // and part of a `mut` parameter.
+    (
+        "fn mixed_b(p: Bp, c: bool) -> Bytes {\n    if c { mk_b() } else { p.b }\n}\n",
+        "read_b(mixed_b(lbp, c));",
+        "V0304",
+        "E0515",
+    ),
+    (
+        "fn either_b(a: Bp, b: Bp, c: bool) -> Bytes {\n    if c { a.b } else { b.b }\n}\n",
+        "let x = mk_bp();\n    read_b(either_b(lbp, x, c));",
+        "V0308",
+        "E0621",
+    ),
+    (
+        "fn b_mut(mut p: Bp) -> Bytes {\n    p.b\n}\n",
+        "let n = b_mut(lbp);\n    read_b(lbp.b);\n    read_b(n);",
+        "V0304",
+        "E0502",
     ),
 ];
 

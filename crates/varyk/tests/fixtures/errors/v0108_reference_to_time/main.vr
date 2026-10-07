@@ -1,0 +1,6 @@
+mod ext;
+
+fn main() {
+    let now = Time::now();
+    let year = ext::year_of(now);
+}

@@ -1,0 +1,18 @@
+struct Settings {
+    start: Time,
+    owner: Option<Uuid>,
+}
+
+fn main() {
+    let settings: Result<Settings, Error> = env::parse();
+    match settings {
+        Ok(s) => {
+            println!("start {}", s.start);
+            match s.owner {
+                Some(id) => println!("owner {}", id),
+                None => println!("no owner"),
+            }
+        }
+        Err(e) => println!("error: {}", e),
+    }
+}

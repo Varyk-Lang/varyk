@@ -156,3 +156,17 @@ Recorded, deliberately unanswered.
 - Should the compiler know any package but `varyk-std` and `varyk-http` by
   name, and should a community package be able to offer route binding?
   Function values, if they ever come, would answer the second.
+- Should Varyk have a calendar `Date`, a time of day, or a `Duration`, and
+  should `time::sleep` take a `Duration`? Milestone 5c has one time type,
+  a point in time in UTC, and `add_seconds` and `seconds_since` in whole
+  seconds.
+- Should a `Time` carry or convert to a time zone, for a service that
+  shows local times? Milestone 5c reads an offset and keeps only UTC.
+- Should `varyk-std` build `time`, `uuid`, and `base64` only for a program
+  that uses the types, through cargo features the driver sets? Milestone
+  5c builds them for every program that uses `varyk-std`.
+- Should `Uuid`s order, so a `Vec<Uuid>` of version 7 ids sorts by
+  creation? Milestone 5c compares them with `==` and `!=` only.
+- Should `Bytes` be indexed, sliced, and built from a `Vec<u8>`, and
+  should there be a growable buffer? Milestone 5c's `Bytes` is made whole
+  from text or base64, or handed over by a package.

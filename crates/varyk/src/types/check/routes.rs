@@ -115,7 +115,8 @@ impl Added {
 /// The note listing what a handler's parameter can be.
 const PARAMETERS: &str = "a handler's parameter is a `{name}` of the path, the state as a \
                           `Shared`, a `Request`, the body on `post`, `put`, or `patch`, or a \
-                          query parameter: an integer, `bool`, `string`, or an `Option` of one";
+                          query parameter: an integer, `bool`, `string`, `Time`, `Uuid`, or an \
+                          `Option` of one";
 
 /// The segments of the route path or `before_on` prefix `text`, as written
 /// between its quotes (spec 2.2), or why it is not one. A path is `/`
@@ -180,12 +181,19 @@ fn is_identifier(name: &str) -> bool {
     first && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') && name != "_"
 }
 
-/// Whether a value of `ty` comes from the query string (spec 2.2 rule 5).
+/// Whether a path segment gives a value of `ty` (spec 2.2 rule 1; `Time`
+/// and `Uuid`, milestone 5c spec 2.4): read through `FromStr` by the
+/// package.
+fn is_path_type(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int(_) | Ty::Bool | Ty::String | Ty::Time | Ty::Uuid)
+}
+
+/// Whether a value of `ty` comes from the query string (spec 2.2 rule 5;
+/// `Time` and `Uuid`, milestone 5c spec 2.4).
 fn is_query(ty: &Ty) -> bool {
-    let plain = |ty: &Ty| matches!(ty, Ty::Int(_) | Ty::Bool | Ty::String);
     match ty {
-        Ty::Option(inner) => plain(inner),
-        other => plain(other),
+        Ty::Option(inner) => is_path_type(inner),
+        other => is_path_type(other),
     }
 }
 
@@ -887,18 +895,19 @@ impl FnChecker<'_> {
         for (name, ty, _) in &sig.params {
             let binding = match ty {
                 _ if names.contains(&name.as_str()) => {
-                    if matches!(ty, Ty::Int(_) | Ty::Bool | Ty::String) {
+                    if is_path_type(ty) {
                         Ok(Binding::Path(name.clone()))
                     } else {
                         Err((
                             format!(
                                 "the path parameter `{name}` of `{f}` is `{}`, and a path segment \
-                                 gives an integer, `bool`, or `string`",
+                                 gives an integer, `bool`, `string`, `Time`, or `Uuid`",
                                 self.ty_name(ty)
                             ),
                             format!(
-                                "give `{name}` an integer type, `bool`, or `string`; a value with \
-                                 more in it, such as a struct, comes from the body or the state"
+                                "give `{name}` an integer type, `bool`, `string`, `Time`, or \
+                                 `Uuid`; a value with more in it, such as a struct, comes from \
+                                 the body or the state"
                             ),
                         ))
                     }
@@ -993,7 +1002,8 @@ impl FnChecker<'_> {
                 problems.push((
                     format!("the path names `{{{name}}}`, but `{f}` has no parameter `{name}`"),
                     format!(
-                        "add a parameter `{name}` to `{f}`, of an integer type, `bool`, or `string`"
+                        "add a parameter `{name}` to `{f}`, of an integer type, `bool`, \
+                         `string`, `Time`, or `Uuid`"
                     ),
                 ));
             }

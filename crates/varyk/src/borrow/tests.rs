@@ -2911,10 +2911,10 @@ fn a_struct_payload_of_a_drop_temporary_changed_through_a_let_names_the_let_and_
 }
 
 #[test]
-fn a_payload_kept_from_a_drop_enum_offers_clone_only_for_a_string_and_names_the_enum() {
+fn a_payload_kept_from_a_drop_enum_offers_clone_only_for_a_string_or_bytes_and_names_the_enum() {
     let (result, _) = check_path("crates/varyk/tests/fixtures/interop/drop_payload_kept/main.vr");
     let diagnostics = result.expect_err("should fail");
-    assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
+    assert_eq!(diagnostics.len(), 4, "{diagnostics:#?}");
     assert!(diagnostics.iter().all(|d| d.code == codes::V0304));
     // A stored enum: the `Acc` payload can be read, not kept.
     let stored = &diagnostics[0];
@@ -2939,12 +2939,19 @@ fn a_payload_kept_from_a_drop_enum_offers_clone_only_for_a_string_and_names_the_
         !temporary.notes.iter().any(|n| n.contains(".clone()")),
         "{temporary:#?}"
     );
-    // A `string` payload can be copied.
-    let text = &diagnostics[2];
-    assert!(
-        has_note(text, "copy it with `.clone()` to keep it"),
-        "{text:#?}"
-    );
+    // A `string` payload can be copied, and so can a `Bytes` one
+    // (milestone 5c spec 2.3).
+    for copied in &diagnostics[2..] {
+        assert!(
+            has_note(copied, "copy it with `.clone()` to keep it"),
+            "{copied:#?}"
+        );
+        assert_eq!(
+            copied.fix_it.as_ref().map(|fix| fix.replacement.as_str()),
+            Some(".clone()"),
+            "{copied:#?}"
+        );
+    }
 }
 
 #[test]
@@ -4528,6 +4535,160 @@ fn a_shared_clone_given_to_a_started_call_is_its_own_handle() {
         "    let a = work(p);\n    let x = a.await;\n",
     ));
     assert_eq!(d.code, codes::V0304, "{d:#?}");
+}
+
+// --- `Bytes` (milestone 5c spec 2.3, 7.4) -----------------------------------
+
+const BLOB: &str = "struct Blob {\n    data: Bytes,\n}\n";
+
+fn with_blob(body: &str) -> String {
+    format!("{BLOB}{body}{MAIN}")
+}
+
+/// Asserts `d` carries the fix-it `.clone()` right after the value at `at`.
+fn assert_clone_fix_it(d: &Diagnostic, at: Span) {
+    let end = at.end;
+    let fix = d.fix_it.as_ref().expect("a `.clone()` fix-it");
+    assert_eq!(fix.span, Span::new(FileId(0), end, end), "{d:#?}");
+    assert_eq!(fix.replacement, ".clone()");
+}
+
+#[test]
+fn a_bytes_parameter_is_a_shared_borrow() {
+    let program = ok(&with_blob("fn f(b: Bytes) -> usize {\n    b.len()\n}\n"));
+    let f = function(&program, "f");
+    assert_eq!(
+        place(f, "b"),
+        PlaceInfo {
+            borrowed: true,
+            mutable: false,
+            origin: Some(Origin::Param(f.params[0].local)),
+        }
+    );
+}
+
+#[test]
+fn a_bytes_field_owns_its_value() {
+    ok(&with_blob(
+        "fn f() -> Blob {\n    let b = Bytes::from_text(\"a\");\n    Blob { data: b }\n}\nfn g(b: Bytes) -> Blob {\n    Blob { data: b.clone() }\n}\n",
+    ));
+    let (d, sources) = one_error(&with_blob(
+        "fn f(b: Bytes) -> Blob {\n    Blob { data: b }\n}\n",
+    ));
+    assert_v0304(&d, part_of(&sources, "data: b }", "b"), "`b`");
+    assert_clone_fix_it(&d, part_of(&sources, "data: b }", "b"));
+}
+
+#[test]
+fn using_bytes_after_let_moves_them_is_v0305() {
+    let (d, sources) = one_error(&with_blob(
+        "fn f() -> usize {\n    let b = Bytes::from_text(\"a\");\n    let c = b;\n    b.len()\n}\n",
+    ));
+    assert_v0305(
+        &d,
+        part_of(&sources, "b.len()", "b"),
+        part_of(&sources, "let c = b", "b"),
+        "b",
+    );
+}
+
+#[test]
+fn returning_a_bytes_parameter_or_part_of_one_is_a_borrowed_return() {
+    let program = ok(&with_blob(
+        "fn same(b: Bytes) -> Bytes {\n    b\n}\nfn inner(blob: Blob) -> Bytes {\n    blob.data\n}\nfn copy(b: Bytes) -> Bytes {\n    b.clone()\n}\n",
+    ));
+    assert_eq!(ret_root(&program, "same").as_deref(), Some("b"));
+    assert_eq!(ret_root(&program, "inner").as_deref(), Some("blob"));
+    assert_eq!(ret_root(&program, "copy"), None);
+
+    // Part of a local is gone when the function returns: copy it out.
+    let (d, sources) = one_error(&with_blob(
+        "fn f() -> Bytes {\n    let blob = Blob { data: Bytes::from_text(\"a\") };\n    blob.data\n}\n",
+    ));
+    assert_v0304(&d, part_of(&sources, "blob.data\n", "blob.data"), "`blob`");
+    assert!(has_note(&d, "with `.clone()`"), "{d:#?}");
+    assert_clone_fix_it(&d, part_of(&sources, "blob.data\n", "blob.data"));
+}
+
+#[test]
+fn collect_of_borrowed_bytes_is_v0304_with_the_copy_hint() {
+    let (d, sources) = one_error(&with_blob(
+        "fn f() {\n    let blobs = vec![Bytes::from_text(\"a\")];\n    let a = blobs.iter().collect();\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert!(d.message.contains("`blobs`"), "{d:#?}");
+    assert!(d.message.contains(".map(|w| w.clone())"), "{d:#?}");
+    let end = span_of(&sources, "blobs.iter()").end;
+    let fix = d.fix_it.as_ref().expect("a fix-it");
+    assert_eq!(fix.span, Span::new(FileId(0), end, end));
+    assert_eq!(fix.replacement, ".map(|w| w.clone())");
+    ok(&with_blob(
+        "fn f() {\n    let blobs = vec![Bytes::from_text(\"a\")];\n    let a = blobs.iter().map(|w| w.clone()).collect();\n}\n",
+    ));
+}
+
+#[test]
+fn an_element_of_a_block_local_bytes_vec_handed_out_says_to_clone() {
+    let (d, sources) = one_error(&with_blob(
+        "fn read(b: Bytes) {}\nfn f() {\n    read({ let v = vec![Bytes::from_text(\"a\")]; v[0] });\n}\n",
+    ));
+    assert_eq!(d.code, codes::V0304, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "v[0]"), "{d:#?}");
+    assert!(
+        has_note(
+            &d,
+            "every branch give a new value instead (for text or `Bytes`, with `.clone()`)"
+        ),
+        "{d:#?}"
+    );
+}
+
+/// Review Focus 4 (milestone 5c): `Bytes` returned from a borrowed
+/// parameter is still borrowed, and a field owns.
+#[test]
+fn bytes_returned_from_a_borrowed_parameter_into_a_field_is_v0304_saying_to_clone() {
+    let same = "fn same(b: Bytes) -> Bytes {\n    b\n}\n";
+    let (d, sources) = one_error(&with_blob(&format!(
+        "{same}fn wrap(b: Bytes) -> Blob {{\n    Blob {{ data: same(b) }}\n}}\n"
+    )));
+    assert_v0304(&d, span_of(&sources, "same(b)"), "`b`");
+    assert_clone_fix_it(&d, span_of(&sources, "same(b)"));
+    ok(&with_blob(&format!(
+        "{same}fn wrap(b: Bytes) -> Blob {{\n    Blob {{ data: same(b).clone() }}\n}}\n"
+    )));
+}
+
+/// Review Focus 4 (milestone 5c): a `Bytes` bound by a `match` on a
+/// borrowed imported enum is part of it, and an owned facade parameter
+/// keeps what it is given.
+#[test]
+fn bytes_bound_from_a_borrowed_imported_enum_into_an_owned_parameter_is_v0304_saying_to_clone() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/errors/v0304_bytes_from_a_borrowed_enum/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    let d = &diagnostics[0];
+    assert_v0304(d, part_of(&sources, "keep(data)", "data"), "`message`");
+    assert_clone_fix_it(d, part_of(&sources, "keep(data)", "data"));
+}
+
+/// Review Focus 5 (milestone 5c): an `if` giving `Some(b)` or `None` as a
+/// trailing value gives `b` away, as `Some(name)` does for a `string`: a
+/// local used after is V0305, and a borrowed parameter is V0304 with the
+/// `.clone()` fix-it.
+#[test]
+fn bytes_in_some_in_a_trailing_if_is_given_away() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/interop/trailing_if_gives_bytes_away/main.vr");
+    let diagnostics = result.expect_err("should fail");
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    let lent = &diagnostics[0];
+    let at = part_of(&sources, "Some(b) } else { None })\n}", "b");
+    assert_v0304(lent, at, "`b`");
+    assert_clone_fix_it(lent, at);
+    let moved = &diagnostics[1];
+    assert_eq!(moved.code, codes::V0305, "{moved:#?}");
+    assert_eq!(moved.span, part_of(&sources, "b.len()", "b"), "{moved:#?}");
 }
 
 /// Route calls on a `varyk-http` app (milestone 5b4 spec 7.4).

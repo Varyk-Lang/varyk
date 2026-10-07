@@ -8,10 +8,14 @@
 
 pub use varyk_syntax::{V0001, V0002, V0003, V0010, V0011, V0012};
 
-/// Unknown name.
+/// Unknown name, or a method or associated function the type does not
+/// have; also `.clone()` on a number, `bool`, `Time`, or `Uuid`, which
+/// are copied on use (milestone 5c spec 8).
 pub const V0100: &str = "V0100";
 /// Unknown type, or a Rust struct Varyk did not import (generic, tuple,
-/// or unit).
+/// or unit); also a `HashMap` key type that is not an integer type,
+/// `bool`, `string`, or `Uuid`, such as `Time` or `Bytes` (milestone 5c
+/// spec 8).
 pub const V0101: &str = "V0101";
 /// Unknown field.
 pub const V0102: &str = "V0102";
@@ -27,7 +31,9 @@ pub const V0106: &str = "V0106";
 /// `String` or `str` spelled where `string` is meant.
 pub const V0107: &str = "V0107";
 /// Unsupported Rust signature, or a field whose Rust type Varyk cannot
-/// use.
+/// use; among them a `&varyk_std::Time`, `&varyk_std::Uuid`, or `&mut
+/// varyk_std::Bytes` parameter, a borrowed one of the three returned, and
+/// any of the three through a `use` line (milestone 5c spec 2.5).
 pub const V0108: &str = "V0108";
 /// A struct that contains itself, directly or through other structs.
 pub const V0109: &str = "V0109";
@@ -44,8 +50,10 @@ pub const V0111: &str = "V0111";
 /// An attribute Varyk does not have, in a place it cannot go, written
 /// twice, or with a value missing or not expected (M5a spec 2.2).
 pub const V0112: &str = "V0112";
-/// A name the standard library needs (M5a spec 2.10): a struct, enum, or
-/// module named `Error`, or a `.rs` module's `pub` struct or enum named so;
+/// A name the standard library needs (M5a spec 2.10): a struct, enum,
+/// module, or `use` named `Error`, `Task`, `Shared`, `Time`, `Uuid`, or
+/// `Bytes` (milestone 5c spec 2), or a `.rs` module's `pub` struct or enum
+/// named so;
 /// a module named `json`, `env`, or `log`, or a `use` of one; a function
 /// named `assert` or `assert_eq`; any item, method, module, or `use` name
 /// starting with `varyk_`.
@@ -57,14 +65,18 @@ pub const V0114: &str = "V0114";
 /// not list in `[dependencies]`, or in another version of one it does
 /// (M5b2 spec 2.4).
 pub const V0115: &str = "V0115";
-/// Type mismatch.
+/// Type mismatch; also an operator on a type that lacks it (an ordering
+/// on a `Uuid` or `Bytes`, arithmetic on a `Time`), `sort` on a `Vec` it
+/// cannot order, and `parse` into a type it cannot read, such as `Bytes`
+/// (milestone 5c spec 8).
 pub const V0200: &str = "V0200";
 /// Wrong argument count.
 pub const V0201: &str = "V0201";
 /// `println!` placeholder count mismatch or unsupported placeholder.
 pub const V0202: &str = "V0202";
-/// `{}` applied to a struct, enum, or container, or `==` or `.clone()`
-/// on a type that cannot have it; `Error` prints its message.
+/// `{}` applied to a struct, enum, container, or `Bytes`, or `==` or
+/// `.clone()` on a type that cannot have it; `Error` prints its message,
+/// and `Time` and `Uuid` their written forms (milestone 5c spec 8).
 pub const V0203: &str = "V0203";
 /// A `match` that does not handle every variant, naming one it misses.
 pub const V0204: &str = "V0204";
@@ -90,7 +102,8 @@ pub const V0209: &str = "V0209";
 /// A type that cannot go through `json` or `env` at a call, naming the
 /// part in the way (M5a spec 2.9); also at the argument of a `.rs`
 /// function's `Serialize` parameter (milestone 5b4 spec 2.7), and at a
-/// route whose handler's body or return type cannot (spec 2.2, 2.3).
+/// route whose handler's body or return type cannot (spec 2.2, 2.3); a
+/// `Bytes` field of a struct `env::parse` reads (milestone 5c spec 2.4).
 pub const V0210: &str = "V0210";
 /// A call to an async function, or `.await`, in an ordinary function;
 /// `.await` in a closure (milestone 5b1 spec 2.2, 2.3).
@@ -120,12 +133,14 @@ pub const V0216: &str = "V0216";
 pub const V0217: &str = "V0217";
 /// A value passed after the other arguments to a `.rs` function whose
 /// last parameter is `Vec<varyk_std::Value>`, of a type that cannot be
-/// one (milestone 5b3 spec 2.2).
+/// one (milestone 5b3 spec 2.2); the list names `Time`, `Uuid`, and
+/// `Bytes` (milestone 5c spec 2.4).
 pub const V0218: &str = "V0218";
 /// A route whose path and handler do not fit: a `{name}` with no
 /// parameter, a parameter that binds to nothing, a body where none can
 /// be, two of one kind, or a parameter of the wrong type (milestone 5b4
-/// spec 2.2).
+/// spec 2.2), a `Bytes` path or query parameter among them (milestone 5c
+/// spec 2.4).
 pub const V0219: &str = "V0219";
 /// A route's handler or a hook of the wrong shape: not an async function
 /// of the current package, a return type outside the list, or a hook
@@ -147,7 +162,8 @@ pub const V0301: &str = "V0301";
 pub const V0302: &str = "V0302";
 /// Non-`mut` parameter passed to a `mut` parameter.
 pub const V0303: &str = "V0303";
-/// Borrowed place flowing into an owned slot.
+/// Borrowed place flowing into an owned slot; for a `string` or a `Bytes`
+/// its fix-it is `.clone()` (milestone 5c spec 8).
 pub const V0304: &str = "V0304";
 /// Use after move.
 pub const V0305: &str = "V0305";

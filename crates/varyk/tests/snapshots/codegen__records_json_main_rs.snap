@@ -1,0 +1,68 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Serialize, ::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct Record {
+    at: ::varyk_std::Time,
+    id: ::varyk_std::Uuid,
+    data: ::varyk_std::Bytes,
+    seen: Option<::varyk_std::Time>,
+    ids: Vec<::varyk_std::Uuid>,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct Stamp {
+    at: ::varyk_std::Time,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+#[derive(::varyk_std::serde::Deserialize)]
+#[serde(crate = "::varyk_std::serde")]
+struct Blob {
+    data: ::varyk_std::Bytes,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn record() -> Result<Record, ::varyk_std::Error> {
+    let at = ::varyk_std::Time::from_iso("2026-10-07T12:00:00.5+02:00")?;
+    let id = ::varyk_std::parse::<::varyk_std::Uuid>("0192F0C4-7A3E-7B5C-9D1E-2F3A4B5C6D7E")?;
+    let other = ::varyk_std::parse::<::varyk_std::Uuid>("6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b")?;
+    Ok(Record { at: at, id: id, data: ::varyk_std::Bytes::from_text("hello"), seen: Some(at), ids: ::std::vec![id, other] })
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn round_trip(record: &Record) -> Result<bool, ::varyk_std::Error> {
+    let text = ::varyk_std::json::stringify(record);
+    ::std::println!("{}", text);
+    let back = ::varyk_std::json::parse::<Record>(&text)?;
+    Ok(&back == record)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    match record() {
+        Ok(r) => match round_trip(&r) {
+            Ok(same) => ::std::println!("{}", same),
+            Err(e) => ::std::println!("error: {}", e),
+        },
+        Err(e) => ::std::println!("error: {}", e),
+    }
+    let stamp: Result<Stamp, ::varyk_std::Error> = ::varyk_std::json::parse::<Stamp>("{\"at\": 1791374400}");
+    match &stamp {
+        Ok(s) => ::std::println!("{}", s.at),
+        Err(e) => ::std::println!("error: {}", e),
+    }
+    let blob: Result<Blob, ::varyk_std::Error> = ::varyk_std::json::parse::<Blob>("{\"data\": \"aGk\"}");
+    match &blob {
+        Ok(b) => ::std::println!("{}", b.data.len()),
+        Err(e) => ::std::println!("error: {}", e),
+    }
+}

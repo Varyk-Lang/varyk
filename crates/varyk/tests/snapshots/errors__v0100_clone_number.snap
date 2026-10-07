@@ -2,8 +2,8 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0100]: `i32` needs no `.clone()`: numbers and `bool` are copied on use; drop `.clone()`
+error[V0100]: `i32` needs no `.clone()`: numbers, `bool`, `Time`, and `Uuid` are copied on use; drop `.clone()`
  --> crates/varyk/tests/fixtures/errors/v0100_clone_number/main.vr:3:22
   |
 3 |     let copy = count.clone();
-  |                      ^^^^^ `i32` needs no `.clone()`: numbers and `bool` are copied on use; drop `.clone()`
+  |                      ^^^^^ `i32` needs no `.clone()`: numbers, `bool`, `Time`, and `Uuid` are copied on use; drop `.clone()`

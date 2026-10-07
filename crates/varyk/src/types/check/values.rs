@@ -119,6 +119,11 @@ impl FnChecker<'_> {
             "Vec" => Some(Owner::Vec),
             "HashMap" => Some(Owner::HashMap),
             "Error" => Some(Owner::Error),
+            // Reserved (milestone 5c spec 2): the type `Time`, apart from
+            // the module `time`.
+            "Time" => Some(Owner::TimeType),
+            "Uuid" => Some(Owner::Uuid),
+            "Bytes" => Some(Owner::Bytes),
             // Reserved (milestone 5b1 spec 2.8): no type of the program can
             // be called `Task`.
             "Task" => Some(Owner::Task),
@@ -369,6 +374,22 @@ impl FnChecker<'_> {
                      `Error::with_status(..)`",
                     name.name
                 ),
+                None if owner == Owner::TimeType => format!(
+                    "`Time` has no function `{}`; its functions are `Time::now()`, \
+                     `Time::from_iso(..)`, `Time::from_unix(..)`, and \
+                     `Time::from_unix_micros(..)`",
+                    name.name
+                ),
+                None if owner == Owner::Uuid => format!(
+                    "`Uuid` has no function `{}`; its functions are `Uuid::new()`, \
+                     `Uuid::v7()`, and `Uuid::v4()`",
+                    name.name
+                ),
+                None if owner == Owner::Bytes => format!(
+                    "`Bytes` has no function `{}`; its functions are `Bytes::from_text(..)` \
+                     and `Bytes::from_base64(..)`",
+                    name.name
+                ),
                 None => format!(
                     "`{type_name}` has no function `{}`; the only one is `{type_name}::new({})`",
                     name.name,
@@ -402,9 +423,12 @@ impl FnChecker<'_> {
         if owner == Owner::Log {
             return self.log_call(entry.name, args, span);
         }
-        // `Error::new` has no type to take from where it goes.
+        // `Error::new` has no type to take from where it goes, nor have
+        // the calls of `Time`, `Uuid`, and `Bytes`.
         let subst = match owner {
-            Owner::Error | Owner::Time => Some(builtins::Subst::default()),
+            Owner::Error | Owner::Time | Owner::TimeType | Owner::Uuid | Owner::Bytes => {
+                Some(builtins::Subst::default())
+            }
             _ => expected
                 .as_ref()
                 .and_then(Owner::of)

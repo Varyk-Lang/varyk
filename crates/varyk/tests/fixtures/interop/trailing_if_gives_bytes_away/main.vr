@@ -1,0 +1,13 @@
+mod ext;
+
+// A borrowed parameter cannot be given away to `Some`.
+fn lent(b: Bytes, flag: bool) -> usize {
+    ext::run("q", if flag { Some(b) } else { None })
+}
+
+fn main() {
+    let b = Bytes::from_text("abc");
+    let flag = true;
+    let n = ext::run("q", if flag { Some(b) } else { None });
+    println!("{} {}", n, b.len());
+}

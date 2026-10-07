@@ -63,7 +63,8 @@ pub struct Client {
     _private: (),
 }
 
-/// A path or query value: an integer, `bool`, or text.
+/// A path or query value: an integer, `bool`, text, a `Time`, or a
+/// `Uuid` (milestone 5c spec 6.1), each read through `FromStr`.
 pub trait Plain: std::str::FromStr {}
 
 impl Plain for i8 {}
@@ -77,6 +78,8 @@ impl Plain for u64 {}
 impl Plain for usize {}
 impl Plain for bool {}
 impl Plain for String {}
+impl Plain for varyk_std::Time {}
+impl Plain for varyk_std::Uuid {}
 
 /// A query parameter: a plain value, required, or an `Option` of one.
 pub trait QueryValue: Sized {

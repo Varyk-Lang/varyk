@@ -7,7 +7,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "The runtime that programs written in Varyk, a language for backend services that compiles to Rust, call into: errors, JSON, configuration, logging, and the async runtime and tasks"
+description = "The runtime that programs written in Varyk, a language for backend services that compiles to Rust, call into: errors, JSON, configuration, logging, time, ids, bytes, and the async runtime and tasks"
 readme = "../../README.md"
 keywords = ["varyk", "runtime", "json", "logging", "async"]
 categories = ["development-tools"]
@@ -19,3 +19,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+time = { version = "0.3.45", features = ["parsing", "formatting"] }
+uuid = { version = "1.20", features = ["v4", "v7"] }
+bytes = "1.10.1"
+base64 = "0.22"

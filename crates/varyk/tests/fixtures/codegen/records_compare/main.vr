@@ -1,0 +1,77 @@
+struct Record {
+    at: Time,
+    id: Uuid,
+    data: Bytes,
+}
+
+fn at(seconds: i64) -> Time {
+    let epoch = Time::now();
+    Time::from_unix(seconds).unwrap_or(epoch)
+}
+
+// A borrowed `Bytes` parameter against an owned local.
+fn known(data: Bytes) -> bool {
+    let seen = vec![Bytes::from_text("hi"), Bytes::from_text("hello")];
+    seen.contains(data)
+}
+
+fn same(data: Bytes) -> bool {
+    let bye = Bytes::from_text("bye");
+    data == bye
+}
+
+fn read_id(text: string) -> Result<Uuid, Error> {
+    let id: Uuid = text.parse()?;
+    Ok(id)
+}
+
+fn main() {
+    let early = at(1000);
+    let late = at(2000);
+    println!("{} {} {} {}", early < late, early <= late, early > late, late >= early);
+    println!("{} {}", early == late, early != late);
+    let mut times = vec![late, early, at(1500)];
+    times.sort();
+    println!("{} {} {}", times[0], times[1], times[2]);
+    println!("{}", times.contains(early));
+
+    match read_id("0192F0C4-7A3E-7B5C-9D1E-2F3A4B5C6D7E") {
+        Ok(id) => {
+            println!("{}", id);
+            let mut names: HashMap<Uuid, string> = HashMap::new();
+            names.insert(id, "first");
+            if let Some(name) = names.get(id) {
+                println!("{}", name);
+            }
+            println!("{}", names.contains_key(id));
+            for key in names.keys() {
+                println!("{}", key == id);
+            }
+            let ids = vec![id];
+            println!("{}", ids.contains(id));
+        }
+        Err(e) => println!("{}", e),
+    }
+    let parsed: Result<Time, Error> = "2026-10-07T12:00:00.250+01:00".parse();
+    match parsed {
+        Ok(t) => println!("{}", t),
+        Err(e) => println!("{}", e),
+    }
+
+    let hello = Bytes::from_text("hello");
+    println!("{} {}", known(hello), same(hello));
+    let copy = hello.clone();
+    println!("{}", copy == hello);
+    let record = Record { at: early, id: Uuid::new(), data: copy };
+    let twin = record.clone();
+    println!("{}", twin == record);
+}
+
+#[test]
+fn times_compare() {
+    let first: Result<Time, Error> = "1970-01-01T00:16:40Z".parse();
+    match first {
+        Ok(t) => assert_eq(t, at(1000)),
+        Err(e) => assert(false),
+    }
+}

@@ -63,6 +63,9 @@ pub(super) enum Need {
     /// An `Option<&str>` from an `Option<string>`, through `.as_deref()`
     /// (milestone 5b3 spec 2.2).
     OptStr,
+    /// An `Option<&T>` from an `Option<T>`, through `.as_ref()`: an
+    /// `Option<Bytes>` passed as a trailing value (milestone 5c spec 4).
+    OptRef,
     /// Whatever form the value already has: a `println!` argument, or an
     /// expression statement's value, which is dropped.
     AsIs,
@@ -209,11 +212,16 @@ impl<'a> FnEmitter<'a> {
     /// `expr` as Rust code of the type `need` requires, at `indent` levels
     /// (for the inner lines of a multi-line `if` or block).
     pub(super) fn expr(&self, expr: &HirExpr, need: Need, indent: usize) -> String {
-        if need == Need::OptStr && is_block_like(expr) {
+        if matches!(need, Need::OptStr | Need::OptRef) && is_block_like(expr) {
             // Each branch lent, so that none is moved or is a `None` with
             // no type to look through; the whole then looked through.
             let lent = self.expr(expr, Need::Shared { binding: false }, indent);
-            return format!("({lent}).as_deref()");
+            let method = if need == Need::OptStr {
+                "as_deref"
+            } else {
+                "as_ref"
+            };
+            return format!("({lent}).{method}()");
         }
         if self.borrows_new_value(expr, need) {
             // Borrowing inside each branch would borrow a temporary that
@@ -390,6 +398,8 @@ impl<'a> FnEmitter<'a> {
             },
             // `as_deref` takes `&self`: a place is read, not moved.
             Need::OptStr => format!("{}.as_deref()", postfix(expr, text)),
+            // As is `as_ref`.
+            Need::OptRef => format!("{}.as_ref()", postfix(expr, text)),
         }
     }
 
@@ -873,8 +883,9 @@ impl<'a> FnEmitter<'a> {
     /// when its last parameter is `Vec<varyk_std::Value>` (milestone 5b3
     /// spec 2.2, 4): one `vec![..]` of `::varyk_std::Value::from(..)`,
     /// which copies a string handed over as a `&str` (an `Option<string>`
-    /// through `.as_deref()`) and takes anything else by value. `None`
-    /// for any other callee.
+    /// through `.as_deref()`), takes a `Bytes` lent (an `Option<Bytes>`
+    /// through `.as_ref()`), which shares its buffer, and anything else by
+    /// value. `None` for any other callee.
     fn values(&self, callee: Callee, trailing: &[HirExpr], indent: usize) -> Option<String> {
         let Callee::Imported(id) = callee else {
             return None;
@@ -888,6 +899,9 @@ impl<'a> FnEmitter<'a> {
                 let need = match &value.ty {
                     Ty::String => Need::Str,
                     Ty::Option(inner) if **inner == Ty::String => Need::OptStr,
+                    // A `Bytes` is lent, never copied (milestone 5c spec 4).
+                    Ty::Bytes => Need::Shared { binding: false },
+                    Ty::Option(inner) if **inner == Ty::Bytes => Need::OptRef,
                     _ => Need::Value,
                 };
                 format!(
@@ -1364,6 +1378,9 @@ impl<'a> FnEmitter<'a> {
                 if matches!(
                     id.get().owner,
                     Owner::Error
+                        | Owner::TimeType
+                        | Owner::Uuid
+                        | Owner::Bytes
                         | Owner::Json
                         | Owner::Env
                         | Owner::Log

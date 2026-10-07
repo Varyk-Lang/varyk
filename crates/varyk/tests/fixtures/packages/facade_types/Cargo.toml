@@ -1,0 +1,12 @@
+[package]
+name = "facade_types"
+version = "0.1.0"
+edition = "2024"
+description = "A Varyk test library: a Rust facade naming Time, Uuid, and Bytes"
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.vr"
+
+[dependencies]
+varyk-std = "0.7.1"

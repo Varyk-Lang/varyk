@@ -8,4 +8,4 @@ error[V0203]: a `Shared<Config>` cannot be printed with `{}`; print the fields y
 7 |     println!("{}", config);
   |                    ^^^^^^ a `Shared<Config>` cannot be printed with `{}`; print the fields you read through it instead
   |
-  = note: only numbers, `bool`, `string`, and `Error` have a printed form
+  = note: only numbers, `bool`, `string`, `Error`, `Time`, and `Uuid` have a printed form

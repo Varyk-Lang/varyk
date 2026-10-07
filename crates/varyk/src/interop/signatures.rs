@@ -62,6 +62,15 @@ pub enum RustTy {
     /// `varyk_std::Error`, written by that full path (milestone 5b3 spec
     /// 2.4); the resolver accepts it only as the error of a `Result`.
     Error,
+    /// `varyk_std::Time`, written by that full path (milestone 5c spec
+    /// 2.5).
+    Time,
+    /// `varyk_std::Uuid`, written by that full path (milestone 5c spec
+    /// 2.5).
+    Uuid,
+    /// `varyk_std::Bytes`, written by that full path (milestone 5c spec
+    /// 2.5).
+    Bytes,
     /// The function's one type parameter, filled at the call from where
     /// the result goes (milestone 5b3 spec 2.1); only in a return of
     /// `Result<T, varyk_std::Error>`, `Result<Option<T>, ..>`, or
@@ -101,6 +110,9 @@ impl RustTy {
             RustTy::Values => "Vec<varyk_std::Value>",
             RustTy::Unit => "()",
             RustTy::Error => "varyk_std::Error",
+            RustTy::Time => "varyk_std::Time",
+            RustTy::Uuid => "varyk_std::Uuid",
+            RustTy::Bytes => "varyk_std::Bytes",
             RustTy::Param => "T",
             RustTy::SerializeParam => "&T",
             RustTy::Ref(inner) => return format!("&{}", inner.text()),
@@ -148,13 +160,19 @@ pub enum RustPath {
 }
 
 /// An item of `varyk-std` a `.rs` signature may name (milestone 5b3
-/// spec 2.2-2.4).
+/// spec 2.2-2.4, milestone 5c spec 2.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StdItem {
     /// `varyk_std::Error`.
     Error,
     /// `varyk_std::Value`.
     Value,
+    /// `varyk_std::Time`.
+    Time,
+    /// `varyk_std::Uuid`.
+    Uuid,
+    /// `varyk_std::Bytes`.
+    Bytes,
     /// `serde::de::DeserializeOwned` or
     /// `varyk_std::serde::de::DeserializeOwned`, the bound of a type
     /// parameter.
@@ -181,6 +199,9 @@ pub(super) fn std_item(path: &syn::Path) -> Option<StdItem> {
     match segments[..] {
         ["varyk_std", "Error"] => Some(StdItem::Error),
         ["varyk_std", "Value"] => Some(StdItem::Value),
+        ["varyk_std", "Time"] => Some(StdItem::Time),
+        ["varyk_std", "Uuid"] => Some(StdItem::Uuid),
+        ["varyk_std", "Bytes"] => Some(StdItem::Bytes),
         ["serde", "de", "DeserializeOwned"] | ["varyk_std", "serde", "de", "DeserializeOwned"] => {
             Some(StdItem::DeserializeOwned)
         }
@@ -439,8 +460,14 @@ pub(super) fn map_value(ty: &Type, names: &Names) -> RustTy {
     // A `.rs` file's own `mod varyk_std` would be read as varyk-std's
     // here too; accepted for the MVP.
     if let Type::Path(type_path) = ty {
-        if type_path.qself.is_none() && std_item(&type_path.path) == Some(StdItem::Error) {
-            return RustTy::Error;
+        if type_path.qself.is_none() {
+            match std_item(&type_path.path) {
+                Some(StdItem::Error) => return RustTy::Error,
+                Some(StdItem::Time) => return RustTy::Time,
+                Some(StdItem::Uuid) => return RustTy::Uuid,
+                Some(StdItem::Bytes) => return RustTy::Bytes,
+                _ => {}
+            }
         }
     }
     RustTy::Opaque(type_to_text(ty))

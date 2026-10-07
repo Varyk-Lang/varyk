@@ -2,8 +2,8 @@
 source: crates/varyk/tests/errors.rs
 expression: stderr
 ---
-error[V0200]: `sort` needs a `Vec` of an integer type, `bool`, or `string`, and this is `Vec<f64>`
+error[V0200]: `sort` needs a `Vec` of an integer type, `bool`, `string`, or `Time`, and this is `Vec<f64>`
  --> crates/varyk/tests/fixtures/errors/v0200_sort_floats/main.vr:3:12
   |
 3 |     prices.sort();
-  |            ^^^^ `sort` needs a `Vec` of an integer type, `bool`, or `string`, and this is `Vec<f64>`
+  |            ^^^^ `sort` needs a `Vec` of an integer type, `bool`, `string`, or `Time`, and this is `Vec<f64>`

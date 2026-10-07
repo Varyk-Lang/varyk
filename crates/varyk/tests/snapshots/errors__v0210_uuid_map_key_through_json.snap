@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0210]: `Scores` cannot be read from JSON
+ --> crates/varyk/tests/fixtures/errors/v0210_uuid_map_key_through_json/main.vr:6:41
+  |
+2 |     by_id: HashMap<Uuid, i64>,
+  |     ------------------------- `HashMap<Uuid, i64>` has keys that are not `string`
+...
+6 |     let scores: Result<Scores, Error> = json::parse("{}");
+  |                                         ^^^^^^^^^^^^^^^^^ `Scores` cannot be read from JSON
+  |
+  = note: the keys of a JSON object are text, so only a `HashMap<string, _>` can go through JSON

@@ -122,6 +122,124 @@ fn a_single_file_naming_error_only_in_a_signature_depends_on_varyk_std() {
     );
 }
 
+/// A single file whose only mention of `varyk-std` is `Time` in a struct
+/// field depends on it, as for `Error` (milestone 5c spec 7.1).
+#[test]
+fn a_single_file_naming_time_only_in_a_struct_field_depends_on_varyk_std() {
+    let krate = generate_str("struct Event {\n    at: Time,\n}\n\nfn main() {}\n");
+    assert!(
+        krate
+            .cargo_toml
+            .contains(&format!("varyk-std = \"={}\"", env!("CARGO_PKG_VERSION"))),
+        "{}",
+        krate.cargo_toml
+    );
+    let main = file(&krate, "src/main.rs");
+    assert!(main.contains("at: ::varyk_std::Time,"), "{main}");
+}
+
+/// Every call of `Time`, `Uuid`, and `Bytes` (milestone 5c spec 2.1 to
+/// 2.3, 4): the types and associated calls in full, methods on their
+/// receivers, and a `Bytes` parameter lent.
+#[test]
+fn time_uuid_and_bytes_calls_emit_in_full() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/time_ids_bytes/main.vr");
+    let main = file(&krate, "src/main.rs");
+    for expected in [
+        "at: ::varyk_std::Time,",
+        "id: ::varyk_std::Uuid,",
+        "data: ::varyk_std::Bytes,",
+        "fn later(t: ::varyk_std::Time, seconds: i64) -> Result<::varyk_std::Time, ::varyk_std::Error>",
+        "fn size(data: &::varyk_std::Bytes) -> usize",
+        "::varyk_std::Time::now()",
+        "::varyk_std::Time::from_iso(\"2026-10-07T12:00:00.5+02:00\")",
+        "::varyk_std::Time::from_unix(0i64)",
+        "::varyk_std::Time::from_unix_micros(1500000i64)",
+        "::varyk_std::Uuid::new()",
+        "::varyk_std::Uuid::v7()",
+        "::varyk_std::Uuid::v4()",
+        "::varyk_std::Bytes::from_text(\"héllo\")",
+        "::varyk_std::Bytes::from_base64(\"aGk=\")",
+        "t.add_seconds(seconds)",
+        "record.at.seconds_since(epoch)",
+        "data.to_text()",
+        "record.data.to_base64()",
+    ] {
+        assert!(main.contains(expected), "{expected} in {main}");
+    }
+    insta::assert_snapshot!("time_ids_bytes_main_rs", main);
+}
+
+/// Comparing, printing, parsing, and copying `Time`, `Uuid`, and `Bytes`
+/// (milestone 5c spec 2.1 to 2.4): orderings and `sort` on times, `parse`
+/// turbofished, a `Uuid` map key, a borrowed `Bytes` compared with an owned
+/// one, and `.clone()` on `Bytes`.
+#[test]
+fn records_compare_main_rs() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/records_compare/main.vr");
+    let main = file(&krate, "src/main.rs");
+    for expected in [
+        "early < late,",
+        "times.sort();",
+        "times.contains(&early)",
+        "::varyk_std::parse::<::varyk_std::Uuid>(text)?",
+        "::varyk_std::parse::<::varyk_std::Time>(\"2026-10-07T12:00:00.250+01:00\")",
+        "::std::collections::HashMap<::varyk_std::Uuid, String>",
+        "seen.contains(data)",
+        "data == &bye",
+        "let copy = hello.clone();",
+        "#[derive(Clone, PartialEq)]\nstruct Record {",
+    ] {
+        assert!(main.contains(expected), "{expected} in {main}");
+    }
+    insta::assert_snapshot!("records_compare_main_rs", main);
+}
+
+/// `Time`, `Uuid`, and `Bytes` in a struct `json::stringify` writes and
+/// `json::parse` reads (milestone 5c spec 2.4): the struct derives both
+/// directions through `varyk-std`, its fields typed in full.
+#[test]
+fn records_json_main_rs() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/records_json/main.vr");
+    let main = file(&krate, "src/main.rs");
+    for expected in [
+        "#[derive(::varyk_std::serde::Serialize, ::varyk_std::serde::Deserialize)]",
+        "seen: Option<::varyk_std::Time>,",
+        "ids: Vec<::varyk_std::Uuid>,",
+        "::varyk_std::json::parse::<Record>(",
+        "::varyk_std::json::parse::<Blob>(",
+    ] {
+        assert!(main.contains(expected), "{expected} in {main}");
+    }
+    insta::assert_snapshot!("records_json_main_rs", main);
+}
+
+/// `Bytes` ownership (milestone 5c spec 2.3, 4): a parameter lent as
+/// `&::varyk_std::Bytes`, a field owning, a move, a returned parameter
+/// and part of one borrowed, a cloned return owned, and the `.clone()`
+/// that mends a borrowed `Bytes` stored in a field or given to an owned
+/// facade parameter.
+#[test]
+fn bytes_ownership_main_rs() {
+    let krate = generate_path("crates/varyk/tests/fixtures/codegen/bytes_ownership/main.vr");
+    let main = file(&krate, "src/main.rs");
+    for expected in [
+        "data: ::varyk_std::Bytes,",
+        "fn size(data: &::varyk_std::Bytes) -> usize",
+        "fn body(data: &::varyk_std::Bytes) -> &::varyk_std::Bytes",
+        "fn content(upload: &Upload) -> &::varyk_std::Bytes",
+        "fn copy(data: &::varyk_std::Bytes) -> ::varyk_std::Bytes",
+        "data.clone()",
+        "Upload { data: body(data).clone() }",
+        "crate::ext::keep(data.clone())",
+        "let moved = data;",
+        "crate::ext::keep(copied)",
+    ] {
+        assert!(main.contains(expected), "{expected} in {main}");
+    }
+    insta::assert_snapshot!("bytes_ownership_main_rs", main);
+}
+
 #[test]
 fn functions_main_rs() {
     let krate = generate_path("examples/functions.vr");
@@ -370,6 +488,19 @@ fn trailing_values_to_a_vec_of_values() {
         "::varyk_std::Value::from(user.age)",
         // `Some(x)` is passed as `x`, read in place.
         "vec![::varyk_std::Value::from(\"Ada\"), ::varyk_std::Value::from(name.as_str())]",
+        // `Time` and `Uuid` by value; a `Bytes` lent, never copied, and an
+        // `Option<Bytes>` looked through (milestone 5c spec 4).
+        "::varyk_std::Value::from(at)",
+        "::varyk_std::Value::from(key)",
+        "::varyk_std::Value::from(seen)",
+        "::varyk_std::Value::from(&b)",
+        "::varyk_std::Value::from(extra.as_ref())",
+        // A parameter and a borrowed return are already references.
+        "vec![::varyk_std::Value::from(b), ::varyk_std::Value::from(maybe.as_ref())]",
+        "::varyk_std::Value::from(data(&doc))",
+        // An `if` is lent whole, then looked through: no branch borrows a
+        // value that dies with it, and `None` has a type.
+        "::varyk_std::Value::from((&(if flag {\n        Some(b)\n    } else {\n        None\n    })).as_ref())",
     ] {
         assert!(main.contains(expected), "{expected} in {main}");
     }

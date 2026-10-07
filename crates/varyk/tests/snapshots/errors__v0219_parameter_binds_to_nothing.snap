@@ -8,4 +8,4 @@ error[V0219]: the parameter `ratio` of `scale` gets no value from the request
 9 |     app.get("/scale", scale);
   |     ^^^^^^^^^^^^^^^^^^^^^^^^ the parameter `ratio` of `scale` gets no value from the request
   |
-  = note: a handler's parameter is a `{name}` of the path, the state as a `Shared`, a `Request`, the body on `post`, `put`, or `patch`, or a query parameter: an integer, `bool`, `string`, or an `Option` of one
+  = note: a handler's parameter is a `{name}` of the path, the state as a `Shared`, a `Request`, the body on `post`, `put`, or `patch`, or a query parameter: an integer, `bool`, `string`, `Time`, `Uuid`, or an `Option` of one

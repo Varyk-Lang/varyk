@@ -53,6 +53,11 @@
         },
         {
           "type": "toml",
+          "path": "/crates/varyk/tests/fixtures/packages/facade_types/Cargo.toml",
+          "jsonpath": "$.dependencies.varyk-std"
+        },
+        {
+          "type": "toml",
           "path": "/crates/varyk/tests/fixtures/packages/store/Cargo.toml",
           "jsonpath": "$.dependencies.varyk-std"
         },

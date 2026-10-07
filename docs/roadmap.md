@@ -186,13 +186,23 @@ After 5b4, `varyk-mongo` and `varyk-redis` are the next packages.
 
 ### Milestone 5c: time, ids, and bytes
 
-To be designed in its own spec after 5b4's. What a production API needs
-that the language lacks, so that the users API does not ship `created_at`
-as a string. Milestone 5 is met when 5b4 and 5c are done.
+Design: [specs/2026-10-07-milestone-5c-design.md](specs/2026-10-07-milestone-5c-design.md).
+What a production API needs that the language lacks, so that the users API
+does not ship `created_at` as a string. Milestone 5 is met when 5b4 and 5c
+are done.
 
-- [ ] A date-time type with `now()`, ISO 8601 in JSON, and native columns in `varyk-sql`
-- [ ] A UUID type
-- [ ] A bytes type, which lets `varyk-http` read uploads and binary bodies
+The compiler:
+
+- [x] `Time`: `now`, `from_iso`, `from_unix`, `from_unix_micros`, `to_iso`, `to_unix`, `to_unix_micros`, `add_seconds`, `seconds_since`, `parse`, comparison, RFC 3339 in JSON and `env`
+- [x] `Uuid`: `new` (version 7), `v7`, `v4`, `parse`, a map key, the hyphenated form in JSON and `env`
+- [x] `Bytes`: `from_text`, `from_base64`, `to_text`, `to_base64`, `len`, `is_empty`, base64 in JSON
+- [x] The three in trailing values, route parameters (`Time` and `Uuid`), and facade signatures; `varyk-std` 0.8
+- [x] The example `records`, and the docs
+
+The packages, each in its own repository:
+
+- [ ] `varyk-sql`: concrete pools in place of `Any`; the three types as native columns
+- [ ] `varyk-http`: `Time` and `Uuid` path and query parameters; bytes bodies, uploads, binary WebSocket messages, and the client's bytes; `created_at: Time` in the `users` demo
 
 ## Milestone 6: tooling and beyond
 
@@ -211,7 +221,7 @@ milestone 5b3 makes unnecessary for what a facade needs (moved from 5b2).
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
 
-TOML, beside the rest of the cuts listed under "Not in milestone 5b4" in
+TOML, beside the rest of the cuts listed under "Not in milestone 5c" in
 [language.md](language.md): nothing on the golden path needs it, and the
 same machinery adds it later.
 

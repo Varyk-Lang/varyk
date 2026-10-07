@@ -23,8 +23,10 @@ milestone 5b2's (packages) in
 [specs/2026-10-02-milestone-5b2-design.md](specs/2026-10-02-milestone-5b2-design.md),
 milestone 5b3's (facades for packages) in
 [specs/2026-10-03-milestone-5b3-design.md](specs/2026-10-03-milestone-5b3-design.md),
-and milestone 5b4's (`varyk-http` and the golden path) in
-[specs/2026-10-05-milestone-5b4-design.md](specs/2026-10-05-milestone-5b4-design.md).
+milestone 5b4's (`varyk-http` and the golden path) in
+[specs/2026-10-05-milestone-5b4-design.md](specs/2026-10-05-milestone-5b4-design.md),
+and milestone 5c's (time, ids, and bytes) in
+[specs/2026-10-07-milestone-5c-design.md](specs/2026-10-07-milestone-5c-design.md).
 
 ## Principles
 
@@ -36,8 +38,11 @@ In priority order. When two conflict, the earlier one wins.
    return value, a variable that must own its string, or a Rust function
    parameter of type `String`) is converted at that line, and a string
    passed as a trailing value of a facade (milestone 5b3) is copied into
-   the value it is handed over in; `--emit-rust` shows both. Aliasing rules are preserved. The generated Rust is checked by
-   rustc, and Varyk never works around rustc with unsafe code.
+   the value it is handed over in; `--emit-rust` shows both. A `Bytes`
+   passed as a trailing value (milestone 5c) is lent, not copied: the
+   value adds one to the reference count of its shared buffer and
+   allocates nothing. Aliasing rules are preserved. The generated Rust is
+   checked by rustc, and Varyk never works around rustc with unsafe code.
 2. **The service developer first, human or agent.** Every tie-breaker on
    the surface language goes toward the developer building services who has
    never written Rust. Learnability is a value in its own right: the language and
@@ -71,7 +76,7 @@ In priority order. When two conflict, the earlier one wins.
 
 `varyk-std` stays the small runtime every program has: what the language
 itself needs and the light things nearly every service uses (`Error`,
-tasks, `json`, `env`, `log`). Anything heavy is a package the writer adds:
+tasks, `json`, `env`, `log`, and `Time`, `Uuid`, and `Bytes`). Anything heavy is a package the writer adds:
 SQL, MongoDB, Redis, the HTTP server and client. A program that prints a
 line never compiles a web server or a database driver. Official packages
 are named `varyk-*` and community packages `*-varyk` (`TRADEMARKS.md`
@@ -126,11 +131,11 @@ generated Rust have no stability guarantee before 1.0.
 | Name | Varyk | Lithuanian for "go!", the imperative of *varyti*; unclaimed on crates.io, npm, and PyPI at the time of writing, with no repository of that name on GitHub; does not contain "Rust" |
 | Extension | `.vr` | short, "var" mnemonic, unclaimed |
 | String type | `string`, lowercase, one type | newcomer first; owned versus borrowed is a compiler decision |
-| String allocation | only a literal placed into an owned slot converts, at that line; from 5b3, a string trailing value is also copied, by `Value::from`, as it is handed over | predictable allocations, visible in `--emit-rust`; no hidden copies |
+| String allocation | only a literal placed into an owned slot converts, at that line; from 5b3, a string trailing value is also copied, by `Value::from`, as it is handed over; a `Bytes` trailing value (5c) only adds to a reference count, since `varyk-std` builds every `Bytes` in the `bytes` crate's shared form | predictable allocations, visible in `--emit-rust`; no hidden copies |
 | Borrowed values | a value a function only borrows cannot be stored into a struct or returned, for now | the alternative is a hidden copy; lifetime inference comes later |
 | Assignment | Rust move semantics; `string` is never `Copy` | preserves Rust's model; diagnostics carry the burden |
 | Parameter passing | borrow by default, `mut` for mutable borrow | keeps Rust's ownership model while taking its bookkeeping out of everyday code |
-| Copy types | numbers and `bool` are passed by value | observably identical to a borrow, no indirection |
+| Copy types | numbers and `bool` are passed by value, and from 5c `Time` and `Uuid` | observably identical to a borrow, no indirection |
 | Modules | `mod name;` resolves to `.vr` or `.rs`, `pub` for visibility, one file per module in the generated crate | Rust's rule; Varyk and Rust modules are symmetric |
 | Rust interop | `.rs` files as modules, plus Cargo crates; no inline Rust blocks | the TypeScript and JavaScript model; one grammar per file |
 | Manifest | `Cargo.toml` | reuse Cargo entirely; no Varyk manifest |
@@ -218,3 +223,4 @@ generated Rust have no stability guarantee before 1.0.
 | A type from a package not depended on (5b2) | refused, V0115 | the generated Rust must be able to name it |
 | Facades for packages (5b3) | a `.rs` signature may take a type parameter filled from where the result goes, a last `Vec<varyk_std::Value>` written as trailing values, literal-only `&'static str` text, and `varyk_std::Error`; `Value` is scalars only, built by the compiler without serde; `varyk-sql` lives in its own repository | a package such as `varyk-sql` is Varyk with a thin layer of Rust, and its users write no Rust; with scalars no conversion can fail, so no failure is hidden as `Null` or turned into a crash; `varyk-sql`'s version follows sqlx and the databases as much as the compiler |
 | HTTP (5b4) | `varyk-http`, in its own repository, on axum with tower-http, its client on reqwest with rustls; the compiler knows it by crate name, under any key: the route and hook calls on its `App` are intrinsics, each route checked against its handler and compiled to one adapter that names only the package's items, never axum; a handler's parameters bound by name to the path and query, by type to the body, the state, and the package's own types; its return value is the response; `Error` gains an optional status, and an error without one is a 500 whose message is logged, not sent | Varyk has no function values, so some part of a route table must be known to the compiler, and knowing one package by name is smaller than a general mechanism; axum is in the top tier of TechEmpower round 23, runs on the tokio runtime `varyk-std` already starts, has the middleware a real API needs, and is maintained by the tokio organisation Varyk already bets on; the compiler writes every adapter with concrete types, so axum's trait errors never reach a writer; with one binding rule for the package's own types, WebSockets, server-sent events, and uploads need no compiler change |
+| Time, ids, and bytes (5c) | `Time` (a point in time in UTC, in microseconds), `Uuid` (`Uuid::new()` a version 7, `Uuid::v4()` the random one by name), and `Bytes` (immutable, base64 in JSON) are built-in types, each its own variant in the compiler; the three reach JSON, comparison, trailing values, and facade signatures, and `Time` and `Uuid` also `env`, `parse`, printing, and route parameters; `varyk-std` holds them on `time`, `uuid`, `bytes`, and `base64`, with `bytes` its one public dependency, and every program that uses `varyk-std` builds the four | a users API stores `created_at` as a time, not a string; a built-in type goes through the lists `Error` went through, where a shared scalar variant would be a new abstraction `Bytes` does not fit and an imported Rust struct could not reach JSON, printing, or comparison without an exception in each; microseconds are what Postgres and MySQL hold, so a time read back equals the one written; axum gives a body as a `bytes::Bytes`, and handing it over must not copy it |

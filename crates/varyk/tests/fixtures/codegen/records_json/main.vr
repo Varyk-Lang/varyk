@@ -1,0 +1,56 @@
+struct Record {
+    at: Time,
+    id: Uuid,
+    data: Bytes,
+    seen: Option<Time>,
+    ids: Vec<Uuid>,
+}
+
+struct Stamp {
+    at: Time,
+}
+
+struct Blob {
+    data: Bytes,
+}
+
+fn record() -> Result<Record, Error> {
+    let at = Time::from_iso("2026-10-07T12:00:00.5+02:00")?;
+    let id: Uuid = "0192F0C4-7A3E-7B5C-9D1E-2F3A4B5C6D7E".parse()?;
+    let other: Uuid = "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b".parse()?;
+    Ok(Record {
+        at: at,
+        id: id,
+        data: Bytes::from_text("hello"),
+        seen: Some(at),
+        ids: vec![id, other],
+    })
+}
+
+// Written, printed, read back, and compared with `==`.
+fn round_trip(record: Record) -> Result<bool, Error> {
+    let text = json::stringify(record);
+    println!("{}", text);
+    let back: Record = json::parse(text)?;
+    Ok(back == record)
+}
+
+fn main() {
+    match record() {
+        Ok(r) => match round_trip(r) {
+            Ok(same) => println!("{}", same),
+            Err(e) => println!("error: {}", e),
+        },
+        Err(e) => println!("error: {}", e),
+    }
+    let stamp: Result<Stamp, Error> = json::parse("{\"at\": 1791374400}");
+    match stamp {
+        Ok(s) => println!("{}", s.at),
+        Err(e) => println!("error: {}", e),
+    }
+    let blob: Result<Blob, Error> = json::parse("{\"data\": \"aGk\"}");
+    match blob {
+        Ok(b) => println!("{}", b.data.len()),
+        Err(e) => println!("error: {}", e),
+    }
+}

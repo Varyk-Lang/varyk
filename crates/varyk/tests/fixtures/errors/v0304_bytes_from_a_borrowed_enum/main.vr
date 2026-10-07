@@ -1,0 +1,12 @@
+mod ext;
+
+fn forward(message: ext::Message) -> usize {
+    match message {
+        ext::Message::Binary(data) => ext::keep(data).len(),
+        ext::Message::Text(text) => text.len(),
+    }
+}
+
+fn main() {
+    println!("{}", forward(ext::Message::Binary(Bytes::from_text("hello"))));
+}

@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0219]: the path parameter `data` of `get_file` is `Bytes`, and a path segment gives an integer, `bool`, `string`, `Time`, or `Uuid`
+ --> src/main.vr:9:5
+  |
+9 |     app.get("/files/{data}", get_file);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the path parameter `data` of `get_file` is `Bytes`, and a path segment gives an integer, `bool`, `string`, `Time`, or `Uuid`
+  |
+  = note: give `data` an integer type, `bool`, `string`, `Time`, or `Uuid`; a value with more in it, such as a struct, comes from the body or the state
