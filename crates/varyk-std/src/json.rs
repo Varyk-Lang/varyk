@@ -3,11 +3,19 @@
 use crate::Error;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::error::Category;
 
 /// Reads a `T` from JSON text. Unknown keys are ignored; a missing key is
 /// an error naming it unless serde has a default for it (`Option` is `None`).
+/// Text that is not JSON at all, or stops early, is an error that says so
+/// first: `it is not JSON (expected ident at line 1 column 2)`.
 pub fn parse<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
-    serde_json::from_str(text).map_err(|e| Error::new(e.to_string()))
+    serde_json::from_str(text).map_err(|e| {
+        Error::new(match e.classify() {
+            Category::Syntax | Category::Eof => format!("it is not JSON ({e})"),
+            Category::Io | Category::Data => e.to_string(),
+        })
+    })
 }
 
 /// Writes `value` as compact JSON.
@@ -80,8 +88,20 @@ mod tests {
     }
 
     #[test]
-    fn bad_json_is_an_error() {
-        assert!(parse::<User>("{nope").is_err());
+    fn text_that_is_not_json_says_so() {
+        let message = |text: &str| match parse::<User>(text) {
+            Err(e) => e.message().to_string(),
+            Ok(_) => panic!("expected an error for {text}"),
+        };
+        assert_eq!(
+            message("name=ann"),
+            "it is not JSON (expected ident at line 1 column 2)"
+        );
+        assert_eq!(
+            message("{\"name\":"),
+            "it is not JSON (EOF while parsing a value at line 1 column 8)"
+        );
+        assert!(!message(r#"{"name":"Bo"}"#).contains("not JSON"));
     }
 
     #[test]

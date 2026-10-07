@@ -1,0 +1,23 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() -> ::std::process::ExitCode {
+    ::varyk_std::run(async {
+        ::varyk_std::start();
+        match varyk_main().await {
+            Ok(_) => ::std::process::ExitCode::SUCCESS,
+            Err(varyk_error) => {
+                ::varyk_std::tracing::error!("{}", varyk_error);
+                ::std::process::ExitCode::FAILURE
+            }
+        }
+    })
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+async fn varyk_main() -> Result<bool, ::varyk_std::Error> {
+    ::varyk_std::tracing::info!("starting");
+    Ok(true)
+}

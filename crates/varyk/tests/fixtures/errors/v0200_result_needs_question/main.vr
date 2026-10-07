@@ -1,0 +1,13 @@
+mod ext;
+
+async fn count(db: ext::Store) -> Result<i64, Error> {
+    let id: i64 = db.one("7").await;
+    Ok(id)
+}
+
+async fn main() {
+    match count(ext::Store::open()).await {
+        Ok(id) => println!("{}", id),
+        Err(e) => println!("{}", e.message()),
+    }
+}

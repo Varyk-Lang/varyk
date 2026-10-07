@@ -26,6 +26,29 @@ impl Symbols {
         self.deps.iter().find(|dep| dep.name == name)
     }
 
+    /// The note for an unknown path `path`, as written, whose first name
+    /// is `http` or `sql`, the official shorthands of `varyk add`, when
+    /// nothing here goes by that name: no dependency of the package, no
+    /// module of the package, and no `use` alias of `from`'s file. The
+    /// package was most likely never added.
+    pub(crate) fn not_added(&self, from: ModuleId, path: &str) -> Option<String> {
+        let (first, _) = path.split_once("::")?;
+        let package = match first {
+            "http" => "varyk-http",
+            "sql" => "varyk-sql",
+            _ => return None,
+        };
+        if self.dep(first).is_some()
+            || self.module_named(first)
+            || self.scopes[from.0 as usize].use_types.contains_key(first)
+        {
+            return None;
+        }
+        Some(format!(
+            "`{first}` is not a package of this build; `varyk add {first}` adds {package}"
+        ))
+    }
+
     /// Step 3 of M5b2 spec 2.1 for `first`, the first name of a path that
     /// is neither a module declared here nor a `use` alias: the root of
     /// the Varyk package the package's dependency of that name is,

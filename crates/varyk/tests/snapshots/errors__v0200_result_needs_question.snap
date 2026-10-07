@@ -1,0 +1,12 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0200]: mismatched types: expected `i64`, found `Result<_, Error>`
+ --> crates/varyk/tests/fixtures/errors/v0200_result_needs_question/main.vr:4:19
+  |
+4 |     let id: i64 = db.one("7").await;
+  |                   ^^^^^^^^^^^ mismatched types: expected `i64`, found `Result<_, Error>`
+  |
+  = note: this gives a `Result`, which holds the value or an error; `?` takes the value out, and on an error returns it from the function
+help: insert `?` after `await`

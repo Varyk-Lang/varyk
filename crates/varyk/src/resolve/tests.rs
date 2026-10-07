@@ -893,6 +893,24 @@ fn main_returning_a_value_is_v0106() {
     assert_eq!(only(&d).code, codes::V0106);
 }
 
+#[test]
+fn main_returning_a_result_with_error_resolves() {
+    for main in [
+        "fn main() -> Result<i64, Error> { Ok(0) }\n",
+        "async fn main() -> Result<bool, Error> { Ok(true) }\n",
+    ] {
+        if let Err(d) = resolve_str(main).0 {
+            panic!("{main}: {d:#?}");
+        }
+    }
+}
+
+#[test]
+fn main_returning_a_result_with_another_error_is_v0106() {
+    let d = errors_str("fn main() -> Result<i64, string> { Ok(0) }\n");
+    assert_eq!(only(&d).code, codes::V0106);
+}
+
 // --- Types and duplicates -----------------------------------------------
 
 #[test]

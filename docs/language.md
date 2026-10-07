@@ -13,8 +13,9 @@ and can be skipped.
 ## Files and modules
 
 A Varyk program is a file ending in `.vr`. This is the entry file, and it
-must define a function called `main` that takes nothing and returns nothing.
-The program starts there.
+must define a function called `main` that takes nothing and returns nothing
+or a `Result` whose error is `Error`, such as `Result<bool, Error>`. The
+program starts there.
 
 ```varyk
 // main.vr
@@ -22,6 +23,19 @@ fn main() {
     println!("Hello, world!");
 }
 ```
+
+A `main` that returns a `Result` may use `?` (see [Passing errors on](#passing-errors-on)). When
+it gives `Ok`, whatever the value, the program exits with code 0; when it
+gives `Err(e)`, the program reports the message of `e` once and exits with
+code 1. A program that logs (see [Logging](#logging)) reports it as a log
+line at the `error` level; any other prints `error: ` and the message to
+standard error. Nothing may call such a `main` (V0106).
+
+For Rust readers: that `main` is written as `fn varyk_main()`, and the
+Rust `fn main() -> std::process::ExitCode` calls it (through
+`varyk_std::run` when it is async) and matches on the result; it never
+calls `std::process::exit`, so the runtime shuts down and the log is
+flushed.
 
 A program can also be a package: a directory with a `Cargo.toml` (the file
 Rust's build tool, cargo, reads) and a `src/` directory whose entry file is
@@ -1022,11 +1036,17 @@ when it is `None`, the function returns `None` at once. It works only in a
 function that returns an `Option`, on an `Option`.
 
 Anything else is V0206: `?` in a function that does not return a `Result`
-or an `Option` (`main` never does, so use `?` in a helper and `match` on its
-result there), on an `Option` in a function that returns a `Result` or a
+or an `Option` (a `main` that returns nothing included; `main` may return a
+`Result` whose error is `Error` instead), on an `Option` in a function that returns a `Result` or a
 `Result` in a function that returns an `Option` (the message names both
 types), on a value that is neither, or on a `Result` whose error type is
 different; an error is never converted into another type.
+
+A `Result` with `Error` where its value is wanted, as in
+`let id: i64 = db.one(..).await;`, is a V0200 mismatch. In a function that
+returns a `Result` with `Error` its help inserts the `?` (after the
+`.await`); in any other function a note says to take the value out with
+`match` or `if let`.
 
 What a `?` is expected to produce flows into its operand, so
 `let n: i32 = Ok(x)?;` and `let n: i32 = Some(x)?;` type without more
@@ -1330,7 +1350,8 @@ like any call, and `f(x).await?` passes an `Err` on.
 
 `async fn main()` starts the program on a runtime that spreads async work
 over every core of the machine; a program that logs starts logging first
-thing inside it. Nothing may call an async `main` (V0106). `#[test] async
+thing inside it. Nothing may call an async `main` (V0106). An async `main`
+may return a `Result` as any `main` may. `#[test] async
 fn` is a test, run on a runtime of its own; otherwise the rules of
 [Tests](#tests) apply. Both keep the shape of any `main` and any test.
 
@@ -1631,7 +1652,7 @@ the module's name, `json::parse(..)`; there is no `use json;`.
 
 | Call | Uses the value | Result |
 |---|---|---|
-| `json::parse(text)`; `text: string` read | none | `Result<T, Error>`: a `T` read from the JSON text, or an `Err` saying what is wrong |
+| `json::parse(text)`; `text: string` read | none | `Result<T, Error>`: a `T` read from the JSON text, or an `Err` saying what is wrong; for text that is not JSON at all, or stops early, the message starts `it is not JSON`, as in `it is not JSON (expected ident at line 1 column 2)` |
 | `json::stringify(value)`; `value: T` read | none | new text: `value` as compact JSON |
 
 ```varyk
@@ -1849,7 +1870,7 @@ in a `.rs` signature (a facade returns a `Vec` or a struct); `iter()`,
 `keys()`, `values()`, `split()`, and `trim()` on a value made right there;
 `Box`; struct patterns on plain structs; tuples and tuple patterns, so no
 `for (k, v) in map`; struct field shorthand; a `main` that returns a
-`Result`; a function returning part of two parameters, or of a `mut`
+`Result` with an error other than `Error`; a function returning part of two parameters, or of a `mut`
 parameter; a borrowed return from a Rust signature whose lifetimes Rust's
 elision would not settle; and `Debug` with `{:?}`.
 
@@ -2896,7 +2917,8 @@ stops with "this package is a library; it has nothing to run", and
   and so does cargo failing before it compiles anything, followed by
   cargo's own words.
 
-`run` exits with the program's exit code, and `test` with the test
+`run` exits with the program's exit code (1 when `main` gives an `Err`, see
+[Files and modules](#files-and-modules)), and `test` with the test
 runner's (see [Tests](#tests)); a Rust error while building the tests is
 reported as under `build`. For a single file, the generated
 Rust project lives in the build directory, `target/varyk/` under the current
@@ -2973,7 +2995,10 @@ package asked for), since
 `http` and `sql` are also names of unrelated crates; the full name with
 `--rename` passes through to cargo, as does any call whose first argument is
 not an official name (`varyk add serde`). Each package lives in its own
-repository, and its README says what it offers.
+repository, and its README says what it offers. A path starting `http::` or
+`sql::` that names nothing, when the package has no dependency, module, or
+`use` by that name, gets a note saying so: "`sql` is not a package of this
+build; `varyk add sql` adds varyk-sql".
 
 A program that uses `varyk-std` (it names `Error`, calls one of its
 features, such as `json`, `log`, `time::sleep`, or `Task::all`, starts a call, or has an
@@ -3041,7 +3066,7 @@ Every error has a code. A code is never reused for a different meaning.
 | V0103 | a name defined more than once (a method included, a `use` or `pub use` name the module already declares or brings in, a field of a variant, a field named twice in a value or a pattern, or a name twice in one pattern), or a reserved or built-in type name used as a name, or a binding named after a unit variant of its own enum (`Point` where `Shape::Point` is meant) |
 | V0104 | a module file that is missing, present as both `.vr` and `.rs` (in a Varyk package this build uses, the `.vr` is loaded and the `.rs` ignored instead) or as both `shop.vr` and `shop/mod.vr`, unreadable, a `.rs` file that cannot be parsed as Rust, or named `main` or `lib` (or `bin` in the entry file), in any capitalization; a `.rs` file that uses a crate not in `[dependencies]` (or only in `[dev-dependencies]`, or any crate in a single file) in a `use` or `extern crate` item (a crate named only in a path, `other::f()`, is rustc's to report, at build), declares a module of its own, or uses `include!`, shown at that line of the `.rs` file |
 | V0105 | an item, method, or associated function used from outside its module without `pub`; a path through a module declared without `pub`; a `pub` item or field naming a type some of its users cannot see (in a library, the packages that use it included: a `pub` item in `pub` modules, or a `pub` function, method, or field of a `.rs` module they can reach, naming a type in a private module); a private struct field read, assigned, or named in a literal from outside its module; a literal of a Rust struct with a field Varyk cannot see or use; a Rust function marked `pub(crate)` (or another `pub(...)`) rather than plain `pub`; a `pub use` of an item without `pub`, or of one in a module that is not `pub` all the way from the root; a function named as a route's handler or a hook that is not visible from the route or hook call |
-| V0106 | a missing or malformed `fn main()`, `main` defined in a library's `src/lib.vr`, a call to an async `main`, or `main` named as a route's handler or a hook |
+| V0106 | a missing `fn main()`, or a `main` with parameters or returning anything but nothing or a `Result` whose error is `Error`, `main` defined in a library's `src/lib.vr`, a call to an async `main` or to a `main` that returns a `Result`, or `main` named as a route's handler or a hook |
 | V0107 | `String` or `str` written where `string` is meant |
 | V0108 | a Rust function or method whose signature Varyk cannot call, including one naming a type its callers cannot see; the message shows the signature and what to change, for a generic one which part is outside the two type parameter shapes of "Calling Rust" (a `Serialize` bound without `?Sized` says to add it). Also a `pub` field of a Rust struct whose Rust type Varyk cannot use (or cannot see), read or assigned, a Rust type reached through a `use` line in the `.rs` file rather than its full path, and a type in a `.rs` file with a glob `use` or a macro that could define names |
 | V0109 | a struct or enum that contains itself, directly or through other structs, enums, `Option`, or `Result`; a `Vec` or `HashMap` breaks the cycle |
@@ -3051,7 +3076,7 @@ Every error has a code. A code is never reused for a different meaning.
 | V0113 | the name `Error`, the standard error type, or `Task` or `Shared`, the standard types of async code, given to a struct, an enum, a module, or a `use`, or to a `pub` struct or enum of a `.rs` module; `json`, `env`, `log`, or `time`, the standard modules, given to a module, a struct, an enum, or a `use`, or a `use` of one (`use json;`, `use json::parse;`); `assert` or `assert_eq` given to a function or a `use`; a function, method, struct, enum, module, or `use` name starting with `varyk_`, kept for what Varyk adds to the Rust it writes |
 | V0114 | a `#[test]` function with parameters or a return type, a call to or `use` of one, one named as a route's handler or a hook, or `main` of the entry file marked `#[test]`; `assert` or `assert_eq` outside a `#[test]` function |
 | V0115 | a value whose type is, or holds, a struct or enum declared in a Varyk package this package does not list in `[dependencies]`, or in another version of one it does (two versions are two packages; the note names both); the note gives the line for `Cargo.toml` |
-| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool`; `Task::all` or `Task::all_settled` given anything but a `Vec` of tasks, and `Task::all_settled` on tasks that do not give a `Result`; a `Shared` given where the struct it holds is expected; an argument of `http::App::new` that is not a `Shared` |
+| V0200 | type mismatch, including `+` on strings (use `format!`), `as` on something that is not a number, another number type meeting a `usize`, indexing something that is not a `Vec`, `match` arms of different types, a `for` over something that is not a `Vec` or a range, and a range whose ends are not integers of one type; `sort` on floats or structs, `contains` on a `Vec` of structs, `join` on a `Vec` of anything but strings, and `parse` into anything but a number or `bool`; `sum` on a chain of items that are not numbers, and a closure of `filter`, `any`, `all`, or `find` that does not give a `bool`; `Task::all` or `Task::all_settled` given anything but a `Vec` of tasks, and `Task::all_settled` on tasks that do not give a `Result`; a `Shared` given where the struct it holds is expected; an argument of `http::App::new` that is not a `Shared`; a `Result` with `Error` where its value is wanted, with a help that adds `?` in a function that returns a `Result` with `Error` |
 | V0201 | wrong number of arguments, or of values in an enum value; a variant value with named fields that leaves one out, or with the wrong kind of brackets; a closure with more or fewer than one parameter |
 | V0202 | `println!`, `format!`, or a `log` call with the wrong number of `{}`, or something other than `{}` in braces; a `log` call whose text is not a string literal written in quotes |
 | V0203 | `{}` used on anything but a number, `bool`, string, or `Error`; `==`, `!=`, or `.clone()` on a type that cannot be compared or copied, naming the field in the way and, for a Rust type, saying to derive the trait in its `.rs` file; `==` or `!=` on a `Shared`, or on a type holding one |

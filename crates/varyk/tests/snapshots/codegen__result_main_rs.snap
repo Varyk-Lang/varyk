@@ -1,0 +1,26 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn port() -> Result<i64, ::varyk_std::Error> {
+    Ok(8080i64)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() -> ::std::process::ExitCode {
+    match varyk_main() {
+        Ok(_) => ::std::process::ExitCode::SUCCESS,
+        Err(varyk_error) => {
+            ::std::eprintln!("error: {}", varyk_error);
+            ::std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn varyk_main() -> Result<i64, ::varyk_std::Error> {
+    let p = port()?;
+    ::std::println!("{}", p);
+    Ok(p)
+}

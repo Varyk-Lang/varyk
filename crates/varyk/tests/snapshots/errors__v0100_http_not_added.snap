@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0100]: cannot find function `http::App::new`
+ --> crates/varyk/tests/fixtures/errors/v0100_http_not_added/src/main.vr:2:15
+  |
+2 |     let app = http::App::new(1);
+  |               ^^^^^^^^^^^^^^ cannot find function `http::App::new`
+  |
+  = note: `http` is not a package of this build; `varyk add http` adds varyk-http

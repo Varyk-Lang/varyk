@@ -2,9 +2,10 @@
 
 use std::future::Future;
 
-/// Builds the multi-threaded runtime and blocks on `future`. If the runtime
-/// cannot be built, prints the reason to stderr and exits with code 1.
-pub fn run<F: Future<Output = ()>>(future: F) {
+/// Builds the multi-threaded runtime, blocks on `future`, and returns its
+/// output. If the runtime cannot be built, prints the reason to stderr and
+/// exits with code 1.
+pub fn run<F: Future>(future: F) -> F::Output {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -15,7 +16,7 @@ pub fn run<F: Future<Output = ()>>(future: F) {
             std::process::exit(1);
         }
     };
-    runtime.block_on(future);
+    runtime.block_on(future)
 }
 
 #[cfg(test)]
@@ -31,6 +32,11 @@ mod tests {
             seen.store(true, Ordering::SeqCst);
         });
         assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn returns_the_future_s_output() {
+        assert_eq!(super::run(async { 7 }), 7);
     }
 
     #[test]

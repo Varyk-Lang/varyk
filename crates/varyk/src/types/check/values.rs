@@ -20,6 +20,10 @@ use crate::resolve::{
 use crate::types::Ty;
 use crate::types::derives::{self, Direction, Medium};
 
+/// What a V0200 says a call gives when it reads its value type from
+/// where its result goes and nothing there says it.
+pub(super) const RESULT_HOLE: &str = "Result<_, Error>";
+
 /// What the leading segments of a path `T::name` name.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum PathOwner {
@@ -75,6 +79,9 @@ impl FnChecker<'_> {
                 if let Some(note) = self.symbols.did_you_mean(self.module, &last.name) {
                     diagnostic = diagnostic.with_note(note);
                 }
+            }
+            if let Some(note) = self.symbols.not_added(self.module, &full) {
+                diagnostic = diagnostic.with_note(note);
             }
             self.diagnostics.push(diagnostic);
             return None;
@@ -718,7 +725,7 @@ impl FnChecker<'_> {
             _ => {
                 let shape = format!("let {binding} = {call}{args}?;");
                 let what = format!("the type `{call}` reads");
-                self.type_hole(span, expected, "Result<_, Error>", &what, &shape);
+                self.type_hole(span, expected, RESULT_HOLE, &what, &shape);
                 None
             }
         }
@@ -1143,8 +1150,11 @@ impl FnChecker<'_> {
                 "mismatched types: expected `{}`, found `{found}`",
                 self.ty_name(expected)
             );
-            self.diagnostics
-                .push(Diagnostic::new(codes::V0200, span, message));
+            let mut diagnostic = Diagnostic::new(codes::V0200, span, message);
+            if found == RESULT_HOLE {
+                diagnostic = self.question_help(diagnostic, span, expected, None);
+            }
+            self.diagnostics.push(diagnostic);
             return;
         }
         let diagnostic = self.hole_diagnostic(span, what, shape);
