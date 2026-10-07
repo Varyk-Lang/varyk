@@ -10,4 +10,4 @@ path = "src/lib.vr"
 
 [dependencies]
 units = { version = "0.1.0", path = "../units" }
-varyk-std = "0.7.1"
+varyk-std = "0.7.2"
