@@ -232,8 +232,8 @@ makes a time-ordered version 7 id and `Uuid::v4()` a random one; and
 JSON, comparison, the signatures of a `.rs` facade, and its trailing
 values; `Time` and `Uuid` also through `env::parse`, `parse`, printing,
 and route parameters. So the users API can store `created_at: Time` and
-not a string; the native database columns and bytes bodies come with the
-next releases of `varyk-sql` and `varyk-http`. `Time`, `Uuid`, and
+not a string; the native database columns and bytes bodies come with
+`varyk-sql` 0.3 and `varyk-http` 0.2. `Time`, `Uuid`, and
 `Bytes` are now reserved names, and `varyk_std::Value` has three new
 variants, a breaking change. See `examples/records.vr` and "Time, ids,
 and bytes" in [docs/language.md](docs/language.md).
