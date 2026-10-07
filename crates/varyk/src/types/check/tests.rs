@@ -4812,6 +4812,92 @@ fn a_call_to_an_async_main_is_v0106() {
 }
 
 #[test]
+fn a_call_to_a_main_that_returns_a_result_is_v0106() {
+    let (d, sources) = one_error(
+        "fn helper() -> bool {\n    main().is_ok()\n}\nfn main() -> Result<bool, Error> {\n    Ok(true)\n}\n",
+    );
+    assert_eq!(d.code, codes::V0106, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "main().is_ok()", "main"));
+}
+
+#[test]
+fn question_mark_in_a_main_that_returns_a_result_checks() {
+    ok("fn port() -> Result<i64, Error> {\n    Ok(1)\n}\n\
+        fn main() -> Result<i64, Error> {\n    let p = port()?;\n    Ok(p)\n}\n");
+}
+
+#[test]
+fn a_path_through_http_or_sql_says_how_to_add_the_package() {
+    let note = |name: &str| {
+        let package = format!("varyk-{name}");
+        format!("`{name}` is not a package of this build; `varyk add {name}` adds {package}")
+    };
+    for (body, name) in [
+        ("let p = sql::connect(\"x\");", "sql"),
+        ("let a = http::App::new(1);", "http"),
+        ("let r = http::Thing { a: 1 };", "http"),
+        ("let k = sql::Kind::A;", "sql"),
+    ] {
+        let (d, _) = one_error(&format!("fn main() {{\n    {body}\n}}\n"));
+        assert_eq!(d.notes, [note(name)], "{body}: {d:#?}");
+    }
+    let (d, _) = one_error("fn f(p: sql::Pool) {}\nfn main() {}\n");
+    assert_eq!(d.notes, [note("sql")], "{d:#?}");
+    let (d, _) = one_error("use sql::Pool;\nfn main() {}\n");
+    assert_eq!(d.notes, [note("sql")], "{d:#?}");
+}
+
+#[test]
+fn another_unknown_path_gets_no_package_note() {
+    let (d, _) = one_error("fn main() {\n    let p = db::connect(\"x\");\n}\n");
+    assert!(d.notes.is_empty(), "{d:#?}");
+}
+
+#[test]
+fn a_result_where_its_value_is_wanted_gets_a_question_mark() {
+    let load = "fn load(id: i64) -> Result<i64, Error> {\n    Ok(id)\n}\n";
+    let (d, sources) = one_error(&format!(
+        "{load}fn total() -> Result<i64, Error> {{\n    let n: i64 = load(1);\n    Ok(n)\n}}\n\
+         fn main() {{}}\n"
+    ));
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    let call = span_of(&sources, "load(1)");
+    let fix_it = d.fix_it.as_ref().expect("a fix-it");
+    assert_eq!(fix_it.span, Span::new(call.file, call.end, call.end));
+    assert_eq!(fix_it.replacement, "?");
+
+    // Awaited, the `?` goes after the `.await`.
+    let (d, sources) = one_error(
+        "async fn load(id: i64) -> Result<i64, Error> {\n    Ok(id)\n}\n\
+         async fn total() -> Result<i64, Error> {\n    let n: i64 = load(1).await;\n    Ok(n)\n}\n\
+         async fn main() {}\n",
+    );
+    let awaited = span_of(&sources, "load(1).await");
+    let fix_it = d.fix_it.as_ref().expect("a fix-it");
+    assert_eq!(
+        fix_it.span,
+        Span::new(awaited.file, awaited.end, awaited.end)
+    );
+
+    // A function that returns no `Result` gets a note instead.
+    let (d, _) = one_error(&format!(
+        "{load}fn main() {{\n    let n: i64 = load(1);\n    println!(\"{{}}\", n);\n}}\n"
+    ));
+    assert!(d.fix_it.is_none(), "{d:#?}");
+    assert!(
+        d.notes.iter().any(|n| n.contains("`match` or `if let`")),
+        "{d:#?}"
+    );
+
+    // Another value type is a plain mismatch.
+    let (d, _) = one_error(&format!(
+        "{load}fn total() -> Result<string, Error> {{\n    let n: string = load(1);\n    Ok(n)\n}}\n\
+         fn main() {{}}\n"
+    ));
+    assert!(d.fix_it.is_none() && d.notes.is_empty(), "{d:#?}");
+}
+
+#[test]
 fn a_call_to_an_async_test_is_v0114() {
     let (d, _) = one_error("#[test]\nasync fn t() {}\nasync fn main() {\n    t();\n}\n");
     assert_eq!(d.code, codes::V0114, "{d:#?}");

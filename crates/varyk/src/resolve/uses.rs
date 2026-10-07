@@ -939,11 +939,15 @@ fn leading_name_error(
             "Varyk code does not use crates directly; call it from a `.rs` module in this package",
         );
     }
-    super::resolve_path(symbols, from, prefix)
-        .expect_err("`module_at` already failed on this prefix")
-        .with_note(format!(
+    let diagnostic = super::resolve_path(symbols, from, prefix)
+        .expect_err("`module_at` already failed on this prefix");
+    let path = format!("{}::{}", path_text(prefix), last.name);
+    match symbols.not_added(from, &path) {
+        Some(note) => diagnostic.with_note(note),
+        None => diagnostic.with_note(format!(
             "if `{}` is a crate: Varyk code does not use crates directly; call it from a `.rs` \
              module in this package",
             name.name
-        ))
+        )),
+    }
 }

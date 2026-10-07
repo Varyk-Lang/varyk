@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0101]: unknown type `sql::Pool`
+ --> crates/varyk/tests/fixtures/errors/v0101_sql_not_added/src/main.vr:2:9
+  |
+2 |     db: sql::Pool,
+  |         ^^^^^^^^^ unknown type `sql::Pool`
+  |
+  = note: `sql` is not a package of this build; `varyk add sql` adds varyk-sql

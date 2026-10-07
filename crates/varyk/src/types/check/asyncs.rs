@@ -70,8 +70,10 @@ impl FnChecker<'_> {
             return None;
         }
         let outer = self.await_operand.replace(operand.span);
+        let outer_whole = self.await_whole.replace(span);
         let checked = self.expr(operand, expected);
         self.await_operand = outer;
+        self.await_whole = outer_whole;
         let operand = checked?;
         if !self.is_async {
             self.diagnostics.push(

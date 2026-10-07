@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0106]: `main` must take no parameters and return nothing or a `Result` of something and `Error`
+ --> crates/varyk/tests/fixtures/errors/v0106_main_returns_a_value/main.vr:1:1
+  |
+1 | fn main() -> i64 {
+  | ^^^^^^^ `main` must take no parameters and return nothing or a `Result` of something and `Error`

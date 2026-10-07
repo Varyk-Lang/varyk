@@ -784,6 +784,14 @@ impl FnEmitter<'_> {
             writer.line(indent, "#[test]", None);
         }
         let is_main = f.owner.is_none() && f.module == self.program.entry && f.name == "main";
+        // A `main` that returns a `Result` is `varyk_main`, called by a
+        // Rust `main` that turns its result into the exit code.
+        let result_main = is_main && f.ret != Ty::Unit;
+        if result_main {
+            self.result_main(writer, indent);
+        }
+        let is_main = is_main && !result_main;
+        let name = if result_main { "varyk_main" } else { &f.name };
         // An async `main` or test is an ordinary Rust function that runs
         // its body on `varyk-std`'s runtime (milestone 5b1 spec 5).
         let runs = f.is_async && (is_main || f.is_test);
@@ -791,8 +799,7 @@ impl FnEmitter<'_> {
         writer.line(
             indent,
             &format!(
-                "{vis}{asyncness}fn {}{generics}({}){ret} {{",
-                f.name,
+                "{vis}{asyncness}fn {name}{generics}({}){ret} {{",
                 params.join(", ")
             ),
             Some(f.span),
@@ -815,6 +822,58 @@ impl FnEmitter<'_> {
         } else {
             self.block_after(writer, &f.body, self.return_need(), indent);
         }
+    }
+
+    /// The Rust `main` of a `main` that returns a `Result`, written as
+    /// `varyk_main`: it starts logging when the program logs, runs
+    /// `varyk_main` (on `varyk-std`'s runtime when it is async), and gives
+    /// exit code 0 for `Ok` and 1 for `Err`, whose message it reports
+    /// once, at error level when the program logs and as `error: ..` on
+    /// stderr otherwise. It returns, never calling `exit`, so the runtime
+    /// shuts down and the log is flushed. It ends with the blank line and
+    /// [`ALLOW_ITEM`] that come before `varyk_main`.
+    fn result_main(&self, writer: &mut Writer, indent: usize) {
+        let f: &HirFunction = self.function;
+        let logs = self.program.logs;
+        writer.line(
+            indent,
+            "fn main() -> ::std::process::ExitCode {",
+            Some(f.span),
+        );
+        let inner = if f.is_async { indent + 1 } else { indent };
+        if f.is_async {
+            writer.line(inner, "::varyk_std::run(async {", Some(f.span));
+        }
+        if logs {
+            writer.line(inner + 1, "::varyk_std::start();", Some(f.span));
+        }
+        let call = if f.is_async {
+            "varyk_main().await"
+        } else {
+            "varyk_main()"
+        };
+        let report = if logs {
+            "::varyk_std::tracing::error!(\"{}\", varyk_error);"
+        } else {
+            "::std::eprintln!(\"error: {}\", varyk_error);"
+        };
+        writer.line(inner + 1, &format!("match {call} {{"), None);
+        writer.line(
+            inner + 2,
+            "Ok(_) => ::std::process::ExitCode::SUCCESS,",
+            None,
+        );
+        writer.line(inner + 2, "Err(varyk_error) => {", None);
+        writer.line(inner + 3, report, None);
+        writer.line(inner + 3, "::std::process::ExitCode::FAILURE", None);
+        writer.line(inner + 2, "}", None);
+        writer.line(inner + 1, "}", None);
+        if f.is_async {
+            writer.line(inner, "})", None);
+        }
+        writer.line(indent, "}", None);
+        writer.line(0, "", None);
+        writer.line(indent, ALLOW_ITEM, None);
     }
 
     /// Writes `block`'s statements and tail into `writer`, each physical

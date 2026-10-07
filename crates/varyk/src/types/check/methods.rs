@@ -5,6 +5,7 @@
 use varyk_syntax::{Expr, ExprKind, Ident, Span};
 
 use super::asyncs::{TaskPlace, map_value_spans, started_ty};
+use super::values::RESULT_HOLE;
 use super::{
     ArgRules, FnChecker, RANGE_USIZE_NOTE, closures, unsupported_rust_signature, usize_note,
 };
@@ -487,7 +488,7 @@ impl FnChecker<'_> {
             }
             _ => {
                 let what = "the type `parse()` reads";
-                self.type_hole(span, expected, "Result<_, Error>", what, shape);
+                self.type_hole(span, expected, RESULT_HOLE, what, shape);
                 None
             }
         }
@@ -808,8 +809,7 @@ fn ok_argument(expr: &Expr) -> Option<&Expr> {
 /// Why `?` needs a function returning a `Result` or an `Option` (spec 2.8).
 const RESULT_NOTE: &str = "on an error, `?` returns it from the function at once, so the \
                            function must return a `Result` (or, for an `Option`, an `Option`); \
-                           `main` never does, so use `?` in a helper function and `match` on \
-                           that function's result";
+                           `main` may return a `Result` whose error is `Error`";
 
 /// The built-in type `owner` with its article, as a message says it:
 /// "a `Vec`", "an `Option`", "a chain".

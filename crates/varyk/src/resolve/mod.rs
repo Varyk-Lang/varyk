@@ -1058,7 +1058,15 @@ impl Symbols {
                     .reexported_type(from, path, name, &full, ty.span)
                     .or_else(|| self.skipped_item(from, Some(path), name, &full, ty.span))
                     .unwrap_or_else(|| {
-                        Diagnostic::new(codes::V0101, ty.span, format!("unknown type `{full}`"))
+                        let diagnostic = Diagnostic::new(
+                            codes::V0101,
+                            ty.span,
+                            format!("unknown type `{full}`"),
+                        );
+                        match self.not_added(from, &full) {
+                            Some(note) => diagnostic.with_note(note),
+                            None => diagnostic,
+                        }
                     })),
                 Err(LookupError::NotVisible { decl, keyword }) => {
                     Err(not_visible("type", &full, ty.span, decl, keyword))
@@ -1328,7 +1336,7 @@ pub fn resolve_root(
         &mut diagnostics,
     );
     diagnostics.extend(package_items::mark_http(&mut symbols, packages, sources));
-    check_entry_main(&modules[0], kind, &mut diagnostics);
+    check_entry_main(&modules[0], &symbols.fns, kind, &mut diagnostics);
     rename_help(&symbols, &modules, sources, &mut diagnostics);
 
     if diagnostics.is_empty() {
@@ -2211,10 +2219,10 @@ fn resolve_signature(
     (params, ret)
 }
 
-/// A binary's entry module must define `fn main()` with no parameters
-/// and no return type (spec 4.1); a library's must not define `main` (M3
-/// spec 2.1).
-fn check_entry_main(entry: &Module, kind: Kind, diagnostics: &mut Vec<Diagnostic>) {
+/// A binary's entry module must define `fn main()` with no parameters,
+/// returning nothing or a `Result` of anything and `Error` (spec 4.1); a
+/// library's must not define `main` (M3 spec 2.1).
+fn check_entry_main(entry: &Module, fns: &[FnSig], kind: Kind, diagnostics: &mut Vec<Diagnostic>) {
     let ModuleKind::Varyk(program) = &entry.kind else {
         return;
     };
@@ -2241,11 +2249,12 @@ fn check_entry_main(entry: &Module, kind: Kind, diagnostics: &mut Vec<Diagnostic
             Span::new(entry.file, 0, 0),
             "the entry file must define `fn main()`",
         )),
-        Some(function) if !function.params.is_empty() || function.return_type.is_some() => {
+        Some(function) if !function.params.is_empty() || !main_returns_well(fns) => {
             diagnostics.push(Diagnostic::new(
                 codes::V0106,
                 header(function),
-                "`main` must take no parameters and return nothing",
+                "`main` must take no parameters and return nothing or a `Result` of something \
+                 and `Error`",
             ));
         }
         Some(function) if function.attrs.iter().any(|attr| attr.name.name == "test") => {
@@ -2260,6 +2269,19 @@ fn check_entry_main(entry: &Module, kind: Kind, diagnostics: &mut Vec<Diagnostic
         }
         Some(_) => {}
     }
+}
+
+/// Whether the entry file's `main` returns nothing or `Result<T, Error>`
+/// for any `T`. A return type that did not resolve is already reported,
+/// and reads as nothing here.
+fn main_returns_well(fns: &[FnSig]) -> bool {
+    fns.iter()
+        .filter(|sig| sig.module == ModuleId(0) && sig.owner.is_none() && sig.name == "main")
+        .all(|sig| match &sig.ret {
+            Ty::Unit => true,
+            Ty::Result(_, error) => **error == Ty::Error,
+            _ => false,
+        })
 }
 
 /// From the start of the declaration through the function's name

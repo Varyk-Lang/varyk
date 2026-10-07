@@ -37,3 +37,7 @@ listed.
 
 - `varyk add sql serde http` passes `http` to cargo as a plain argument after `sql` (spec 2.9 recognizes official names only at the start), so cargo reads it as a crate name, not the shorthand.
 - A route call in the head block of a `for` is accepted and runs once.
+
+## Fixed after the release
+
+- `main` may return `Result<T, Error>` (0.7.2). An HTTP service's `main` could only `match` on `app.serve(port).await` and log the `Err`, so a service that failed to start, its port taken or its database out of reach, exited 0 and looked healthy to whatever started it. Now the `Err` is reported once and the exit code is 1.

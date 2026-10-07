@@ -78,6 +78,7 @@ pub fn typecheck(
             is_test: sig.is_test,
             is_async: sig.is_async,
             await_operand: None,
+            await_whole: None,
             async_fix_it: asyncs::async_fix_it(decl, sources),
             async_callees: Vec::new(),
             task_places: Vec::new(),
@@ -425,6 +426,9 @@ struct FnChecker<'a> {
     /// The span of the operand of the `.await` being checked: a call of an
     /// async function there is awaited (milestone 5b1 spec 2.3).
     await_operand: Option<Span>,
+    /// The span of that whole `.await` expression, operand included: a
+    /// `?` added to the operand goes after it.
+    await_whole: Option<Span>,
     /// The fix-it making this function async, for V0211.
     async_fix_it: FixIt,
     /// The calls this function makes to async Varyk functions, for the
@@ -1473,9 +1477,11 @@ impl FnChecker<'_> {
         if let Callee::Varyk(id) = found {
             let sig = &self.symbols.fns[id.0 as usize];
             // An async `main` is run by the generated `main`, an ordinary
-            // Rust function (milestone 5b1 spec 2.2).
+            // Rust function (milestone 5b1 spec 2.2), and so is a `main`
+            // that returns a `Result`, whose Rust `main` gives an exit code.
             let entry = sig.module == ModuleId(0);
-            if sig.is_async && sig.name == "main" && sig.owner.is_none() && entry {
+            let wrapped = sig.is_async || sig.ret != Ty::Unit;
+            if wrapped && sig.name == "main" && sig.owner.is_none() && entry {
                 self.diagnostics.push(
                     Diagnostic::new(
                         codes::V0106,
@@ -1805,7 +1811,11 @@ impl FnChecker<'_> {
                     .skipped_item(self.module, module, &name.name, &path, path_span)
                     .unwrap_or_else(|| {
                         let message = format!("unknown struct `{path}`");
-                        Diagnostic::new(codes::V0101, path_span, message)
+                        let diagnostic = Diagnostic::new(codes::V0101, path_span, message);
+                        match self.symbols.not_added(self.module, &path) {
+                            Some(note) => diagnostic.with_note(note),
+                            None => diagnostic,
+                        }
                     });
                 self.diagnostics.push(diagnostic);
                 return None;
@@ -2125,6 +2135,12 @@ impl FnChecker<'_> {
         if let Some(note) = usize_note(expected, found) {
             diagnostic = diagnostic.with_note(note);
         }
+        // A `Result` where its value is wanted: suggest `?`.
+        if let Ty::Result(ok, error) = found {
+            if **error == Ty::Error {
+                diagnostic = self.question_help(diagnostic, span, expected, Some(ok));
+            }
+        }
         // A `Shared` is not the struct it holds (milestone 5b1 spec 2.6).
         if let Ty::Shared(inner) = found {
             if **inner == *expected {
@@ -2135,6 +2151,44 @@ impl FnChecker<'_> {
             }
         }
         self.diagnostics.push(diagnostic);
+    }
+
+    /// The help of a V0200 at `span` for a `Result` with `Error` where
+    /// `expected`, its `Ok` value, is wanted (`ok` is the value's type, or
+    /// `None` when it would be taken from `expected`): in a function that
+    /// returns a `Result` with `Error`, a fix-it inserting `?` after the
+    /// value (after its `.await` when it is awaited); in any other, a note
+    /// to take the value out with `match` or `if let`. `diagnostic`
+    /// unchanged when `expected` is a `Result` or is not the `Ok` type.
+    pub(super) fn question_help(
+        &self,
+        diagnostic: Diagnostic,
+        span: Span,
+        expected: &Ty,
+        ok: Option<&Ty>,
+    ) -> Diagnostic {
+        if matches!(expected, Ty::Result(..)) || ok.is_some_and(|ok| ok != expected) {
+            return diagnostic;
+        }
+        let end = match self.await_whole {
+            Some(whole) if self.await_operand == Some(span) => whole.end,
+            _ => span.end,
+        };
+        match &self.ret {
+            Ty::Result(_, error) if **error == Ty::Error && self.closures.is_empty() => diagnostic
+                .with_note(
+                    "this gives a `Result`, which holds the value or an error; `?` takes the \
+                     value out, and on an error returns it from the function",
+                )
+                .with_fix_it(FixIt {
+                    span: Span::new(span.file, end, end),
+                    replacement: "?".to_string(),
+                }),
+            _ => diagnostic.with_note(
+                "this gives a `Result`, which holds the value or an error; take the value out \
+                 with `match` or `if let`",
+            ),
+        }
     }
 
     /// V0100 for an unknown item; V0105 with a `pub ` fix-it for one that
@@ -2168,6 +2222,9 @@ impl FnChecker<'_> {
                 if let Some(note) = self.symbols.did_you_mean(self.module, name) {
                     diagnostic = diagnostic.with_note(note);
                 }
+            }
+            if let Some(note) = self.symbols.not_added(self.module, path) {
+                diagnostic = diagnostic.with_note(note);
             }
         }
         self.diagnostics.push(diagnostic);

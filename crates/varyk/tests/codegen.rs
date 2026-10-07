@@ -1607,6 +1607,61 @@ async fn main() {
     insta::assert_snapshot!("async_main_rs", main);
 }
 
+/// A `main` that returns a `Result` is `varyk_main`, run by a Rust
+/// `main` that gives the exit code: without logging, an `Err`'s message
+/// goes to stderr as `error: ..`.
+#[test]
+fn a_main_that_returns_a_result_gives_the_exit_code() {
+    let main = main_rs(
+        "fn port() -> Result<i64, Error> {
+    Ok(8080)
+}
+
+fn main() -> Result<i64, Error> {
+    let p = port()?;
+    println!(\"{}\", p);
+    Ok(p)
+}
+",
+    );
+    assert!(
+        main.contains("fn main() -> ::std::process::ExitCode {\n    match varyk_main() {"),
+        "{main}"
+    );
+    assert!(
+        main.contains("::std::eprintln!(\"error: {}\", varyk_error);"),
+        "{main}"
+    );
+    assert!(!main.contains("exit("), "{main}");
+    insta::assert_snapshot!("result_main_rs", main);
+}
+
+/// An async `main` that returns a `Result`, in a program that logs:
+/// logging starts inside the runtime, which gives back the exit code, and
+/// an `Err`'s message is logged at error level.
+#[test]
+fn an_async_logging_main_that_returns_a_result_logs_its_error() {
+    let main = main_rs(
+        "async fn main() -> Result<bool, Error> {
+    log::info(\"starting\");
+    Ok(true)
+}
+",
+    );
+    assert!(
+        main.contains(
+            "fn main() -> ::std::process::ExitCode {\n    ::varyk_std::run(async {\n        \
+             ::varyk_std::start();\n        match varyk_main().await {"
+        ),
+        "{main}"
+    );
+    assert!(
+        main.contains("::varyk_std::tracing::error!(\"{}\", varyk_error);"),
+        "{main}"
+    );
+    insta::assert_snapshot!("async_result_main_rs", main);
+}
+
 /// An async test is an ordinary `#[test]` running its body on a runtime
 /// of its own (milestone 5b1 spec 5); an async `main` without logging
 /// starts nothing.

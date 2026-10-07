@@ -307,6 +307,69 @@ fn log_arguments_run_whatever_the_level() {
     }
 }
 
+/// A `main` that returns a `Result`: `port` fails on `"x"`, and `?` in
+/// `main` passes its error on.
+const RESULT_MAIN: &str = "fn port(text: string) -> Result<i64, Error> {\n    \
+     if text == \"x\" {\n        return Err(Error::new(\"no port in x\"));\n    }\n    \
+     Ok(8080)\n}\n";
+
+/// Writes `main` after [`RESULT_MAIN`] into a fresh directory and runs it
+/// there with `LOG` and `LOG_FORMAT` removed.
+fn run_result_main(label: &str, main: &str) -> Output {
+    let dir = empty_dir(label);
+    fs::write(dir.join("main.vr"), format!("{RESULT_MAIN}{main}")).expect("write main.vr");
+    varyk_run_with(&["run", "main.vr"], &dir, &[], &["LOG", "LOG_FORMAT"])
+}
+
+/// An `Ok` from `main` exits 0, and `?` in `main` gives the value.
+#[test]
+fn a_main_that_returns_ok_exits_zero() {
+    let output = run_result_main(
+        "result-main-ok",
+        "fn main() -> Result<i64, Error> {\n    let p = port(\"y\")?;\n    \
+         println!(\"port {}\", p);\n    Ok(p)\n}\n",
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "port 8080\n");
+    assert_eq!(stderr_of(&output), "");
+}
+
+/// An `Err` from `main`, here through `?`, exits 1 with its message on
+/// stderr, once, and nothing after the `?` runs.
+#[test]
+fn a_main_that_returns_err_exits_one_with_the_message() {
+    let output = run_result_main(
+        "result-main-err",
+        "fn main() -> Result<i64, Error> {\n    let p = port(\"x\")?;\n    \
+         println!(\"port {}\", p);\n    Ok(p)\n}\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "");
+    assert_eq!(stderr_of(&output), "error: no port in x\n");
+}
+
+/// In a program that logs, an `Err` from an async `main` is one
+/// error-level log line, and the exit code is 1.
+#[test]
+fn a_logging_main_logs_its_err_at_error_level() {
+    let output = run_result_main(
+        "result-main-logs",
+        "async fn main() -> Result<bool, Error> {\n    log::info(\"starting\");\n    \
+         let p = port(\"x\")?;\n    println!(\"port {}\", p);\n    Ok(true)\n}\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "");
+    let lines: Vec<String> = stderr_of(&output)
+        .lines()
+        .map(|line| {
+            line.split_once(' ')
+                .map_or("", |(_, rest)| rest)
+                .to_string()
+        })
+        .collect();
+    assert_eq!(lines, ["INFO starting", "ERROR no port in x"]);
+}
+
 /// Started calls overlapping, `Task::all` over ten, an async method
 /// (milestone 5b1 spec 6).
 #[test]
