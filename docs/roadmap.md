@@ -201,8 +201,8 @@ The compiler:
 
 The packages, each in its own repository:
 
-- [ ] `varyk-sql`: concrete pools in place of `Any`; the three types as native columns
-- [ ] `varyk-http`: `Time` and `Uuid` path and query parameters; bytes bodies, uploads, binary WebSocket messages, and the client's bytes; `created_at: Time` in the `users` demo
+- [x] `varyk-sql`: concrete pools in place of `Any`; the three types as native columns
+- [x] `varyk-http`: `Time` and `Uuid` path and query parameters; bytes bodies, uploads, binary WebSocket messages, and the client's bytes; `created_at: Time` in the `users` demo
 
 ## Milestone 6: tooling and beyond
 
