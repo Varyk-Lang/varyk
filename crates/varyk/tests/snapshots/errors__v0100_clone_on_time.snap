@@ -1,0 +1,9 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0100]: `Time` needs no `.clone()`: numbers, `bool`, `Time`, and `Uuid` are copied on use; drop `.clone()`
+ --> crates/varyk/tests/fixtures/errors/v0100_clone_on_time/main.vr:3:24
+  |
+3 |     let copy = started.clone();
+  |                        ^^^^^ `Time` needs no `.clone()`: numbers, `bool`, `Time`, and `Uuid` are copied on use; drop `.clone()`

@@ -2,10 +2,10 @@
 source: crates/varyk/tests/errors.rs
 expression: without_version(& stderr)
 ---
-error[V0219]: the path parameter `id` of `get_user` is `UserId`, and a path segment gives an integer, `bool`, or `string`
+error[V0219]: the path parameter `id` of `get_user` is `UserId`, and a path segment gives an integer, `bool`, `string`, `Time`, or `Uuid`
   --> src/main.vr:13:5
    |
 13 |     app.get("/users/{id}", get_user);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the path parameter `id` of `get_user` is `UserId`, and a path segment gives an integer, `bool`, or `string`
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the path parameter `id` of `get_user` is `UserId`, and a path segment gives an integer, `bool`, `string`, `Time`, or `Uuid`
    |
-   = note: give `id` an integer type, `bool`, or `string`; a value with more in it, such as a struct, comes from the body or the state
+   = note: give `id` an integer type, `bool`, `string`, `Time`, or `Uuid`; a value with more in it, such as a struct, comes from the body or the state

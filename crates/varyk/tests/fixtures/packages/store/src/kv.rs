@@ -161,5 +161,8 @@ fn scalar(value: varyk_std::Value) -> Result<serde_json::Value, varyk_std::Error
             }
         },
         varyk_std::Value::Text(text) => serde_json::Value::String(text),
+        varyk_std::Value::Time(time) => serde_json::Value::String(time.to_iso()),
+        varyk_std::Value::Uuid(id) => serde_json::Value::String(id.to_string()),
+        varyk_std::Value::Bytes(bytes) => serde_json::Value::String(bytes.to_base64()),
     })
 }

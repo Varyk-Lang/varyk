@@ -148,6 +148,7 @@ fn check_passes_on_every_example_entry_file() {
         "examples/tasks.vr",
         "examples/fanout.vr",
         "examples/shared.vr",
+        "examples/records.vr",
         "examples/packages/greeting/src/main.vr",
         "examples/packages/units/src/lib.vr",
     ] {

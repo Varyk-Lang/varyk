@@ -113,6 +113,9 @@ impl<'a> Mapper<'a> {
     }
 
     fn param(&self, ty: &RustTy) -> Mapped<(Ty, ParamMode)> {
+        if let Some(note) = borrowed_std_param(ty) {
+            return Err(Some(note));
+        }
         Ok(match ty {
             RustTy::Str | RustTy::Literal => (Ty::String, ParamMode::SharedBorrow),
             RustTy::String => (Ty::String, ParamMode::Owned),
@@ -131,6 +134,11 @@ impl<'a> Mapper<'a> {
             RustTy::Unit => Ok(Ty::Unit),
             // A borrowed return, rooted by the importer (M4 spec 2.12).
             RustTy::Str => Ok(Ty::String),
+            RustTy::Ref(inner)
+                if matches!(**inner, RustTy::Time | RustTy::Uuid | RustTy::Bytes) =>
+            {
+                Err(Some(borrowed_return_note(inner)))
+            }
             RustTy::Ref(inner) => self.value(inner),
             // `varyk_std::Error` as the error of the returned `Result`
             // (milestone 5b3 spec 2.4), and nowhere else.
@@ -144,11 +152,15 @@ impl<'a> Mapper<'a> {
         }
     }
 
-    /// A type a value can have: a primitive, `String`, an imported
-    /// struct, or `Vec`, `Option`, or `Result` of those.
+    /// A type a value can have: a primitive, `String`, `Time`, `Uuid`,
+    /// `Bytes`, an imported struct, or `Vec`, `Option`, or `Result` of
+    /// those.
     fn value(&self, ty: &RustTy) -> Mapped<Ty> {
         Ok(match ty {
             RustTy::String => Ty::String,
+            RustTy::Time => Ty::Time,
+            RustTy::Uuid => Ty::Uuid,
+            RustTy::Bytes => Ty::Bytes,
             RustTy::Named(path) => self.named(path)?,
             RustTy::Vec(inner) => Ty::Vec(Box::new(self.value(inner)?)),
             RustTy::Option(inner) => Ty::Option(Box::new(self.value(inner)?)),
@@ -186,9 +198,16 @@ impl<'a> Mapper<'a> {
         let (module, name) = match path {
             RustPath::Local(name) => (self.module, name.as_str()),
             RustPath::Used(name) => {
+                // The three standard types a facade names are `varyk-std`'s
+                // (milestone 5c spec 2.5).
+                let full = if matches!(name.as_str(), "Time" | "Uuid" | "Bytes") {
+                    format!("varyk_std::{name}")
+                } else {
+                    format!("crate::module::{name}")
+                };
                 return Err(Some(format!(
                     "`{name}` is brought in by a `use` line in the Rust file, which Varyk does \
-                     not follow; write the full path, as in `crate::module::{name}`"
+                     not follow; write the full path, as in `{full}`"
                 )));
             }
             RustPath::Glob(name) => return Err(Some(glob_reason(name))),
@@ -294,6 +313,9 @@ fn uncallable_note(imported: &ImportedFn) -> Option<String> {
                 .to_string(),
         ),
         RustTy::Opaque(text) if names_static_str(text) => Some(LITERAL_NOTE.to_string()),
+        RustTy::Opaque(text) if borrowed_std_return(text).is_some() => {
+            borrowed_std_return(text).map(borrowed_return_note)
+        }
         RustTy::Opaque(text) if text.replace(' ', "") == "&varyk_std::Error" => Some(
             "`varyk_std::Error` can only be the whole return of a function or the error of a \
              returned `Result`, not borrowed; return it by value"
@@ -310,6 +332,52 @@ fn uncallable_note(imported: &ImportedFn) -> Option<String> {
              otherwise return an owned value, such as `String` instead of `&str`"
                 .to_string(),
         ),
+        _ => None,
+    }
+}
+
+/// The note for a parameter milestone 5c spec 2.5 refuses: `&` of a
+/// `varyk_std::Time` or `varyk_std::Uuid`, which are copied, or `&mut`
+/// of any of the three.
+fn borrowed_std_param(ty: &RustTy) -> Option<String> {
+    match ty {
+        RustTy::Ref(inner) | RustTy::RefMut(inner)
+            if matches!(**inner, RustTy::Time | RustTy::Uuid) =>
+        {
+            let name = inner.text();
+            Some(format!(
+                "`{name}` is copied rather than borrowed: take it by value, as in `t: {name}`"
+            ))
+        }
+        RustTy::RefMut(inner) if **inner == RustTy::Bytes => Some(
+            "`varyk_std::Bytes` cannot be changed in place: take `&varyk_std::Bytes` to read it \
+             or `varyk_std::Bytes` to own it"
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+/// The note for a borrowed `varyk_std::Time`, `varyk_std::Uuid`, or
+/// `varyk_std::Bytes` as a return, which milestone 5c spec 2.5 does not
+/// accept.
+fn borrowed_return_note(ty: &RustTy) -> String {
+    format!(
+        "a function cannot return a borrowed `{0}`; return `{0}` by value",
+        ty.text()
+    )
+}
+
+/// The type a returned reference the importer left opaque borrows, when
+/// it is `&varyk_std::Time`, `&varyk_std::Uuid`, or `&varyk_std::Bytes`.
+fn borrowed_std_return(text: &str) -> Option<&'static RustTy> {
+    let text = text.replace(' ', "");
+    let path = text.strip_prefix('&')?;
+    let path = path.strip_prefix("::").unwrap_or(path);
+    match path {
+        "varyk_std::Time" => Some(&RustTy::Time),
+        "varyk_std::Uuid" => Some(&RustTy::Uuid),
+        "varyk_std::Bytes" => Some(&RustTy::Bytes),
         _ => None,
     }
 }
@@ -361,6 +429,9 @@ fn names_std(ty: &RustTy) -> bool {
         // 2.4; milestone 5b4 spec 2.7), whichever path its bound is
         // written by.
         RustTy::Error | RustTy::Values | RustTy::Param | RustTy::SerializeParam => true,
+        // The generated Rust names `::varyk_std::Time` and the others
+        // wherever the program holds one (milestone 5c spec 2.5).
+        RustTy::Time | RustTy::Uuid | RustTy::Bytes => true,
         RustTy::Ref(inner) | RustTy::RefMut(inner) | RustTy::Vec(inner) | RustTy::Option(inner) => {
             names_std(inner)
         }

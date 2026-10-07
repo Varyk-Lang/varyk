@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0113]: the name `Bytes` is already taken by the standard type of a run of bytes
+ --> crates/varyk/tests/fixtures/errors/v0113_rs_enum_named_bytes/ext.rs:1:10
+  |
+1 | pub enum Bytes {
+  |          ^^^^^ the name `Bytes` is already taken by the standard type of a run of bytes
+  |
+  = note: `Bytes` is always the standard one wherever it is written, so a type of your own needs another name, such as `Data` or `Blob`

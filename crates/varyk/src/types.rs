@@ -17,7 +17,7 @@ pub enum Ty {
     Option(Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
     Vec(Box<Ty>),
-    /// `HashMap<K, V>`, `K` an integer type, `bool`, or `string`.
+    /// `HashMap<K, V>`, `K` an integer type, `bool`, `string`, or `Uuid`.
     HashMap(Box<Ty>, Box<Ty>),
     /// An unfinished chain of items of this type (M4 spec 2.3): internal,
     /// with no Varyk spelling, so it may only be the receiver of the next
@@ -27,6 +27,15 @@ pub enum Ty {
     /// failing `varyk-std` call. Neither Copy nor text: the ownership
     /// rules treat it like a struct.
     Error,
+    /// `Time` (milestone 5c spec 2.1): a point in time in UTC, to the
+    /// microsecond. Copy.
+    Time,
+    /// `Uuid` (milestone 5c spec 2.2): a 128-bit identifier. Copy.
+    Uuid,
+    /// `Bytes` (milestone 5c spec 2.3): an immutable run of bytes. Neither
+    /// Copy nor text: the ownership rules treat it like a struct, as
+    /// `Error`.
+    Bytes,
     /// `Task<T>` (milestone 5b1 spec 2.4): what a started call gives,
     /// awaited or detached where it is made. Never written: its type is
     /// always worked out from the call (V0215).
@@ -40,11 +49,12 @@ pub enum Ty {
 }
 
 /// Every type name Varyk knows without a declaration: the primitives,
-/// `string`, the four standard generic types, `Error`, and `Shared`. The
-/// reference test checks `docs/language.md` mentions each.
+/// `string`, the four standard generic types, `Error`, `Shared`, `Time`,
+/// `Uuid`, and `Bytes`. The reference test checks `docs/language.md`
+/// mentions each.
 pub const BUILTIN_TYPE_NAMES: &[&str] = &[
     "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "string",
-    "Option", "Result", "Vec", "HashMap", "Error", "Shared",
+    "Option", "Result", "Vec", "HashMap", "Error", "Shared", "Time", "Uuid", "Bytes",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -109,13 +119,17 @@ impl FloatKind {
 }
 
 impl Ty {
-    /// `bool`, the integers, and the floats are `Copy` (spec 4.2); `string`,
-    /// structs, enums, `Option`, `Result`, `Vec`, and `HashMap` are not.
+    /// `bool`, the integers, the floats, `Time`, and `Uuid` are `Copy`
+    /// (spec 4.2, milestone 5c spec 2.1, 2.2); `string`, structs, enums,
+    /// `Option`, `Result`, `Vec`, `HashMap`, and `Bytes` are not.
     pub fn is_copy(&self) -> bool {
-        matches!(self, Ty::Bool | Ty::Int(_) | Ty::Float(_))
+        matches!(
+            self,
+            Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::Time | Ty::Uuid
+        )
     }
 
-    /// Whether the generated Rust type is `Copy`: a number or `bool`, or an
+    /// Whether the generated Rust type is `Copy`: a Copy type, or an
     /// `Option` or `Result` of such types at every depth, a `Result`'s
     /// error type included (M4 spec 3.4). A stored value of such a type can
     /// be taken by a method that uses up its receiver, since Rust copies
@@ -128,8 +142,8 @@ impl Ty {
         }
     }
 
-    /// A struct, an enum, `Option`, `Result`, `Vec`, `HashMap`, `Error`, a
-    /// task, or a `Shared`: a value
+    /// A struct, an enum, `Option`, `Result`, `Vec`, `HashMap`, `Error`,
+    /// `Bytes`, a task, or a `Shared`: a value
     /// that is neither Copy nor text, and that the ownership rules treat
     /// like a struct.
     pub fn is_compound(&self) -> bool {
@@ -142,20 +156,22 @@ impl Ty {
                 | Ty::Vec(_)
                 | Ty::HashMap(..)
                 | Ty::Error
+                | Ty::Bytes
                 | Ty::Task(_)
                 | Ty::Shared(_)
         )
     }
 
-    /// Whether `self` is or holds `Error`: a program naming it uses
-    /// `varyk-std` (M5a spec 1).
-    pub fn has_error(&self) -> bool {
+    /// Whether `self` is or holds `Error`, `Time`, `Uuid`, or `Bytes`: a
+    /// program naming one uses `varyk-std` (M5a spec 1, milestone 5c spec
+    /// 7.1).
+    pub fn has_std_type(&self) -> bool {
         match self {
-            Ty::Error => true,
+            Ty::Error | Ty::Time | Ty::Uuid | Ty::Bytes => true,
             Ty::Option(inner) | Ty::Vec(inner) | Ty::Chain(inner) | Ty::Task(inner) => {
-                inner.has_error()
+                inner.has_std_type()
             }
-            Ty::Result(a, b) | Ty::HashMap(a, b) => a.has_error() || b.has_error(),
+            Ty::Result(a, b) | Ty::HashMap(a, b) => a.has_std_type() || b.has_std_type(),
             _ => false,
         }
     }
@@ -200,10 +216,10 @@ impl Ty {
         }
     }
 
-    /// Whether `self` may be a `HashMap` key: an integer type, `bool`, or
-    /// `string` (M4 spec 2.7).
+    /// Whether `self` may be a `HashMap` key: an integer type, `bool`,
+    /// `string` (M4 spec 2.7), or `Uuid` (milestone 5c spec 2.2).
     pub fn is_map_key(&self) -> bool {
-        matches!(self, Ty::Int(_) | Ty::Bool | Ty::String)
+        matches!(self, Ty::Int(_) | Ty::Bool | Ty::String | Ty::Uuid)
     }
 
     /// Maps a primitive type name (`bool`, `i32`, `f64`, `string`, ...) to

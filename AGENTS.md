@@ -11,9 +11,9 @@ compiles to Rust. The compiler is a Rust workspace: `crates/varyk-syntax`
 (lexer, parser, AST), `crates/varyk` (diagnostics, resolver, type
 checker, borrow analysis, Rust backend, cargo driver, CLI), and
 `crates/varyk-std` (the runtime that generated programs call: errors,
-JSON, configuration, logging, the async runtime and tasks). The design lives
-in `docs/specs/`; read the current spec before changing what the language
-accepts or how it compiles.
+JSON, configuration, logging, time, ids, bytes, the async runtime, and
+tasks). The design lives in `docs/specs/`; read the current spec before
+changing what the language accepts or how it compiles.
 
 ## The gate
 
@@ -66,7 +66,8 @@ output; `crates/varyk/tests/examples.rs` checks that.
   on its `App` are intrinsics, checked against their handlers and compiled
   to adapters that name only the package's items, never axum. What the
   compiler names and checks of the package is section 6 of
-  `docs/specs/2026-10-05-milestone-5b4-design.md`; a change there is a
+  `docs/specs/2026-10-05-milestone-5b4-design.md` with section 6.1 of
+  `docs/specs/2026-10-07-milestone-5c-design.md`; a change there is a
   change to both repositories. Do not extend this to another package
   without a spec.
 - **No hidden allocation.** The compiler inserts exactly two allocations:
@@ -138,7 +139,8 @@ table are in `CONTRIBUTING.md`.
   (`2026-09-23-milestone-1-followups.md`,
   `2026-09-26-milestone-3-followups.md`,
   `2026-09-29-milestone-4-followups.md`,
-  `2026-10-05-milestone-5b4-followups.md`)
+  `2026-10-05-milestone-5b4-followups.md`,
+  `2026-10-07-milestone-5c-followups.md`)
 - `docs/open-questions.md` design questions deliberately not yet answered
 - `TRADEMARKS.md`, `LICENSE-MIT`, `LICENSE-APACHE`; the security policy is the
   organization's shared one, shown in the Security tab

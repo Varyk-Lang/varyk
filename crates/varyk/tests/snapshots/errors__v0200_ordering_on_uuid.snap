@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0200]: `<` cannot be applied to `Uuid`
+ --> crates/varyk/tests/fixtures/errors/v0200_ordering_on_uuid/main.vr:4:20
+  |
+4 |     println!("{}", first < second);
+  |                    ^^^^^^^^^^^^^^ `<` cannot be applied to `Uuid`
+  |
+  = note: `<` is defined for numbers and `Time` only

@@ -42,7 +42,8 @@ use slots::{BORROWED_NOTE, Slot, clone_fix_it};
 
 /// The fix for an `if`, block, or `match` that cannot be read in place or
 /// stored with `let`.
-const NEW_BRANCHES: &str = "make every branch give a new value instead (for text, with `.clone()`)";
+const NEW_BRANCHES: &str =
+    "make every branch give a new value instead (for text or `Bytes`, with `.clone()`)";
 
 /// The note of a V0304 for a value gone before it is used.
 const GONE_NOTE: &str = "in Rust terms, a reference cannot outlive the value it borrows";

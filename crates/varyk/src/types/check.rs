@@ -45,7 +45,8 @@ pub fn typecheck(
     let mut functions = Vec::new();
     let derives = derives::compute(&symbols.structs, &symbols.enums);
     let base = location_base(&resolved, sources);
-    // Whether a `varyk-std` call is made; naming `Error` is found below.
+    // Whether a `varyk-std` call is made; naming `Error` or another
+    // standard type is found below.
     let mut uses_std = false;
     let mut logs = false;
     // The structs and enums the `json` calls reach (M5a spec 2.4).
@@ -214,7 +215,7 @@ pub fn typecheck(
         .collect();
 
     Ok(HirProgram {
-        uses_std: uses_std || names_error(symbols, &functions) || own_rust_names_std(symbols),
+        uses_std: uses_std || names_std_type(symbols, &functions) || own_rust_names_std(symbols),
         logs,
         modules,
         functions,
@@ -237,11 +238,12 @@ fn own_rust_names_std(symbols: &Symbols) -> bool {
         .any(|sig| sig.package.is_none() && sig.names_std)
 }
 
-/// Whether the program names `Error` (M5a spec 1): in a signature, a
+/// Whether the program names `Error`, `Time`, `Uuid`, or `Bytes` (M5a
+/// spec 1, milestone 5c spec 7.1): in a signature, a
 /// field, a variant's payload, or a local's type, which is where every
 /// written type argument ends up. A struct or enum of another Varyk
 /// package is not counted (M5b2 spec 7.4).
-fn names_error(symbols: &Symbols, functions: &[HirFunction]) -> bool {
+fn names_std_type(symbols: &Symbols, functions: &[HirFunction]) -> bool {
     // Another package's types are that package's to build.
     let fields = symbols
         .structs
@@ -261,7 +263,7 @@ fn names_error(symbols: &Symbols, functions: &[HirFunction]) -> bool {
         let ret = std::iter::once(&function.ret);
         ret.chain(function.locals.iter().map(|local| &local.ty))
     });
-    fields.chain(payloads).chain(locals).any(Ty::has_error)
+    fields.chain(payloads).chain(locals).any(Ty::has_std_type)
 }
 
 /// `decl`, the `order`-th `use` declared in `module` (source order):
@@ -1333,13 +1335,20 @@ impl FnChecker<'_> {
             self.join_strings(&lhs, &rhs, span);
             return None;
         }
-        if !matches!(ty, Ty::Int(_) | Ty::Float(_)) {
+        // A `Time` is ordered, never added to (milestone 5c spec 2.1).
+        let ordered_time = !arithmetic && ty == Ty::Time;
+        if !matches!(ty, Ty::Int(_) | Ty::Float(_)) && !ordered_time {
+            let note = if arithmetic {
+                format!("`{symbol}` is defined for numeric types only")
+            } else {
+                format!("`{symbol}` is defined for numbers and `Time` only")
+            };
             let diagnostic = Diagnostic::new(
                 codes::V0200,
                 span,
                 format!("`{symbol}` cannot be applied to `{}`", self.ty_name(&ty)),
             )
-            .with_note(format!("`{symbol}` is defined for numeric types only"));
+            .with_note(note);
             self.diagnostics.push(diagnostic);
             return None;
         }
@@ -1623,7 +1632,7 @@ impl FnChecker<'_> {
             };
             let show = matches!(
                 lhs.ty,
-                Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Error
+                Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Error | Ty::Time | Ty::Uuid
             );
             (cond, AssertKind::Eq { show })
         };
@@ -1737,8 +1746,8 @@ impl FnChecker<'_> {
         )
         .with_note(format!(
             "after its other arguments, `{path}` takes values of type `bool`, `string`, `f32`, \
-             `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, or an `Option` of one of \
-             those"
+             `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `Time`, `Uuid`, `Bytes`, or \
+             an `Option` of one of those"
         ));
         if !matches!(ty, Ty::Int(IntKind::U64 | IntKind::Usize)) {
             return diagnostic;
@@ -2061,8 +2070,20 @@ impl FnChecker<'_> {
                         self.ty_name(&arg.ty)
                     );
                     self.diagnostics.push(
-                        Diagnostic::new(codes::V0203, arg.span, message).with_note(
-                            "only numbers, `bool`, `string`, and `Error` have a printed form",
+                        Diagnostic::new(codes::V0203, arg.span, message).with_note(PRINTED_FORMS),
+                    );
+                    failed = true;
+                }
+                Ty::Bytes => {
+                    self.diagnostics.push(
+                        Diagnostic::new(
+                            codes::V0203,
+                            arg.span,
+                            "a `Bytes` cannot be printed with `{}`",
+                        )
+                        .with_note(
+                            "bytes have no one printed form; print the text they hold with \
+                             `to_text`, or their base64 with `to_base64`",
                         ),
                     );
                     failed = true;
@@ -2074,9 +2095,7 @@ impl FnChecker<'_> {
                         self.ty_name(&arg.ty)
                     );
                     self.diagnostics.push(
-                        Diagnostic::new(codes::V0203, arg.span, message).with_note(
-                            "only numbers, `bool`, `string`, and `Error` have a printed form",
-                        ),
+                        Diagnostic::new(codes::V0203, arg.span, message).with_note(PRINTED_FORMS),
                     );
                     failed = true;
                 }
@@ -2488,6 +2507,10 @@ pub(super) fn usize_note(a: &Ty, b: &Ty) -> Option<&'static str> {
     )
 }
 
+/// The note of V0203 for a value `{}` cannot print (milestone 5c spec 8).
+const PRINTED_FORMS: &str =
+    "only numbers, `bool`, `string`, `Error`, `Time`, and `Uuid` have a printed form";
+
 fn is_arithmetic(op: BinaryOp) -> bool {
     matches!(
         op,
@@ -2561,10 +2584,12 @@ fn some_operand(arg: &Expr) -> Option<&Expr> {
 
 /// Whether a value of type `ty` can be passed after the other arguments
 /// to a `Vec<varyk_std::Value>` parameter (milestone 5b3 spec 2.2): a
-/// type `varyk_std::Value::from` takes, which no conversion can fail.
+/// type `varyk_std::Value::from` takes, which no conversion can fail;
+/// `Time`, `Uuid`, and `Bytes` too (milestone 5c spec 2.4), a `Bytes`
+/// lent.
 fn is_value_type(ty: &Ty) -> bool {
     let scalar = |ty: &Ty| match ty {
-        Ty::Bool | Ty::String | Ty::Float(_) => true,
+        Ty::Bool | Ty::String | Ty::Float(_) | Ty::Time | Ty::Uuid | Ty::Bytes => true,
         Ty::Int(kind) => !matches!(kind, IntKind::U64 | IntKind::Usize),
         _ => false,
     };

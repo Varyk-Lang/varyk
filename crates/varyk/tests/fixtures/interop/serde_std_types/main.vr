@@ -1,0 +1,15 @@
+mod ext;
+
+struct Record {
+    at: Time,
+    id: Uuid,
+    data: Bytes,
+}
+
+fn main() {
+    let read: Result<Record, Error> = ext::decode("{\"at\":\"2026-10-07T12:00:00Z\",\"id\":\"0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e\",\"data\":\"YWJj\"}");
+    match read {
+        Ok(record) => println!("{}", ext::encode(record)),
+        Err(e) => println!("{}", e.message()),
+    }
+}

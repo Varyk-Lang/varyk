@@ -1,6 +1,7 @@
 //! The built-in calls (M2 spec 2.6, M4 spec 2.7, M5a spec 2.3): the whole
 //! standard-library surface Varyk offers on `Vec`, `string`, `Option`,
-//! `Result`, `HashMap`, chains, `Error`, `json`, and `env`, as data. Nothing is read from Rust's standard library; the
+//! `Result`, `HashMap`, chains, `Error`, `Time`, `Uuid`, `Bytes`, `json`,
+//! and `env`, as data. Nothing is read from Rust's standard library; the
 //! checker types these calls from [`TABLE`], borrow analysis reads each
 //! entry's parameter modes, and the backend emits each by its name.
 
@@ -18,6 +19,13 @@ pub enum Owner {
     Chain,
     /// `Error` (M5a spec 2.3), made by `varyk-std`.
     Error,
+    /// The type `Time` (milestone 5c spec 2.1), kept apart from the `time`
+    /// module's [`Owner::Time`].
+    TimeType,
+    /// `Uuid` (milestone 5c spec 2.2).
+    Uuid,
+    /// `Bytes` (milestone 5c spec 2.3).
+    Bytes,
     /// The `json` module (M5a spec 2.4), whose calls are written
     /// `json::name(..)`.
     Json,
@@ -51,6 +59,9 @@ impl Owner {
             Owner::HashMap => "HashMap",
             Owner::Chain => "chain",
             Owner::Error => "Error",
+            Owner::TimeType => "Time",
+            Owner::Uuid => "Uuid",
+            Owner::Bytes => "Bytes",
             Owner::Json => "json",
             Owner::Env => "env",
             Owner::Log => "log",
@@ -114,6 +125,9 @@ impl Owner {
                 },
             ),
             Ty::Error => (Owner::Error, subst),
+            Ty::Time => (Owner::TimeType, subst),
+            Ty::Uuid => (Owner::Uuid, subst),
+            Ty::Bytes => (Owner::Bytes, subst),
             Ty::Task(t) => (
                 Owner::Task,
                 Subst {
@@ -161,6 +175,8 @@ pub enum Shape {
     Usize,
     /// `u64` (`time::sleep`'s milliseconds).
     U64,
+    /// `i64` (`Time`'s seconds and microseconds, milestone 5c spec 2.1).
+    I64,
     /// `u16` (`Error::with_status`'s status, milestone 5b4 spec 2.6).
     U16,
     /// `Option<u16>` (`Error`'s status, milestone 5b4 spec 2.6).
@@ -179,6 +195,18 @@ pub enum Shape {
     ResultOfExpected,
     /// `Error`.
     Error,
+    /// `Time` (milestone 5c spec 2.1).
+    Time,
+    /// `Uuid` (milestone 5c spec 2.2).
+    Uuid,
+    /// `Bytes` (milestone 5c spec 2.3).
+    Bytes,
+    /// `Result<Time, Error>`.
+    ResultOfTime,
+    /// `Result<Bytes, Error>`.
+    ResultOfBytes,
+    /// `Result<string, Error>` (`to_text`).
+    ResultOfString,
     /// A `string` lent read-only, passed as a `&str`.
     ReadString,
     /// A `T` lent read-only.
@@ -277,6 +305,7 @@ impl Shape {
             Shape::OptionOfT => Ty::Option(boxed(&subst.t)),
             Shape::Usize => Ty::Int(IntKind::Usize),
             Shape::U64 => Ty::Int(IntKind::U64),
+            Shape::I64 => Ty::Int(IntKind::I64),
             Shape::U16 => Ty::Int(IntKind::U16),
             Shape::OptionOfU16 => Ty::Option(Box::new(Ty::Int(IntKind::U16))),
             Shape::String | Shape::ReadString => Ty::String,
@@ -290,6 +319,12 @@ impl Shape {
             Shape::HashMapOfKV => Ty::HashMap(boxed(&subst.k), boxed(&subst.v)),
             Shape::ResultOfExpected => Ty::Result(boxed(&subst.expected), Box::new(Ty::Error)),
             Shape::Error => Ty::Error,
+            Shape::Time => Ty::Time,
+            Shape::Uuid => Ty::Uuid,
+            Shape::Bytes => Ty::Bytes,
+            Shape::ResultOfTime => Ty::Result(Box::new(Ty::Time), Box::new(Ty::Error)),
+            Shape::ResultOfBytes => Ty::Result(Box::new(Ty::Bytes), Box::new(Ty::Error)),
+            Shape::ResultOfString => Ty::Result(Box::new(Ty::String), Box::new(Ty::Error)),
             Shape::R => subst.r.clone(),
             Shape::OptionOfR => Ty::Option(boxed(&subst.r)),
             Shape::ResultOfTAndR => Ty::Result(boxed(&subst.t), boxed(&subst.r)),
@@ -343,9 +378,10 @@ pub enum ElementRule {
     Any,
     /// A number type.
     Number,
-    /// An integer type, `bool`, or `string`: what `sort` orders.
+    /// An integer type, `bool`, `string`, or `Time`: what `sort` orders.
     Ordered,
-    /// A number type, `bool`, or `string`: what `contains` compares.
+    /// A number type, `bool`, `string`, `Time`, `Uuid`, or `Bytes`: what
+    /// `contains` compares.
     Comparable,
     /// `string` only: what `join` joins.
     StringOnly,
@@ -356,10 +392,13 @@ impl ElementRule {
         match self {
             ElementRule::Any => true,
             ElementRule::Number => matches!(ty, Ty::Int(_) | Ty::Float(_)),
-            ElementRule::Ordered => matches!(ty, Ty::Int(_) | Ty::Bool | Ty::String),
-            ElementRule::Comparable => {
-                matches!(ty, Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::String)
+            ElementRule::Ordered => {
+                matches!(ty, Ty::Int(_) | Ty::Bool | Ty::String | Ty::Time)
             }
+            ElementRule::Comparable => matches!(
+                ty,
+                Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::String | Ty::Time | Ty::Uuid | Ty::Bytes
+            ),
             ElementRule::StringOnly => *ty == Ty::String,
         }
     }
@@ -369,8 +408,10 @@ impl ElementRule {
         match self {
             ElementRule::Any => "a `Vec`",
             ElementRule::Number => "a `Vec` of a number type",
-            ElementRule::Ordered => "a `Vec` of an integer type, `bool`, or `string`",
-            ElementRule::Comparable => "a `Vec` of a number type, `bool`, or `string`",
+            ElementRule::Ordered => "a `Vec` of an integer type, `bool`, `string`, or `Time`",
+            ElementRule::Comparable => {
+                "a `Vec` of a number type, `bool`, `string`, `Time`, `Uuid`, or `Bytes`"
+            }
             ElementRule::StringOnly => "a `Vec<string>`",
         }
     }
@@ -739,6 +780,72 @@ pub const TABLE: &[Builtin] = &[
         &[Shape::SharedOfT],
         Shape::Unit,
     ),
+    // `Time` (milestone 5c spec 2.1): every call that can leave the range
+    // gives a `Result`; the text `from_iso` reads is only lent.
+    row(Owner::TimeType, "now", Receiver::None, &[], Shape::Time),
+    row(
+        Owner::TimeType,
+        "from_iso",
+        Receiver::None,
+        &[Shape::ReadString],
+        Shape::ResultOfTime,
+    ),
+    row(
+        Owner::TimeType,
+        "from_unix",
+        Receiver::None,
+        &[Shape::I64],
+        Shape::ResultOfTime,
+    ),
+    row(
+        Owner::TimeType,
+        "from_unix_micros",
+        Receiver::None,
+        &[Shape::I64],
+        Shape::ResultOfTime,
+    ),
+    row(Owner::TimeType, "to_iso", Reads, &[], Shape::String),
+    row(Owner::TimeType, "to_unix", Reads, &[], Shape::I64),
+    row(Owner::TimeType, "to_unix_micros", Reads, &[], Shape::I64),
+    row(
+        Owner::TimeType,
+        "add_seconds",
+        Reads,
+        &[Shape::I64],
+        Shape::ResultOfTime,
+    ),
+    row(
+        Owner::TimeType,
+        "seconds_since",
+        Reads,
+        &[Shape::Time],
+        Shape::I64,
+    ),
+    // `Uuid` (milestone 5c spec 2.2): `new` and `v7` make a version 7 id,
+    // `v4` a random one.
+    row(Owner::Uuid, "new", Receiver::None, &[], Shape::Uuid),
+    row(Owner::Uuid, "v7", Receiver::None, &[], Shape::Uuid),
+    row(Owner::Uuid, "v4", Receiver::None, &[], Shape::Uuid),
+    // `Bytes` (milestone 5c spec 2.3): the text a call reads is lent, and
+    // what a call makes is a copy.
+    row(
+        Owner::Bytes,
+        "from_text",
+        Receiver::None,
+        &[Shape::ReadString],
+        Shape::Bytes,
+    ),
+    row(
+        Owner::Bytes,
+        "from_base64",
+        Receiver::None,
+        &[Shape::ReadString],
+        Shape::ResultOfBytes,
+    ),
+    row(Owner::Bytes, "to_text", Reads, &[], Shape::ResultOfString),
+    row(Owner::Bytes, "to_base64", Reads, &[], Shape::String),
+    row(Owner::Bytes, "len", Reads, &[], Shape::Usize),
+    row(Owner::Bytes, "is_empty", Reads, &[], Shape::Bool),
 ];
 
 /// `Task::all` or `Task::all_settled`: async, taking a `Vec` of tasks.
@@ -757,14 +864,17 @@ const fn task_all_row(name: &'static str) -> Builtin {
 
 impl Builtin {
     /// Whether the call is a `varyk-std` call (M5a spec 1): a row of
-    /// `Error`, `json`, `env`, `log`, `time`, or `Task` (milestone 5b1 spec
-    /// 4), `App::new`, whose adapters derive serde through `varyk-std`
-    /// (milestone 5b4 spec 2.8), or `parse`, whose `Error` `varyk-std`
-    /// makes.
+    /// `Error`, `Time`, `Uuid`, `Bytes` (milestone 5c spec 2), `json`,
+    /// `env`, `log`, `time`, or `Task` (milestone 5b1 spec 4), `App::new`,
+    /// whose adapters derive serde through `varyk-std` (milestone 5b4 spec
+    /// 2.8), or `parse`, whose `Error` `varyk-std` makes.
     pub fn uses_std(&self) -> bool {
         matches!(
             self.owner,
             Owner::Error
+                | Owner::TimeType
+                | Owner::Uuid
+                | Owner::Bytes
                 | Owner::Json
                 | Owner::Env
                 | Owner::Log
@@ -1370,6 +1480,129 @@ mod tests {
         }
     }
 
+    /// Each row of the milestone 5c tables (spec 2.1 to 2.3): its owner,
+    /// name, receiver, parameters, and result.
+    #[test]
+    fn the_time_uuid_and_bytes_rows_of_milestone_5c_spec_2() {
+        use Receiver::{None as NoReceiver, Reads};
+        use Shape::*;
+        type CallRow = (Owner, &'static str, Receiver, &'static [Shape], Shape);
+        let rows: &[CallRow] = &[
+            (Owner::TimeType, "now", NoReceiver, &[], Time),
+            (
+                Owner::TimeType,
+                "from_iso",
+                NoReceiver,
+                &[ReadString],
+                ResultOfTime,
+            ),
+            (
+                Owner::TimeType,
+                "from_unix",
+                NoReceiver,
+                &[I64],
+                ResultOfTime,
+            ),
+            (
+                Owner::TimeType,
+                "from_unix_micros",
+                NoReceiver,
+                &[I64],
+                ResultOfTime,
+            ),
+            (Owner::TimeType, "to_iso", Reads, &[], String),
+            (Owner::TimeType, "to_unix", Reads, &[], I64),
+            (Owner::TimeType, "to_unix_micros", Reads, &[], I64),
+            (Owner::TimeType, "add_seconds", Reads, &[I64], ResultOfTime),
+            (Owner::TimeType, "seconds_since", Reads, &[Time], I64),
+            (Owner::Uuid, "new", NoReceiver, &[], Uuid),
+            (Owner::Uuid, "v7", NoReceiver, &[], Uuid),
+            (Owner::Uuid, "v4", NoReceiver, &[], Uuid),
+            (Owner::Bytes, "from_text", NoReceiver, &[ReadString], Bytes),
+            (
+                Owner::Bytes,
+                "from_base64",
+                NoReceiver,
+                &[ReadString],
+                ResultOfBytes,
+            ),
+            (Owner::Bytes, "to_text", Reads, &[], ResultOfString),
+            (Owner::Bytes, "to_base64", Reads, &[], String),
+            (Owner::Bytes, "len", Reads, &[], Usize),
+            (Owner::Bytes, "is_empty", Reads, &[], Bool),
+        ];
+        for &(owner, name, receiver, params, result) in rows {
+            let entry = row(owner, name, receiver != NoReceiver);
+            assert_eq!(entry.receiver, receiver, "{name}");
+            assert_eq!(entry.params, params, "{name}");
+            assert_eq!(entry.result, result, "{name}");
+            assert_eq!(entry.result_kind, ResultKind::Value, "{name}");
+            assert_eq!(entry.element, ElementRule::Any, "{name}");
+            assert!(!entry.is_async, "{name}");
+            // Each is a `varyk-std` call.
+            assert!(entry.uses_std(), "{name}");
+        }
+        assert_eq!(
+            names(Owner::TimeType, false),
+            ["now", "from_iso", "from_unix", "from_unix_micros"]
+        );
+        assert_eq!(
+            names(Owner::TimeType, true),
+            [
+                "to_iso",
+                "to_unix",
+                "to_unix_micros",
+                "add_seconds",
+                "seconds_since"
+            ]
+        );
+        assert_eq!(names(Owner::Uuid, false), ["new", "v7", "v4"]);
+        assert!(names(Owner::Uuid, true).is_empty());
+        assert_eq!(names(Owner::Bytes, false), ["from_text", "from_base64"]);
+        assert_eq!(
+            names(Owner::Bytes, true),
+            ["to_text", "to_base64", "len", "is_empty"]
+        );
+        // The type is `Time`; the module `time` stays its own owner.
+        assert_eq!(Owner::TimeType.name(), "Time");
+        assert_eq!(Owner::Time.name(), "time");
+        assert_eq!(Owner::Uuid.name(), "Uuid");
+        assert_eq!(Owner::Bytes.name(), "Bytes");
+        for (ty, owner) in [
+            (Ty::Time, Owner::TimeType),
+            (Ty::Uuid, Owner::Uuid),
+            (Ty::Bytes, Owner::Bytes),
+        ] {
+            assert_eq!(Owner::of(&ty).map(|(of, _)| of), Some(owner));
+        }
+        let now = lookup(Owner::TimeType, "now", false).expect("Time::now");
+        assert_eq!(now.path(), "Time::now");
+        // A read text is a shared borrow, a `Time` an owned (Copy) slot.
+        let from_text = lookup(Owner::Bytes, "from_text", false).expect("Bytes::from_text");
+        assert_eq!(from_text.modes(), [ParamMode::SharedBorrow]);
+        let since = lookup(Owner::TimeType, "seconds_since", true).expect("seconds_since");
+        assert_eq!(since.modes(), [ParamMode::SharedBorrow, ParamMode::Owned]);
+        // The shapes stand for the types the spec's tables give.
+        let subst = Subst::default();
+        let boxed = |ty: Ty| Box::new(ty);
+        assert_eq!(I64.ty(&subst), Ty::Int(IntKind::I64));
+        assert_eq!(Time.ty(&subst), Ty::Time);
+        assert_eq!(Uuid.ty(&subst), Ty::Uuid);
+        assert_eq!(Bytes.ty(&subst), Ty::Bytes);
+        assert_eq!(
+            ResultOfTime.ty(&subst),
+            Ty::Result(boxed(Ty::Time), boxed(Ty::Error))
+        );
+        assert_eq!(
+            ResultOfBytes.ty(&subst),
+            Ty::Result(boxed(Ty::Bytes), boxed(Ty::Error))
+        );
+        assert_eq!(
+            ResultOfString.ty(&subst),
+            Ty::Result(boxed(Ty::String), boxed(Ty::Error))
+        );
+    }
+
     #[test]
     fn element_rules_accept_what_spec_2_7_says() {
         let (i32_, f64_) = (Ty::Int(IntKind::I32), Ty::Float(FloatKind::F64));
@@ -1385,5 +1618,25 @@ mod tests {
         assert!(ElementRule::Number.accepts(&f64_));
         assert!(!ElementRule::Number.accepts(&Ty::Bool));
         assert!(ElementRule::Any.accepts(&s));
+    }
+
+    /// `sort` orders `Time`s, and `contains` compares the three
+    /// (milestone 5c spec 2.1 to 2.3).
+    #[test]
+    fn element_rules_take_time_uuid_and_bytes_as_milestone_5c_says() {
+        assert!(ElementRule::Ordered.accepts(&Ty::Time));
+        assert!(!ElementRule::Ordered.accepts(&Ty::Uuid));
+        assert!(!ElementRule::Ordered.accepts(&Ty::Bytes));
+        for ty in [Ty::Time, Ty::Uuid, Ty::Bytes] {
+            assert!(ElementRule::Comparable.accepts(&ty), "{ty:?}");
+        }
+        assert_eq!(
+            ElementRule::Ordered.wanted(),
+            "a `Vec` of an integer type, `bool`, `string`, or `Time`"
+        );
+        assert_eq!(
+            ElementRule::Comparable.wanted(),
+            "a `Vec` of a number type, `bool`, `string`, `Time`, `Uuid`, or `Bytes`"
+        );
     }
 }

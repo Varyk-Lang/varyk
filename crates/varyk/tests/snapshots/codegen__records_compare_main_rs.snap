@@ -1,0 +1,92 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct Record {
+    at: ::varyk_std::Time,
+    id: ::varyk_std::Uuid,
+    data: ::varyk_std::Bytes,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn at(seconds: i64) -> ::varyk_std::Time {
+    let epoch = ::varyk_std::Time::now();
+    ::varyk_std::Time::from_unix(seconds).unwrap_or(epoch)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn known(data: &::varyk_std::Bytes) -> bool {
+    let seen: Vec<::varyk_std::Bytes> = ::std::vec![::varyk_std::Bytes::from_text("hi"), ::varyk_std::Bytes::from_text("hello")];
+    seen.contains(data)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn same(data: &::varyk_std::Bytes) -> bool {
+    let bye = ::varyk_std::Bytes::from_text("bye");
+    data == &bye
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn read_id(text: &str) -> Result<::varyk_std::Uuid, ::varyk_std::Error> {
+    let id = ::varyk_std::parse::<::varyk_std::Uuid>(text)?;
+    Ok(id)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    let early = at(1000i64);
+    let late = at(2000i64);
+    ::std::println!("{} {} {} {}", early < late, early <= late, early > late, late >= early);
+    ::std::println!("{} {}", early == late, early != late);
+    let mut times: Vec<::varyk_std::Time> = ::std::vec![late, early, at(1500i64)];
+    times.sort();
+    ::std::println!("{} {} {}", times[0usize], times[1usize], times[2usize]);
+    ::std::println!("{}", times.contains(&early));
+    match read_id("0192F0C4-7A3E-7B5C-9D1E-2F3A4B5C6D7E") {
+        Ok(id) => {
+            ::std::println!("{}", id);
+            let mut names: ::std::collections::HashMap<::varyk_std::Uuid, String> = ::std::collections::HashMap::new();
+            names.insert(id, "first".to_string());
+            if let Some(name) = names.get(&id) {
+                ::std::println!("{}", name);
+            }
+            ::std::println!("{}", names.contains_key(&id));
+            for key in names.keys().copied() {
+                ::std::println!("{}", key == id);
+            }
+            let ids: Vec<::varyk_std::Uuid> = ::std::vec![id];
+            ::std::println!("{}", ids.contains(&id));
+        }
+        Err(e) => ::std::println!("{}", e),
+    }
+    let parsed: Result<::varyk_std::Time, ::varyk_std::Error> = ::varyk_std::parse::<::varyk_std::Time>("2026-10-07T12:00:00.250+01:00");
+    match &parsed {
+        Ok(t) => {
+            let t = *t;
+            ::std::println!("{}", t)
+        }
+        Err(e) => ::std::println!("{}", e),
+    }
+    let hello = ::varyk_std::Bytes::from_text("hello");
+    ::std::println!("{} {}", known(&hello), same(&hello));
+    let copy = hello.clone();
+    ::std::println!("{}", copy == hello);
+    let record = Record { at: early, id: ::varyk_std::Uuid::new(), data: copy };
+    let twin = record.clone();
+    ::std::println!("{}", twin == record);
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[test]
+fn times_compare() {
+    let first: Result<::varyk_std::Time, ::varyk_std::Error> = ::varyk_std::parse::<::varyk_std::Time>("1970-01-01T00:16:40Z");
+    match &first {
+        Ok(t) => {
+            let t = *t;
+            match (&(t), &(at(1000i64))) { (varyk_left, varyk_right) => ::std::assert!(*varyk_left == *varyk_right, "assertion failed at main.vr:74: left is {}, right is {}", varyk_left, varyk_right) }
+        }
+        Err(e) => ::std::assert!(false, "assertion failed at main.vr:75"),
+    }
+}

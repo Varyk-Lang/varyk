@@ -1,0 +1,61 @@
+// expected output:
+// 0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e at 2026-10-07T10:00:00Z
+// expires at 2026-10-07T11:00:00Z, 3600 seconds later
+// {"id":"0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e","at":"2026-10-07T10:00:00Z","data":"aGVsbG8sIHdvcmxk"}
+// read back the same: true
+// hello, world
+// aGVsbG8sIHdvcmxk
+// a new upload has its own id: true
+// `42` is not a Uuid like 01890a5d-ac96-774b-bcce-b302099a8057
+// `2026-10-07 12:00` is not a time like 2026-10-07T12:00:00Z
+
+struct Upload {
+    id: Uuid,
+    at: Time,
+    data: Bytes,
+}
+
+fn first_upload() -> Result<Upload, Error> {
+    let id: Uuid = "0192F0C4-7A3E-7B5C-9D1E-2F3A4B5C6D7E".parse()?;
+    let at = Time::from_iso("2026-10-07T12:00:00+02:00")?;
+    Ok(Upload { id: id, at: at, data: Bytes::from_text("hello, world") })
+}
+
+// Writes `upload` as JSON, reads it back, and compares the two.
+fn report(upload: Upload) -> Result<bool, Error> {
+    println!("{} at {}", upload.id, upload.at);
+    let expires = upload.at.add_seconds(3600)?;
+    println!("expires at {}, {} seconds later", expires, expires.seconds_since(upload.at));
+    let text = json::stringify(upload);
+    println!("{}", text);
+    let back: Upload = json::parse(text)?;
+    Ok(back == upload)
+}
+
+fn main() {
+    match first_upload() {
+        Ok(upload) => {
+            match report(upload) {
+                Ok(same) => println!("read back the same: {}", same),
+                Err(e) => println!("error: {}", e),
+            }
+            match upload.data.to_text() {
+                Ok(text) => println!("{}", text),
+                Err(e) => println!("error: {}", e),
+            }
+            println!("{}", upload.data.to_base64());
+            let fresh = Upload { id: Uuid::new(), at: Time::now(), data: Bytes::from_text("") };
+            println!("a new upload has its own id: {}", fresh.id != upload.id);
+        }
+        Err(e) => println!("error: {}", e),
+    }
+    let bad: Result<Uuid, Error> = "42".parse();
+    match bad {
+        Ok(id) => println!("{}", id),
+        Err(e) => println!("{}", e),
+    }
+    match Time::from_iso("2026-10-07 12:00") {
+        Ok(t) => println!("{}", t),
+        Err(e) => println!("{}", e),
+    }
+}

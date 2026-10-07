@@ -1,0 +1,5 @@
+fn main() {
+    let first = Uuid::new();
+    let second = Uuid::new();
+    println!("{}", first < second);
+}

@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `data` belongs to the caller of this function, so it cannot be stored in field `data` of `Upload`
+  --> crates/varyk/tests/fixtures/errors/v0304_bytes_from_parameter_into_field/main.vr:10:20
+   |
+10 |     Upload { data: body(data) }
+   |                    ^^^^^^^^^^ `data` belongs to the caller of this function, so it cannot be stored in field `data` of `Upload`
+   |
+   = note: this function can read `data` but not keep it; make a new value here instead, or keep it where the caller made it
+   = note: in Rust terms, a borrowed value cannot move into a place that owns it
+help: insert `.clone()`

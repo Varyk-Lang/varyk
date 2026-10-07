@@ -12,6 +12,22 @@ struct User {
 }
 
 #[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct Doc {
+    data: ::varyk_std::Bytes,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn data(doc: &Doc) -> &::varyk_std::Bytes {
+    &doc.data
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn pass(b: &::varyk_std::Bytes, maybe: &Option<::varyk_std::Bytes>) -> usize {
+    crate::ext::run("insert into files (data, extra) values (?, ?)", vec![::varyk_std::Value::from(b), ::varyk_std::Value::from(maybe.as_ref())])
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
 fn main() {
     let id = 7i64;
     let name = ::std::format!("user {}", id);
@@ -27,4 +43,20 @@ fn main() {
         Some(nick) => ::std::println!("{}", nick),
         None => ::std::println!("none"),
     }
+    let at = ::varyk_std::Time::now();
+    let key = ::varyk_std::Uuid::new();
+    let seen: Option<::varyk_std::Time> = Some(at);
+    let b = ::varyk_std::Bytes::from_text("abc");
+    let extra: Option<::varyk_std::Bytes> = Some(::varyk_std::Bytes::from_text("d"));
+    let doc = Doc { data: ::varyk_std::Bytes::from_text("e") };
+    let five = crate::ext::run("insert into events (at, key, seen, data, extra) values (?, ?, ?, ?, ?)", vec![::varyk_std::Value::from(at), ::varyk_std::Value::from(key), ::varyk_std::Value::from(seen), ::varyk_std::Value::from(&b), ::varyk_std::Value::from(extra.as_ref())]);
+    let lent = pass(&b, &extra) + crate::ext::run("insert into docs (data) values (?)", vec![::varyk_std::Value::from(data(&doc))]);
+    ::std::println!("{} {} {} {}", five, lent, b.len(), extra.is_some());
+    let flag = true;
+    let chosen = crate::ext::run("insert into files (data) values (?)", vec![::varyk_std::Value::from((&(if flag {
+        Some(b)
+    } else {
+        None
+    })).as_ref())]);
+    ::std::println!("{}", chosen);
 }

@@ -1,0 +1,14 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0210]: `Keys` cannot be read from the environment
+ --> crates/varyk/tests/fixtures/errors/v0210_bytes_from_env/main.vr:7:37
+  |
+3 |     signing_key: Bytes,
+  |     ------------------ `Bytes` is not a type that the environment can hold
+...
+7 |     let keys: Result<Keys, Error> = env::parse();
+  |                                     ^^^^^^^^^^^^ `Keys` cannot be read from the environment
+  |
+  = note: the fields of a struct read from the environment can be numbers, `bool`, `string`, `Time`, `Uuid`, enums whose variants carry no data, or an `Option` of one of these

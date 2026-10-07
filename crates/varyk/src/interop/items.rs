@@ -758,10 +758,16 @@ fn unmapped_at_import_time(ty: &RustTy) -> bool {
 /// known at import time (spec 4.3).
 fn unmapped_payload_reason(variant: &str, ty: &RustTy) -> String {
     if let RustTy::Named(RustPath::Used(name)) = ty {
+        // The three standard types a variant may hold are `varyk-std`'s
+        // (milestone 5c spec 2.5).
+        let full = if matches!(name.as_str(), "Time" | "Uuid" | "Bytes") {
+            format!("varyk_std::{name}")
+        } else {
+            format!("crate::module::{name}")
+        };
         return format!(
             "has a variant, `{variant}`, holding `{name}`, which a `use` line of the Rust file \
-             brings in and Varyk does not follow (write the full path, as in \
-             `crate::module::{name}`)"
+             brings in and Varyk does not follow (write the full path, as in `{full}`)"
         );
     }
     if let RustTy::Named(RustPath::Glob(name)) = ty {

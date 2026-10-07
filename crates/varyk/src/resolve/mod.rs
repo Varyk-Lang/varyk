@@ -1022,12 +1022,13 @@ impl Symbols {
                     return Err(Diagnostic::new(
                         codes::V0101,
                         ty.args[0].span,
-                        "a `HashMap` key must be of an integer type, `bool`, or `string`",
+                        "a `HashMap` key must be of an integer type, `bool`, `string`, or \
+                         `Uuid`",
                     )
                     .with_note(
                         "a key is compared and hashed to find its value; in Rust terms, the key \
-                         type must implement `Eq` and `Hash`, which floats and Varyk's own \
-                         types do not",
+                         type must implement `Eq` and `Hash`, which floats, `Time`, `Bytes`, and \
+                         Varyk's own types do not",
                     ));
                 }
             }
@@ -1081,10 +1082,14 @@ impl Symbols {
         if let Some(prim) = Ty::from_primitive_name(name) {
             return Ok(prim);
         }
-        // No struct or enum can take the name (V0113), so it is always
-        // the standard one (M5a spec 2.3).
-        if name == "Error" {
-            return Ok(Ty::Error);
+        // No struct or enum can take these names (V0113), so each is
+        // always the standard one (M5a spec 2.3, milestone 5c spec 2).
+        match name {
+            "Error" => return Ok(Ty::Error),
+            "Time" => return Ok(Ty::Time),
+            "Uuid" => return Ok(Ty::Uuid),
+            "Bytes" => return Ok(Ty::Bytes),
+            _ => {}
         }
         if name == "String" || name == "str" {
             return Err(Diagnostic::new(
@@ -1366,8 +1371,8 @@ fn parse(file: &SourceFile) -> Result<Program, Vec<Diagnostic>> {
 /// namespace with the primitives, `String`, `Option`, `Result`, and `Vec`,
 /// so a user item with one of those names would capture them in rustc
 /// (`mod String;` makes every `String` a module).
-/// `Error`, `Task`, and `Shared` are V0113 instead: the standard types'
-/// names.
+/// `Error`, `Task`, `Shared`, `Time`, `Uuid`, and `Bytes` are V0113
+/// instead: the standard types' names.
 pub(crate) fn reserved_type_name(name: &str, span: Span) -> Option<Diagnostic> {
     if let Some(diagnostic) = std_type_taken(name, span) {
         return Some(diagnostic);
@@ -1410,8 +1415,9 @@ pub(crate) fn error_name_taken(span: Span) -> Diagnostic {
 }
 
 /// V0113 at `span` for a struct, enum, module, `use` alias, or `.rs`
-/// struct or enum named `Error`, `Task`, or `Shared`, the standard types
-/// (M5a spec 2.10, milestone 5b1 spec 2.8).
+/// struct or enum named `Error`, `Task`, `Shared`, `Time`, `Uuid`, or
+/// `Bytes`, the standard types (M5a spec 2.10, milestone 5b1 spec 2.8,
+/// milestone 5c spec 2).
 pub(crate) fn std_type_taken(name: &str, span: Span) -> Option<Diagnostic> {
     let (what, other) = match name {
         "Error" => return Some(error_name_taken(span)),
@@ -1420,6 +1426,12 @@ pub(crate) fn std_type_taken(name: &str, span: Span) -> Option<Diagnostic> {
             "the standard type of a value many tasks share",
             "`State` or `Common`",
         ),
+        "Time" => (
+            "the standard type of a point in time",
+            "`Moment` or `Timestamp`",
+        ),
+        "Uuid" => ("the standard type of a unique id", "`Id` or `Key`"),
+        "Bytes" => ("the standard type of a run of bytes", "`Data` or `Blob`"),
         _ => return None,
     };
     Some(

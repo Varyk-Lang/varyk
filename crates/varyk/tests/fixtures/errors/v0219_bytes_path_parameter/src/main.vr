@@ -1,0 +1,10 @@
+struct State {
+    name: string,
+}
+
+async fn get_file(data: Bytes) {}
+
+fn main() {
+    let mut app = http::App::new(Shared::new(State { name: "files" }));
+    app.get("/files/{data}", get_file);
+}

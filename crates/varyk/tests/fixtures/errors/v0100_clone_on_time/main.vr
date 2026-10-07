@@ -1,0 +1,5 @@
+fn main() {
+    let started = Time::now();
+    let copy = started.clone();
+    println!("{}", copy);
+}

@@ -1,0 +1,13 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0304]: `message` belongs to the caller of this function, so it cannot be given to `keep`, which keeps what it is given
+ --> crates/varyk/tests/fixtures/errors/v0304_bytes_from_a_borrowed_enum/main.vr:5:49
+  |
+5 |         ext::Message::Binary(data) => ext::keep(data).len(),
+  |                                                 ^^^^ `message` belongs to the caller of this function, so it cannot be given to `keep`, which keeps what it is given
+  |
+  = note: this function can read `message` but not keep it; make a new value here instead, or keep it where the caller made it
+  = note: in Rust terms, a borrowed value cannot move into a place that owns it
+help: insert `.clone()` after `data`

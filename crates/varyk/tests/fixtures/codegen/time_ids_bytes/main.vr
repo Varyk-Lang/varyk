@@ -1,0 +1,75 @@
+struct Record {
+    at: Time,
+    id: Uuid,
+    data: Bytes,
+}
+
+fn show(result: Result<Time, Error>) {
+    match result {
+        Ok(t) => println!("{}", t.to_iso()),
+        Err(e) => println!("{}", e),
+    }
+}
+
+fn later(t: Time, seconds: i64) -> Result<Time, Error> {
+    let moved = t.add_seconds(seconds)?;
+    Ok(moved)
+}
+
+fn text_of(data: Bytes) -> string {
+    match data.to_text() {
+        Ok(text) => text,
+        Err(e) => format!("{}", e),
+    }
+}
+
+fn size(data: Bytes) -> usize {
+    data.len()
+}
+
+fn main() {
+    show(Time::from_iso("2026-10-07T12:00:00.5+02:00"));
+    show(Time::from_iso("2026-10-07 12:00"));
+    show(Time::from_unix(0));
+    show(Time::from_unix_micros(1500000));
+    show(Time::from_unix(253402300800));
+
+    let start = Time::now();
+    println!("{}", Time::now().seconds_since(start) >= 0);
+    let t = Time::from_unix(1000000000).unwrap_or(start);
+    println!("{} {} {}", t.to_iso(), t.to_unix(), t.to_unix_micros());
+    show(t.add_seconds(-40));
+    show(later(t, 20));
+
+    let ordered = Uuid::v7();
+    let random = Uuid::v4();
+    let record = Record {
+        at: t,
+        id: Uuid::new(),
+        data: Bytes::from_text("héllo"),
+    };
+    let epoch = Time::from_unix(0).unwrap_or(start);
+    println!("{} {}", record.at.to_unix(), record.at.seconds_since(epoch));
+    println!(
+        "{} {} {}",
+        record.data.len(),
+        record.data.is_empty(),
+        record.data.to_base64()
+    );
+    println!("{} {}", size(record.data), text_of(record.data));
+
+    let empty = Bytes::from_text("");
+    println!("{} {}", empty.is_empty(), empty.len());
+    match Bytes::from_base64("aGk=") {
+        Ok(b) => println!("{}", text_of(b)),
+        Err(e) => println!("{}", e),
+    }
+    match Bytes::from_base64("aGk") {
+        Ok(b) => println!("{}", text_of(b)),
+        Err(e) => println!("{}", e),
+    }
+    match Bytes::from_base64("/w==") {
+        Ok(b) => println!("{}", text_of(b)),
+        Err(e) => println!("{}", e),
+    }
+}

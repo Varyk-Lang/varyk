@@ -1,6 +1,6 @@
 use super::*;
 use crate::diagnostics::codes;
-use crate::interop::import_rust_module;
+use crate::interop::{RustTy, import_rust_module};
 use crate::types::{FloatKind, IntKind};
 use varyk_syntax::PathStart;
 
@@ -1299,12 +1299,18 @@ fn hash_map_with_a_wrong_arity_or_key_is_v0101() {
         ),
         ("HashMap<string, i32, i32>", "`HashMap` takes two types"),
         ("HashMap", "`HashMap` takes two types"),
-        ("HashMap<f64, i32>", "an integer type, `bool`, or `string`"),
+        (
+            "HashMap<f64, i32>",
+            "an integer type, `bool`, `string`, or `Uuid`",
+        ),
         (
             "HashMap<Vec<i32>, i32>",
-            "an integer type, `bool`, or `string`",
+            "an integer type, `bool`, `string`, or `Uuid`",
         ),
-        ("HashMap<P, i32>", "an integer type, `bool`, or `string`"),
+        (
+            "HashMap<P, i32>",
+            "an integer type, `bool`, `string`, or `Uuid`",
+        ),
     ] {
         let text = format!("struct P {{\n    n: i32,\n}}\nfn f(m: {ty}) {{}}\nfn main() {{}}\n");
         let (result, sources) = resolve_str(&text);
@@ -1739,6 +1745,137 @@ fn a_bare_error_from_a_use_says_to_write_the_full_path() {
     assert!(!sig.callable);
     let note = sig.note.unwrap_or_default();
     assert!(note.contains("write the full path"), "{note}");
+}
+
+// --- `Time`, `Uuid`, and `Bytes` in a signature (milestone 5c spec 2.5) --
+
+#[test]
+fn time_uuid_and_bytes_map_in_each_accepted_form() {
+    let owned = |ty: Ty| (ty, ParamMode::Owned);
+    let boxed = |ty: Ty| Box::new(ty);
+    for (text, params, ret) in [
+        (
+            "pub fn f(t: varyk_std::Time, id: ::varyk_std::Uuid) -> varyk_std::Time { t }",
+            vec![owned(Ty::Time), owned(Ty::Uuid)],
+            Ty::Time,
+        ),
+        (
+            "pub fn f(b: &varyk_std::Bytes) -> usize { b.len() }",
+            vec![(Ty::Bytes, ParamMode::SharedBorrow)],
+            Ty::Int(IntKind::Usize),
+        ),
+        (
+            "pub fn f(b: varyk_std::Bytes) -> varyk_std::Bytes { b }",
+            vec![owned(Ty::Bytes)],
+            Ty::Bytes,
+        ),
+        (
+            "pub fn f(t: Option<varyk_std::Time>, ids: Vec<varyk_std::Uuid>) -> Option<varyk_std::Uuid> { None }",
+            vec![
+                owned(Ty::Option(boxed(Ty::Time))),
+                owned(Ty::Vec(boxed(Ty::Uuid))),
+            ],
+            Ty::Option(boxed(Ty::Uuid)),
+        ),
+        (
+            "pub fn f(b: Vec<varyk_std::Bytes>) -> Result<varyk_std::Time, varyk_std::Error> { todo!() }",
+            vec![owned(Ty::Vec(boxed(Ty::Bytes)))],
+            Ty::Result(boxed(Ty::Time), boxed(Ty::Error)),
+        ),
+        (
+            "pub fn f(b: Option<varyk_std::Bytes>) -> Result<Vec<varyk_std::Bytes>, String> { todo!() }",
+            vec![owned(Ty::Option(boxed(Ty::Bytes)))],
+            Ty::Result(boxed(Ty::Vec(boxed(Ty::Bytes))), boxed(Ty::String)),
+        ),
+        (
+            "pub fn f(r: Result<varyk_std::Uuid, String>) -> Vec<varyk_std::Time> { Vec::new() }",
+            vec![owned(Ty::Result(boxed(Ty::Uuid), boxed(Ty::String)))],
+            Ty::Vec(boxed(Ty::Time)),
+        ),
+    ] {
+        let sig = mapped(text);
+        assert!(sig.callable, "{text}: {:?}", sig.note);
+        assert_eq!(sig.params, params, "{text}");
+        assert_eq!(sig.ret, ret, "{text}");
+        assert!(sig.names_std, "{text}");
+    }
+}
+
+#[test]
+fn time_uuid_and_bytes_are_field_and_payload_types() {
+    let symbols = Symbols::default();
+    let mapper = signatures::Mapper::new(&symbols, ModuleId(1));
+    for (rust, ty) in [
+        (RustTy::Time, Ty::Time),
+        (RustTy::Uuid, Ty::Uuid),
+        (RustTy::Bytes, Ty::Bytes),
+        (
+            RustTy::Option(Box::new(RustTy::Bytes)),
+            Ty::Option(Box::new(Ty::Bytes)),
+        ),
+    ] {
+        assert_eq!(mapper.field(&rust).map_err(|u| u.note), Ok(ty));
+    }
+}
+
+#[test]
+fn a_refused_form_of_time_uuid_or_bytes_is_not_callable_and_gives_the_accepted_form() {
+    for (text, says) in [
+        (
+            "pub fn f(t: &varyk_std::Time) {}",
+            "take it by value, as in `t: varyk_std::Time`",
+        ),
+        (
+            "pub fn f(id: &::varyk_std::Uuid) {}",
+            "take it by value, as in `t: varyk_std::Uuid`",
+        ),
+        (
+            "pub fn f(t: &mut varyk_std::Time) {}",
+            "take it by value, as in `t: varyk_std::Time`",
+        ),
+        (
+            "pub fn f(b: &mut varyk_std::Bytes) {}",
+            "take `&varyk_std::Bytes` to read it or `varyk_std::Bytes` to own it",
+        ),
+        (
+            "pub struct S { t: varyk_std::Time }\nimpl S { pub fn t(&self) -> &varyk_std::Time { &self.t } }",
+            "return `varyk_std::Time` by value",
+        ),
+        (
+            "pub fn f(b: &varyk_std::Bytes) -> &varyk_std::Bytes { b }",
+            "return `varyk_std::Bytes` by value",
+        ),
+        (
+            "pub struct S { id: varyk_std::Uuid }\nimpl S { pub fn id(&mut self) -> &::varyk_std::Uuid { &self.id } }",
+            "return `varyk_std::Uuid` by value",
+        ),
+        (
+            "use varyk_std::Time;\npub fn f(t: Time) {}",
+            "write the full path, as in `varyk_std::Time`",
+        ),
+        (
+            "use varyk_std::{Bytes, Uuid};\npub fn f(b: &Bytes) -> Option<Uuid> { None }",
+            "write the full path, as in `varyk_std::Bytes`",
+        ),
+    ] {
+        let crates = ["varyk-std".to_string()];
+        let imported = crate::interop::import_rust_module_in(text, Some(&crates)).expect("parses");
+        let symbols = Symbols::default();
+        let mapper = signatures::Mapper::new(&symbols, ModuleId(1));
+        let sig = match imported.fns.into_iter().next() {
+            Some(f) => mapper.sig(None, f),
+            None => {
+                let mut s = imported.structs;
+                let method = s.remove(0).methods.remove(0);
+                mapper.sig(None, method)
+            }
+        };
+        assert!(!sig.callable, "{text}");
+        let note = sig.note.unwrap_or_default();
+        assert!(note.contains(says), "{text}: {note}");
+        // A name a `use` line brings in is not followed, as for `Error`.
+        assert_eq!(sig.names_std, !text.starts_with("use"), "{text}");
+    }
 }
 
 // --- Private modules (spec 3.2) -----------------------------------------
@@ -2366,6 +2503,92 @@ fn a_rs_struct_named_error_is_v0113_at_its_name() {
 fn a_use_alias_named_error_is_v0113() {
     let d = errors_str("struct Problem {\n    n: i32,\n}\nuse Problem as Error;\nfn main() {}\n");
     assert_eq!(only(&d).code, codes::V0113, "{d:#?}");
+}
+
+// --- `Time`, `Uuid`, and `Bytes` (milestone 5c spec 2) ---------------------
+
+#[test]
+fn time_uuid_and_bytes_resolve_with_no_declaration() {
+    let resolved = resolved_str(
+        "fn f(t: Time, u: Uuid, b: Bytes) -> Option<Time> {\n    None\n}\nfn main() {}\n",
+    );
+    let sig = resolved
+        .symbols
+        .fns
+        .iter()
+        .find(|sig| sig.name == "f")
+        .expect("f is declared");
+    let types: Vec<(Ty, ParamMode)> = sig.params.iter().map(|p| (p.1.clone(), p.2)).collect();
+    // `Time` and `Uuid` are Copy and passed by value; `Bytes` is lent, as
+    // a struct is (spec 7.4).
+    assert_eq!(
+        types,
+        [
+            (Ty::Time, ParamMode::Owned),
+            (Ty::Uuid, ParamMode::Owned),
+            (Ty::Bytes, ParamMode::SharedBorrow)
+        ]
+    );
+    assert_eq!(sig.ret, Ty::Option(Box::new(Ty::Time)));
+}
+
+#[test]
+fn a_type_module_or_use_named_time_uuid_or_bytes_is_v0113_suggesting_another_name() {
+    for (name, suggestion) in [
+        ("Time", "`Moment` or `Timestamp`"),
+        ("Uuid", "`Id` or `Key`"),
+        ("Bytes", "`Data` or `Blob`"),
+    ] {
+        for source in [
+            format!("struct {name} {{\n    n: i32,\n}}"),
+            format!("enum {name} {{\n    A,\n}}"),
+            format!("mod {name};"),
+            format!("struct Mine {{\n    n: i32,\n}}\nuse Mine as {name};"),
+        ] {
+            let text = format!("{source}\nfn main() {{}}\n");
+            let diagnostics = errors_str(&text);
+            let d = only(&diagnostics);
+            assert_eq!(d.code, codes::V0113, "{text}");
+            assert!(
+                d.message.starts_with(&format!(
+                    "the name `{name}` is already taken by the standard"
+                )),
+                "{text}: {}",
+                d.message
+            );
+            assert_eq!(
+                d.notes,
+                vec![format!(
+                    "`{name}` is always the standard one wherever it is written, so a type \
+                     of your own needs another name, such as {suggestion}"
+                )],
+                "{text}"
+            );
+        }
+        // A `.rs` struct or enum goes through the same check.
+        let d = std_type_taken(name, Span::new(FileId(0), 0, 0)).expect("taken");
+        assert_eq!(d.code, codes::V0113);
+    }
+    // A local, a field, and a function may use the names.
+    resolved_str(
+        "struct S {\n    Time: i32,\n}\nfn Uuid() {}\nfn main() {\n    let Bytes = 1;\n}\n",
+    );
+}
+
+#[test]
+fn a_struct_named_time_is_v0113_at_its_name() {
+    let (diagnostics, sources) = error_fixture("v0113_struct_named_time");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0113, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, 0, "Time"));
+}
+
+#[test]
+fn a_rs_enum_named_bytes_is_v0113_at_its_name() {
+    let (diagnostics, sources) = error_fixture("v0113_rs_enum_named_bytes");
+    let d = only(&diagnostics);
+    assert_eq!(d.code, codes::V0113, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, 1, "Bytes"));
 }
 
 // --- Attributes and reserved names (M5a spec 2.2, 2.7, 2.10) ---------------

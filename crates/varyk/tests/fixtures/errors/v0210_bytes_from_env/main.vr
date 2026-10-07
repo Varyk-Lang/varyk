@@ -1,0 +1,9 @@
+struct Keys {
+    port: u16,
+    signing_key: Bytes,
+}
+
+fn main() {
+    let keys: Result<Keys, Error> = env::parse();
+    println!("{}", keys.is_ok());
+}

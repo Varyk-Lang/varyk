@@ -1740,6 +1740,87 @@ fn a_bare_error_from_a_use_is_still_a_used_name() {
     );
 }
 
+// --- `Time`, `Uuid`, and `Bytes` (milestone 5c spec 2.5) ----------------
+
+#[test]
+fn std_item_knows_time_uuid_and_bytes_by_their_full_paths() {
+    use signatures::{StdItem, std_item};
+    let item = |text: &str| std_item(&syn::parse_str(text).expect("a path"));
+    for (name, found) in [
+        ("Time", StdItem::Time),
+        ("Uuid", StdItem::Uuid),
+        ("Bytes", StdItem::Bytes),
+    ] {
+        assert_eq!(item(&format!("varyk_std::{name}")), Some(found), "{name}");
+        assert_eq!(item(&format!("::varyk_std::{name}")), Some(found), "{name}");
+        for other in [
+            name.to_string(),
+            format!("varyk_std::{name}<i32>"),
+            format!("varyk_std::{name}::<i32>"),
+            format!("varyk_std<i32>::{name}"),
+            format!("std::{name}"),
+            format!("varyk_std::timestamp::{name}"),
+        ] {
+            assert_eq!(item(&other), None, "{other}");
+        }
+    }
+}
+
+#[test]
+fn time_uuid_and_bytes_map_by_their_full_paths() {
+    let f = one(
+        "pub fn f(t: varyk_std::Time, id: ::varyk_std::Uuid, b: &varyk_std::Bytes, c: varyk_std::Bytes) -> Result<Vec<Option<varyk_std::Time>>, varyk_std::Error> { todo!() }",
+    );
+    assert_eq!(
+        f.params,
+        vec![
+            RustTy::Time,
+            RustTy::Uuid,
+            RustTy::Ref(Box::new(RustTy::Bytes)),
+            RustTy::Bytes,
+        ]
+    );
+    assert_eq!(
+        f.ret,
+        RustTy::Result(
+            Box::new(RustTy::Vec(Box::new(RustTy::Option(Box::new(
+                RustTy::Time
+            ))))),
+            Box::new(RustTy::Error)
+        )
+    );
+    assert_eq!(RustTy::Time.text(), "varyk_std::Time");
+    assert_eq!(RustTy::Uuid.text(), "varyk_std::Uuid");
+    assert_eq!(RustTy::Bytes.text(), "varyk_std::Bytes");
+}
+
+/// `varyk-http`'s WebSocket message is the case that needs a variant
+/// holding `Bytes` (milestone 5c spec 2.5).
+#[test]
+fn an_enum_holding_bytes_by_its_full_path_is_not_opaque() {
+    let e = one_enum("pub enum Message { Text(String), Binary(varyk_std::Bytes) }");
+    assert_eq!(e.opaque, None);
+    assert_eq!(variant(&e, "Text").payload, vec![RustTy::String]);
+    assert_eq!(variant(&e, "Binary").payload, vec![RustTy::Bytes]);
+    let e = one_enum("pub enum Stamp { At(::varyk_std::Time), Id(varyk_std::Uuid) }");
+    assert_eq!(e.opaque, None);
+}
+
+#[test]
+fn an_enum_holding_bytes_through_a_use_is_opaque_and_names_the_full_path() {
+    let crates = ["varyk-std".to_string()];
+    let mut module = import_rust_module_in(
+        "use varyk_std::Bytes;\npub enum Message { Text(String), Binary(Bytes) }",
+        Some(&crates),
+    )
+    .expect("should parse");
+    let e = module.enums.remove(0);
+    let reason = e.opaque.as_deref().expect("should be opaque");
+    assert!(reason.contains("`Binary`"), "{reason}");
+    assert!(reason.contains("write the full path"), "{reason}");
+    assert!(reason.contains("`varyk_std::Bytes`"), "{reason}");
+}
+
 // --- A type parameter chosen from the result (milestone 5b3 spec 2.1) ----
 
 #[test]

@@ -221,8 +221,9 @@ fn blocking(solved: &Solved, ty: &Ty) -> Option<Named> {
         Ty::Enum(id) => (!solved.enums[id.0 as usize].0).then_some(Named::Enum(id.0 as usize)),
         Ty::Option(inner) | Ty::Vec(inner) => blocking(solved, inner),
         Ty::Result(a, b) | Ty::HashMap(a, b) => blocking(solved, a).or_else(|| blocking(solved, b)),
-        // Numbers, `bool`, and `string` have both; a chain and `()` are
-        // never a field and are not judged here.
+        // Numbers, `bool`, `string`, `Error`, `Time`, `Uuid`, and `Bytes`
+        // have both; a chain and `()` are never a field and are not judged
+        // here.
         _ => None,
     }
 }
@@ -331,6 +332,9 @@ pub fn ty_name(structs: &[StructDef], enums: &[EnumDef], ty: &Ty) -> String {
         Ty::Task(t) => format!("Task<{}>", name(t)),
         Ty::Shared(t) => format!("Shared<{}>", name(t)),
         Ty::Error => "Error".to_string(),
+        Ty::Time => "Time".to_string(),
+        Ty::Uuid => "Uuid".to_string(),
+        Ty::Bytes => "Bytes".to_string(),
         Ty::Unit => "()".to_string(),
     }
 }
@@ -519,8 +523,9 @@ impl NotConvertible {
                 )
             }
             Part::Other(_) => match medium {
-                Medium::Json => "JSON holds numbers, `bool`, `string`, `Option`, `Vec`, \
-                     `HashMap<string, _>`, structs, and enums whose variants carry no data"
+                Medium::Json => "JSON holds numbers, `bool`, `string`, `Time`, `Uuid`, \
+                     `Bytes`, `Option`, `Vec`, `HashMap<string, _>`, structs, and enums whose \
+                     variants carry no data"
                     .to_string(),
                 Medium::Env => ENV_FIELDS.to_string(),
             },
@@ -544,12 +549,14 @@ impl NotConvertible {
 
 /// What the fields of a struct read from the environment can be.
 const ENV_FIELDS: &str = "the fields of a struct read from the environment can be numbers, \
-     `bool`, `string`, enums whose variants carry no data, or an `Option` of one of these";
+     `bool`, `string`, `Time`, `Uuid`, enums whose variants carry no data, or an `Option` of one \
+     of these";
 
 /// Whether a value of type `ty` can be read by `env::parse` (M5a spec
 /// 2.5): a Varyk struct whose fields, except skipped ones, are numbers,
-/// `bool`, `string`, unit-only enums, or `Option`s of those. Otherwise the
-/// first part in the way.
+/// `bool`, `string`, `Time`, `Uuid`, unit-only enums, or `Option`s of
+/// those; not `Bytes` (milestone 5c spec 2.4). Otherwise the first part in
+/// the way.
 pub fn env_readable(
     structs: &[StructDef],
     enums: &[EnumDef],
@@ -579,7 +586,7 @@ pub fn env_readable(
             other => other,
         };
         let part = match value {
-            Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String => continue,
+            Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Time | Ty::Uuid => continue,
             Ty::Enum(_) => match convertible(structs, enums, value) {
                 Ok(()) => continue,
                 Err(blocked) => blocked.part,
@@ -622,7 +629,8 @@ fn snake(name: &str) -> String {
 }
 
 /// Whether a value of type `ty` can go through `json` (M5a spec 2.9): a
-/// number, `bool`, or `string`; an `Option` or `Vec` of a convertible
+/// number, `bool`, `string`, `Time`, `Uuid`, or `Bytes` (milestone 5c
+/// spec 2.4); an `Option` or `Vec` of a convertible
 /// type; a `HashMap<string, _>` of one; a Varyk struct whose fields,
 /// except skipped ones, are convertible; or a Varyk enum whose variants
 /// carry no data. Otherwise the first part in the way.
@@ -652,7 +660,9 @@ fn walk(
     path: &mut Vec<(String, Span)>,
 ) -> Result<(), Part> {
     match ty {
-        Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String => Ok(()),
+        Ty::Bool | Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Time | Ty::Uuid | Ty::Bytes => {
+            Ok(())
+        }
         Ty::Option(inner) | Ty::Vec(inner) => walk(structs, enums, inner, entered, path),
         Ty::HashMap(key, value) => {
             if **key != Ty::String {
@@ -1235,6 +1245,92 @@ mod tests {
         );
         let tree = struct_ty(&resolved, "Tree");
         assert!(convertible_ty(&resolved, &tree).is_err());
+    }
+
+    /// `Time`, `Uuid`, and `Bytes` go through JSON alone and inside an
+    /// `Option`, a `Vec`, a struct, and a `HashMap<string, _>` (milestone
+    /// 5c spec 2.4).
+    #[test]
+    fn time_uuid_and_bytes_are_convertible() {
+        let resolved = resolved_str(
+            "struct Record {\n    at: Time,\n    id: Uuid,\n    data: Bytes,\n    \
+             seen: Option<Time>,\n    ids: Vec<Uuid>,\n    by_name: HashMap<string, Uuid>,\n}\n\
+             fn main() {}\n",
+        );
+        for ty in [Ty::Time, Ty::Uuid, Ty::Bytes] {
+            assert_eq!(convertible_ty(&resolved, &ty), Ok(()), "{ty:?}");
+            let option = Ty::Option(Box::new(ty.clone()));
+            assert_eq!(convertible_ty(&resolved, &option), Ok(()), "{ty:?}");
+            let vec = Ty::Vec(Box::new(ty.clone()));
+            assert_eq!(convertible_ty(&resolved, &vec), Ok(()), "{ty:?}");
+            let map = Ty::HashMap(Box::new(Ty::String), Box::new(ty.clone()));
+            assert_eq!(convertible_ty(&resolved, &map), Ok(()), "{ty:?}");
+        }
+        let record = struct_ty(&resolved, "Record");
+        assert_eq!(convertible_ty(&resolved, &record), Ok(()));
+        let notes = NotConvertible {
+            part: Part::Other("()".to_string()),
+            path: Vec::new(),
+            at: None,
+        }
+        .notes(Medium::Json);
+        assert!(notes[0].contains("`Time`, `Uuid`, `Bytes`"), "{notes:#?}");
+    }
+
+    /// Review Focus 3: a `HashMap<Uuid, i64>` is a valid map, but JSON
+    /// still needs `string` keys.
+    #[test]
+    fn a_uuid_keyed_map_in_a_json_struct_is_refused_with_the_map_key_note() {
+        let resolved =
+            resolved_str("struct Scores {\n    by_id: HashMap<Uuid, i64>,\n}\nfn main() {}\n");
+        let scores = struct_ty(&resolved, "Scores");
+        let Err(blocked) = convertible_ty(&resolved, &scores) else {
+            panic!("expected a blocker");
+        };
+        assert_eq!(blocked.part, Part::MapKey("HashMap<Uuid, i64>".to_string()));
+        assert_eq!(blocked.path, ["`Scores`'s field `by_id`"]);
+        assert_eq!(
+            blocked.notes(Medium::Json),
+            [
+                "the keys of a JSON object are text, so only a `HashMap<string, _>` can go \
+              through JSON"
+            ]
+        );
+    }
+
+    fn env_ty(resolved: &Resolved, ty: &Ty) -> Result<(), NotConvertible> {
+        let symbols = &resolved.symbols;
+        env_readable(&symbols.structs, &symbols.enums, ty)
+    }
+
+    /// `env::parse` reads `Time` and `Uuid` and their `Option`s; `Bytes`
+    /// is refused as a type the environment cannot hold, the note listing
+    /// `Time` and `Uuid` (milestone 5c spec 2.4).
+    #[test]
+    fn env_reads_time_and_uuid_but_not_bytes() {
+        let resolved = resolved_str(
+            "struct Config {\n    start: Time,\n    id: Uuid,\n    stop: Option<Time>,\n    \
+             owner: Option<Uuid>,\n}\nstruct Keys {\n    port: u16,\n    key: Bytes,\n}\n\
+             fn main() {}\n",
+        );
+        assert_eq!(env_ty(&resolved, &struct_ty(&resolved, "Config")), Ok(()));
+        let Err(blocked) = env_ty(&resolved, &struct_ty(&resolved, "Keys")) else {
+            panic!("expected a blocker");
+        };
+        assert_eq!(blocked.part, Part::Other("Bytes".to_string()));
+        assert_eq!(blocked.path, ["`Keys`'s field `key`"]);
+        assert_eq!(
+            blocked.label(Medium::Env),
+            "`Bytes` is not a type that the environment can hold"
+        );
+        assert_eq!(
+            blocked.notes(Medium::Env),
+            [
+                "the fields of a struct read from the environment can be numbers, `bool`, \
+              `string`, `Time`, `Uuid`, enums whose variants carry no data, or an `Option` of \
+              one of these"
+            ]
+        );
     }
 
     /// The reachability-dependent V0209 checks of `text` after the calls

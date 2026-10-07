@@ -17,4 +17,6 @@ fn main() {
     ext::run("q", Some(user.name.len()));
     ext::run("q", None);
     ext::run();
+    let blobs = vec![Bytes::from_text("a")];
+    ext::run("q", blobs);
 }

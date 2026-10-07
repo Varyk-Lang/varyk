@@ -1,0 +1,56 @@
+mod ext;
+
+// `Bytes` is owned, moved, and borrowed as `string` is (milestone 5c spec
+// 2.3, 4): a parameter is lent, a field owns, `let` moves, a returned
+// parameter or part of one is borrowed, and `.clone()` copies the handle.
+
+struct Upload {
+    data: Bytes,
+}
+
+fn size(data: Bytes) -> usize {
+    data.len()
+}
+
+fn body(data: Bytes) -> Bytes {
+    data
+}
+
+fn content(upload: Upload) -> Bytes {
+    upload.data
+}
+
+fn copy(data: Bytes) -> Bytes {
+    data.clone()
+}
+
+// What `body` returns is part of its argument, so the field takes a copy.
+fn make_upload(data: Bytes) -> Upload {
+    Upload { data: body(data).clone() }
+}
+
+// A `match` on a borrowed enum binds part of it, so `keep`, which keeps
+// what it is given, takes a copy.
+fn forward(message: ext::Message) -> usize {
+    match message {
+        ext::Message::Binary(data) => ext::keep(data.clone()).len(),
+        ext::Message::Text(text) => text.len(),
+    }
+}
+
+fn main() {
+    let data = Bytes::from_text("hello");
+    println!("{}", size(data));
+    let moved = data;
+    let upload = Upload { data: moved };
+    let inner = content(upload);
+    println!("{}", ext::size(inner));
+    let same = body(inner);
+    let copied = copy(same);
+    let kept = ext::keep(copied);
+    println!("{}", kept.to_base64());
+    let again = make_upload(kept);
+    println!("{}", size(again.data));
+    println!("{}", forward(ext::Message::Binary(Bytes::from_text("abc"))));
+    println!("{}", forward(ext::Message::Text("hi")));
+}

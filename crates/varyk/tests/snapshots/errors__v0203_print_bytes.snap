@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: stderr
+---
+error[V0203]: a `Bytes` cannot be printed with `{}`
+ --> crates/varyk/tests/fixtures/errors/v0203_print_bytes/main.vr:3:20
+  |
+3 |     println!("{}", data);
+  |                    ^^^^ a `Bytes` cannot be printed with `{}`
+  |
+  = note: bytes have no one printed form; print the text they hold with `to_text`, or their base64 with `to_base64`

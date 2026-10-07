@@ -4,7 +4,8 @@ mod private {
     pub trait Sealed {}
 }
 
-/// A type `parse` can read from text: every Varyk number type and `bool`.
+/// A type `parse` can read from text: every Varyk number type, `bool`,
+/// `Time`, and `Uuid`.
 pub trait Parse: private::Sealed + Sized {
     fn parse_str(text: &str) -> Result<Self, Error>;
 }
@@ -80,6 +81,20 @@ fn int_error(text: &str) -> Error {
         Error::new(format!("`{text}` is out of range for this number type"))
     } else {
         Error::new(format!("`{text}` is not a number"))
+    }
+}
+
+impl private::Sealed for crate::Time {}
+impl Parse for crate::Time {
+    fn parse_str(text: &str) -> Result<crate::Time, Error> {
+        crate::Time::from_iso(text)
+    }
+}
+
+impl private::Sealed for crate::Uuid {}
+impl Parse for crate::Uuid {
+    fn parse_str(text: &str) -> Result<crate::Uuid, Error> {
+        text.parse()
     }
 }
 

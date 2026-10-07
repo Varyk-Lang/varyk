@@ -5,6 +5,7 @@
 use varyk_syntax::{FixIt, SourceFile, Span};
 
 use super::chains::ItemKind;
+use super::slots::clones;
 use super::{FnAnalyzer, place_root, roots};
 use crate::diagnostics::Diagnostic;
 use crate::hir::{
@@ -419,7 +420,8 @@ impl FnAnalyzer<'_> {
 
     /// For `id`, a name a `match` on a temporary of an enum with a
     /// destructor bound (an alias gone once the `match` ends): why it
-    /// cannot be kept, and, for a `string`, to copy it with `.clone()`.
+    /// cannot be kept, and, for a `string` or `Bytes`, to copy it with
+    /// `.clone()`.
     pub(super) fn dropped_advice(&self, id: LocalId) -> Option<String> {
         let bound = self.patterns[id.0 as usize]?;
         if bound.dropped.is_none() || !self.local(id).place.borrowed {
@@ -433,8 +435,8 @@ impl FnAnalyzer<'_> {
         let bound = self.patterns[id.0 as usize]?;
         let info = self.local(id);
         let name = &info.name;
-        // Only a `string` has a `clone`.
-        let keep = if info.ty == Ty::String {
+        // The values a V0304's fix-it copies with `.clone()`.
+        let keep = if clones(&info.ty) {
             "copy it with `.clone()` to keep it".to_string()
         } else {
             format!("`{name}` can be read here, but not kept")

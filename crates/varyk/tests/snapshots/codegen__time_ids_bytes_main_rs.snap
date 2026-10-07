@@ -1,0 +1,77 @@
+---
+source: crates/varyk/tests/codegen.rs
+expression: main
+---
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+#[derive(Clone, PartialEq)]
+struct Record {
+    at: ::varyk_std::Time,
+    id: ::varyk_std::Uuid,
+    data: ::varyk_std::Bytes,
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn show(result: &Result<::varyk_std::Time, ::varyk_std::Error>) {
+    match result {
+        Ok(t) => {
+            let t = *t;
+            ::std::println!("{}", t.to_iso())
+        }
+        Err(e) => ::std::println!("{}", e),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn later(t: ::varyk_std::Time, seconds: i64) -> Result<::varyk_std::Time, ::varyk_std::Error> {
+    let moved = t.add_seconds(seconds)?;
+    Ok(moved)
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn text_of(data: &::varyk_std::Bytes) -> String {
+    match data.to_text() {
+        Ok(text) => text,
+        Err(e) => ::std::format!("{}", e),
+    }
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn size(data: &::varyk_std::Bytes) -> usize {
+    data.len()
+}
+
+#[allow(warnings, arithmetic_overflow, unconditional_panic)]
+fn main() {
+    show(&::varyk_std::Time::from_iso("2026-10-07T12:00:00.5+02:00"));
+    show(&::varyk_std::Time::from_iso("2026-10-07 12:00"));
+    show(&::varyk_std::Time::from_unix(0i64));
+    show(&::varyk_std::Time::from_unix_micros(1500000i64));
+    show(&::varyk_std::Time::from_unix(253402300800i64));
+    let start = ::varyk_std::Time::now();
+    ::std::println!("{}", ::varyk_std::Time::now().seconds_since(start) >= 0i64);
+    let t = ::varyk_std::Time::from_unix(1000000000i64).unwrap_or(start);
+    ::std::println!("{} {} {}", t.to_iso(), t.to_unix(), t.to_unix_micros());
+    show(&t.add_seconds(-40i64));
+    show(&later(t, 20i64));
+    let ordered = ::varyk_std::Uuid::v7();
+    let random = ::varyk_std::Uuid::v4();
+    let record = Record { at: t, id: ::varyk_std::Uuid::new(), data: ::varyk_std::Bytes::from_text("héllo") };
+    let epoch = ::varyk_std::Time::from_unix(0i64).unwrap_or(start);
+    ::std::println!("{} {}", record.at.to_unix(), record.at.seconds_since(epoch));
+    ::std::println!("{} {} {}", record.data.len(), record.data.is_empty(), record.data.to_base64());
+    ::std::println!("{} {}", size(&record.data), text_of(&record.data));
+    let empty = ::varyk_std::Bytes::from_text("");
+    ::std::println!("{} {}", empty.is_empty(), empty.len());
+    match ::varyk_std::Bytes::from_base64("aGk=") {
+        Ok(b) => ::std::println!("{}", text_of(&b)),
+        Err(e) => ::std::println!("{}", e),
+    }
+    match ::varyk_std::Bytes::from_base64("aGk") {
+        Ok(b) => ::std::println!("{}", text_of(&b)),
+        Err(e) => ::std::println!("{}", e),
+    }
+    match ::varyk_std::Bytes::from_base64("/w==") {
+        Ok(b) => ::std::println!("{}", text_of(&b)),
+        Err(e) => ::std::println!("{}", e),
+    }
+}

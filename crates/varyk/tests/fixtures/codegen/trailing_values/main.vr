@@ -5,6 +5,21 @@ struct User {
     age: i64,
 }
 
+struct Doc {
+    data: Bytes,
+}
+
+// A borrowed return: the `Bytes` inside `doc`.
+fn data(doc: Doc) -> Bytes {
+    doc.data
+}
+
+// A `Bytes` parameter is already a reference, and an `Option<Bytes>` one
+// is looked through with `as_ref`.
+fn pass(b: Bytes, maybe: Option<Bytes>) -> usize {
+    ext::run("insert into files (data, extra) values (?, ?)", b, maybe)
+}
+
 fn main() {
     let id: i64 = 7;
     let name = format!("user {}", id);
@@ -20,4 +35,17 @@ fn main() {
         Some(nick) => println!("{}", nick),
         None => println!("none"),
     }
+    let at = Time::now();
+    let key = Uuid::new();
+    let seen: Option<Time> = Some(at);
+    let b = Bytes::from_text("abc");
+    let extra: Option<Bytes> = Some(Bytes::from_text("d"));
+    let doc = Doc { data: Bytes::from_text("e") };
+    let five = ext::run("insert into events (at, key, seen, data, extra) values (?, ?, ?, ?, ?)", at, key, seen, b, extra);
+    let lent = pass(b, extra) + ext::run("insert into docs (data) values (?)", data(doc));
+    // `b` and `extra` were lent, not given away.
+    println!("{} {} {} {}", five, lent, b.len(), extra.is_some());
+    let flag = true;
+    let chosen = ext::run("insert into files (data) values (?)", if flag { Some(b) } else { None });
+    println!("{}", chosen);
 }

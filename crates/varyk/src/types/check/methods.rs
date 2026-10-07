@@ -19,7 +19,8 @@ impl FnChecker<'_> {
     /// `receiver.method(args)` (spec 2.5, 2.6): a method of the receiver's
     /// type from its `impl` blocks, or a row of the built-in table for a
     /// `Vec`, a `string`, an `Option`, a `Result`, a `HashMap` (M4 spec
-    /// 2.7), or an `Error` (M5a spec 2.3), whose element rule the receiver must meet (V0200) and whose
+    /// 2.7), an `Error` (M5a spec 2.3), a `Time`, or a `Bytes` (milestone 5c
+    /// spec 2.1, 2.3), whose element rule the receiver must meet (V0200) and whose
     /// `parse` takes its type from `expected`. A method the type does not
     /// have is V0100 naming the type (and, for a built-in type, listing
     /// its methods); a non-`pub` method of another module's type is V0105.
@@ -194,7 +195,10 @@ impl FnChecker<'_> {
                 }
             }
             other => {
-                let Some((owner, subst)) = Owner::of(other) else {
+                // `Uuid` has calls, but no methods (milestone 5c spec 2.2).
+                let rows =
+                    Owner::of(other).filter(|(owner, _)| !builtins::names(*owner, true).is_empty());
+                let Some((owner, subst)) = rows else {
                     self.diagnostics.push(Diagnostic::new(
                         codes::V0100,
                         method.span,
@@ -319,9 +323,10 @@ impl FnChecker<'_> {
 
     /// Whether `.clone()` on a value of type `ty` is the derived copy of
     /// M4 spec 2.10 rather than a method of the type: on a number, `bool`,
-    /// `Option`, `Result`, `Vec`, `HashMap`, or `Error`, and on a struct or enum
-    /// with no member of that name. `string` has its own row, and a chain
-    /// no `clone`.
+    /// `Option`, `Result`, `Vec`, `HashMap`, `Error`, `Time`, `Uuid`, or
+    /// `Bytes` (milestone 5c spec 2.4), and on a struct or enum with no
+    /// member of that name. `string` has its own row, and a chain no
+    /// `clone`.
     fn derived_clone(&self, ty: &Ty) -> bool {
         let owner = match ty {
             Ty::Struct(id) => UserType::Struct(*id),
@@ -333,7 +338,10 @@ impl FnChecker<'_> {
             | Ty::Result(..)
             | Ty::Vec(_)
             | Ty::HashMap(..)
-            | Ty::Error => return true,
+            | Ty::Error
+            | Ty::Time
+            | Ty::Uuid
+            | Ty::Bytes => return true,
             _ => return false,
         };
         matches!(
@@ -344,9 +352,9 @@ impl FnChecker<'_> {
 
     /// `receiver.clone()` on a type that is not `string` (M4 spec 2.10): a
     /// new value of the receiver's type, lowered as the `clone` row, which
-    /// reads its receiver. On a number or `bool` it is V0100, since those
-    /// are copied on use; on a type that cannot be cloned V0203, naming
-    /// what prevents it.
+    /// reads its receiver. On a Copy type (a number, `bool`, `Time`, or
+    /// `Uuid`) it is V0100, since those are copied on use; on a type that
+    /// cannot be cloned V0203, naming what prevents it.
     fn clone_call(
         &mut self,
         receiver: HirExpr,
@@ -357,8 +365,8 @@ impl FnChecker<'_> {
         let ty = receiver.ty.clone();
         if ty.is_copy() {
             let message = format!(
-                "`{}` needs no `.clone()`: numbers and `bool` are copied on use; drop \
-                 `.clone()`",
+                "`{}` needs no `.clone()`: numbers, `bool`, `Time`, and `Uuid` are copied on \
+                 use; drop `.clone()`",
                 self.ty_name(&ty)
             );
             self.diagnostics
@@ -455,9 +463,10 @@ impl FnChecker<'_> {
 
     /// The type `parse()` (at `span`) reads, taken from `expected` as
     /// `None`'s is (M4 spec 2.7, M5a spec 2.8): the `X` of an expected
-    /// `Result<X, _>`, a number type or `bool` (V0200 otherwise). The
-    /// result is always `Result<X, Error>`, so another error type is a
-    /// mismatch, or V0206 under `?`. V0206 when it is the operand of `?` in
+    /// `Result<X, _>`, a number type, `bool`, `Time`, or `Uuid` (milestone
+    /// 5c spec 2.4; V0200 otherwise). The result is always
+    /// `Result<X, Error>`, so another error type is a mismatch, or V0206
+    /// under `?`. V0206 when it is the operand of `?` in
     /// a function returning `Option`, and V0207 with nothing expected, each
     /// showing the two statements that make an `Option` of it.
     fn parsed_type(&mut self, expected: Option<&Ty>, span: Span) -> Option<Ty> {
@@ -466,13 +475,17 @@ impl FnChecker<'_> {
         let shape = "let parsed: Result<i32, Error> = text.parse();` then `parsed.ok()";
         match expected {
             Some(Ty::Result(inner, _))
-                if matches!(**inner, Ty::Int(_) | Ty::Float(_) | Ty::Bool) =>
+                if matches!(
+                    **inner,
+                    Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Time | Ty::Uuid
+                ) =>
             {
                 Some((**inner).clone())
             }
             Some(Ty::Result(inner, _)) => {
                 let message = format!(
-                    "`parse` reads a number or `bool` from text, and cannot make a `{}`",
+                    "`parse` reads a number, `bool`, `Time`, or `Uuid` from text, and cannot \
+                     make a `{}`",
                     self.ty_name(inner)
                 );
                 self.diagnostics

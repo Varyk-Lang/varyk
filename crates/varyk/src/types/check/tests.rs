@@ -1114,6 +1114,46 @@ fn trailing_values_of_each_admitted_type_check() {
     );
 }
 
+/// Milestone 5c spec 2.4: a `Time`, a `Uuid`, and a `Bytes`, and an
+/// `Option` of each, are trailing values; a `Bytes` is lent, so the local
+/// and the parameters passed stay usable.
+#[test]
+fn time_uuid_and_bytes_are_trailing_values() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/interop/trailing_std_types/main.vr");
+    let program = result.unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+    let opt = |ty: Ty| Ty::Option(Box::new(ty));
+    let main = function(&program, "main");
+    assert_eq!(
+        split_tys(stmt_expr(main, 6)),
+        (
+            vec![Ty::String],
+            vec![
+                Ty::Time,
+                Ty::Uuid,
+                Ty::Bytes,
+                opt(Ty::Time),
+                opt(Ty::Uuid),
+                opt(Ty::Bytes)
+            ]
+        )
+    );
+    // `Some(x)` is passed as `x`.
+    assert_eq!(
+        split_tys(stmt_expr(main, 7)),
+        (vec![Ty::String], vec![Ty::Time, Ty::Uuid, Ty::Bytes])
+    );
+    let pass = function(&program, "pass");
+    let tail = pass.body.tail.as_deref().expect("a tail");
+    assert_eq!(
+        split_tys(tail),
+        (vec![Ty::String], vec![Ty::Bytes, opt(Ty::Bytes)])
+    );
+    if let Err(diagnostics) = crate::borrow::analyze(program, &sources) {
+        panic!("{diagnostics:#?}");
+    }
+}
+
 /// A struct, a `Vec`, a `HashMap`, and a `u64` are V0218 listing the
 /// admitted types; a bare `None` is V0207; too few fixed arguments is
 /// V0201 saying "at least".
@@ -1144,18 +1184,24 @@ fn trailing_values_of_other_types_are_refused() {
             ),
             (codes::V0207, part_of(&sources, "\"q\", None)", "None")),
             (codes::V0201, span_of(&sources, "ext::run()")),
+            (codes::V0218, part_of(&sources, "\"q\", blobs)", "blobs")),
         ],
         "{diagnostics:#?}"
     );
-    for diagnostic in &diagnostics[..6] {
+    for diagnostic in diagnostics[..6].iter().chain(&diagnostics[8..]) {
         assert!(
             diagnostic.notes.iter().any(|n| n.contains(
                 "`bool`, `string`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, \
-                 or an `Option` of one of those"
+                 `Time`, `Uuid`, `Bytes`, or an `Option` of one of those"
             )),
             "{diagnostic:#?}"
         );
     }
+    assert!(
+        diagnostics[8].message.contains("`Vec<Bytes>`"),
+        "{:#?}",
+        diagnostics[8]
+    );
     assert!(
         diagnostics[3].notes.iter().any(|n| n.contains("as i64")),
         "{:#?}",
@@ -1343,6 +1389,33 @@ fn a_serialize_parameter_takes_any_type_json_writes() {
     );
     if let Err(diagnostics) = crate::borrow::analyze(program, &sources) {
         panic!("each local stays usable after the call: {diagnostics:#?}");
+    }
+}
+
+/// Milestone 5c spec 2.5: a type parameter bounded by `DeserializeOwned`
+/// or `Serialize` reaches a struct holding `Time`, `Uuid`, and `Bytes`
+/// with no change, since they pass the JSON check.
+#[test]
+fn a_serde_type_parameter_reaches_time_uuid_and_bytes() {
+    let (result, sources) =
+        check_path("crates/varyk/tests/fixtures/interop/serde_std_types/main.vr");
+    let program = result.unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+    assert!(program.uses_std);
+    let record = Ty::Struct(crate::resolve::StructId(0));
+    let main = function(&program, "main");
+    assert_eq!(
+        local_ty(main, "read"),
+        Ty::Result(Box::new(record), Box::new(Ty::Error))
+    );
+    assert_eq!(
+        program.structs[0].serde,
+        Serde {
+            serialize: true,
+            deserialize: true
+        }
+    );
+    if let Err(diagnostics) = crate::borrow::analyze(program, &sources) {
+        panic!("{diagnostics:#?}");
     }
 }
 
@@ -3589,7 +3662,11 @@ fn element_rules_are_v0200_naming_the_row() {
         (
             "let mut v: Vec<f64> = vec![1.5];\n    v.sort();",
             "sort",
-            &["`sort`", "Vec<f64>", "an integer type, `bool`, or `string`"][..],
+            &[
+                "`sort`",
+                "Vec<f64>",
+                "an integer type, `bool`, `string`, or `Time`",
+            ][..],
         ),
         (
             "let mut v = vec![P { n: 1 }];\n    v.sort();",
@@ -3599,7 +3676,11 @@ fn element_rules_are_v0200_naming_the_row() {
         (
             "let v = vec![P { n: 1 }];\n    let b = v.contains(P { n: 1 });",
             "contains",
-            &["`contains`", "Vec<P>", "a number type, `bool`, or `string`"][..],
+            &[
+                "`contains`",
+                "Vec<P>",
+                "a number type, `bool`, `string`, `Time`, `Uuid`, or `Bytes`",
+            ][..],
         ),
         (
             "let v = vec![1, 2];\n    let s = v.join(\",\");",
@@ -3646,7 +3727,10 @@ fn parse_into_a_string_is_v0200_and_with_nothing_expected_v0207() {
     assert_eq!(d.code, codes::V0200, "{d:#?}");
     assert_eq!(d.span, span_of(&sources, "s.parse()"));
     assert!(d.message.contains("`string`"), "{d:#?}");
-    assert!(d.message.contains("a number or `bool`"), "{d:#?}");
+    assert!(
+        d.message.contains("a number, `bool`, `Time`, or `Uuid`"),
+        "{d:#?}"
+    );
 
     let (d, sources) = one_error("fn main() {\n    let s = \"a\";\n    let n = s.parse();\n}\n");
     assert_eq!(d.code, codes::V0207, "{d:#?}");
@@ -4196,6 +4280,383 @@ fn a_call_error_does_not_have_is_v0100_listing_its_calls() {
     );
 }
 
+// --- `Time`, `Uuid`, and `Bytes` (milestone 5c spec 2.1 to 2.3) -------------
+
+/// A program calling every method of `Time` on `t` and of `Bytes` on `b`,
+/// which a local, a field, or a parameter stands in for, and every
+/// associated function of the three.
+fn time_calls(t: &str, b: &str) -> String {
+    format!(
+        "struct Stamp {{\n    at: Time,\n    data: Bytes,\n}}\n\
+         fn calls(p: Time, d: Bytes, s: Stamp) {{\n    \
+         let now = Time::now();\n    \
+         let bytes = Bytes::from_text(\"hi\");\n    \
+         let iso = {t}.to_iso();\n    \
+         let unix = {t}.to_unix();\n    \
+         let micros = {t}.to_unix_micros();\n    \
+         let added = {t}.add_seconds(-5);\n    \
+         let since = {t}.seconds_since(now);\n    \
+         let text = {b}.to_text();\n    \
+         let base = {b}.to_base64();\n    \
+         let size = {b}.len();\n    \
+         let empty = {b}.is_empty();\n    \
+         let read = Time::from_iso(\"2026-10-07T12:00:00Z\");\n    \
+         let seconds = Time::from_unix(0);\n    \
+         let exact = Time::from_unix_micros(0);\n    \
+         let id = Uuid::new();\n    \
+         let ordered = Uuid::v7();\n    \
+         let random = Uuid::v4();\n    \
+         let decoded = Bytes::from_base64(\"aGk=\");\n}}\n\
+         fn main() {{}}\n"
+    )
+}
+
+#[test]
+fn every_time_uuid_and_bytes_call_types_as_its_table_says() {
+    for (t, b) in [("now", "bytes"), ("s.at", "s.data"), ("p", "d")] {
+        let program = ok(&time_calls(t, b));
+        let calls = function(&program, "calls");
+        let expected = [
+            ("now", Ty::Time),
+            ("bytes", Ty::Bytes),
+            ("iso", Ty::String),
+            ("unix", I64),
+            ("micros", I64),
+            ("added", result_of(Ty::Time)),
+            ("since", I64),
+            ("text", result_of(Ty::String)),
+            ("base", Ty::String),
+            ("size", Ty::Int(IntKind::Usize)),
+            ("empty", Ty::Bool),
+            ("read", result_of(Ty::Time)),
+            ("seconds", result_of(Ty::Time)),
+            ("exact", result_of(Ty::Time)),
+            ("id", Ty::Uuid),
+            ("ordered", Ty::Uuid),
+            ("random", Ty::Uuid),
+            ("decoded", result_of(Ty::Bytes)),
+        ];
+        for (name, ty) in expected {
+            assert_eq!(local_ty(calls, name), ty, "{name} with {t} and {b}");
+        }
+        assert!(program.uses_std, "{t}");
+    }
+}
+
+#[test]
+fn naming_time_uuid_or_bytes_alone_uses_varyk_std() {
+    for name in ["Time", "Uuid", "Bytes"] {
+        let program = ok(&format!(
+            "struct S {{\n    x: {name},\n}}\nfn main() {{}}\n"
+        ));
+        assert!(program.uses_std, "{name}");
+    }
+}
+
+#[test]
+fn a_call_time_uuid_or_bytes_lacks_is_v0100_listing_its_calls() {
+    let cases = [
+        (
+            "let t = Time::now();\n    let x = t.later();",
+            "type `Time` has no method `later`; the methods of a `Time` are `to_iso`, \
+             `to_unix`, `to_unix_micros`, `add_seconds`, and `seconds_since`",
+        ),
+        (
+            "let x = Time::today();",
+            "`Time` has no function `today`; its functions are `Time::now()`, \
+             `Time::from_iso(..)`, `Time::from_unix(..)`, and `Time::from_unix_micros(..)`",
+        ),
+        (
+            "let x = Uuid::v5();",
+            "`Uuid` has no function `v5`; its functions are `Uuid::new()`, `Uuid::v7()`, \
+             and `Uuid::v4()`",
+        ),
+        (
+            "let u = Uuid::new();\n    let x = u.version();",
+            "type `Uuid` has no methods",
+        ),
+        (
+            "let x = Bytes::from_hex(\"00\");",
+            "`Bytes` has no function `from_hex`; its functions are `Bytes::from_text(..)` and \
+             `Bytes::from_base64(..)`",
+        ),
+        (
+            "let b = Bytes::from_text(\"x\");\n    let x = b.slice();",
+            "type `Bytes` has no method `slice`; the methods of a `Bytes` are `to_text`, \
+             `to_base64`, `len`, and `is_empty`",
+        ),
+        // A method is not a function of the type.
+        (
+            "let x = Time::to_iso();",
+            "`Time` has no function `to_iso`; its functions are `Time::now()`, \
+             `Time::from_iso(..)`, `Time::from_unix(..)`, and `Time::from_unix_micros(..)`",
+        ),
+    ];
+    for (body, message) in cases {
+        let text = format!("fn main() {{\n    {body}\n}}\n");
+        let (d, _) = one_error(&text);
+        assert_eq!(d.code, codes::V0100, "{text}\n{d:#?}");
+        assert_eq!(d.message, message, "{text}");
+    }
+}
+
+#[test]
+fn a_wrong_argument_to_a_time_uuid_or_bytes_call_is_v0200_and_a_wrong_count_v0201() {
+    for body in [
+        "let x = Time::from_unix(\"0\");",
+        "let x = Time::from_unix_micros(1.5);",
+        "let x = Time::from_iso(1);",
+        "let t = Time::now();\n    let x = t.add_seconds(true);",
+        "let t = Time::now();\n    let x = t.seconds_since(1);",
+        "let n: i32 = 5;\n    let x = Time::now().add_seconds(n);",
+        "let x = Bytes::from_text(1);",
+        "let x = Bytes::from_base64(Bytes::from_text(\"x\"));",
+        // A `Time` where a `Uuid` is expected, and the other way.
+        "let u: Uuid = Time::now();",
+        "let t = Time::now();\n    let x = t.seconds_since(Uuid::new());",
+        "take(Time::now());",
+    ] {
+        let text = format!("fn take(id: Uuid) {{}}\nfn main() {{\n    {body}\n}}\n");
+        let (d, _) = one_error(&text);
+        assert_eq!(d.code, codes::V0200, "{text}\n{d:#?}");
+    }
+    for body in [
+        "let x = Time::now(1);",
+        "let x = Time::from_unix();",
+        "let x = Uuid::v4(1);",
+        "let x = Bytes::from_text();",
+        "let t = Time::now();\n    let x = t.to_iso(1);",
+        "let t = Time::now();\n    let x = t.add_seconds();",
+        "let b = Bytes::from_text(\"x\");\n    let x = b.len(1);",
+    ] {
+        let text = format!("fn main() {{\n    {body}\n}}\n");
+        let (d, _) = one_error(&text);
+        assert_eq!(d.code, codes::V0201, "{text}\n{d:#?}");
+    }
+}
+
+// --- Comparing, printing, parsing, and copying `Time`, `Uuid`, and `Bytes`
+// (milestone 5c spec 2.1 to 2.4) ---------------------------------------------
+
+/// `body` inside `main`, after a `Time` `t` and `u`, a `Uuid` `i` and `j`,
+/// and a `Bytes` `b` and `c`.
+fn with_values(body: &str) -> String {
+    format!(
+        "fn main() {{\n    let t = Time::now();\n    let u = Time::now();\n    \
+         let i = Uuid::new();\n    let j = Uuid::v4();\n    \
+         let b = Bytes::from_text(\"x\");\n    let c = Bytes::from_text(\"y\");\n    \
+         {body}\n}}\n"
+    )
+}
+
+#[test]
+fn times_are_ordered_and_every_one_of_the_three_compared() {
+    let program = ok(&with_values(
+        "let a = t < u;\n    let d = t <= u;\n    let e = t > u;\n    let f = t >= u;\n    \
+         let g = t == u;\n    let h = t != u;\n    let k = i == j;\n    let l = i != j;\n    \
+         let m = b == c;\n    let n = b != c;",
+    ));
+    let main = function(&program, "main");
+    for name in ["a", "d", "e", "f", "g", "h", "k", "l", "m", "n"] {
+        assert_eq!(local_ty(main, name), Ty::Bool, "{name}");
+    }
+}
+
+#[test]
+fn ordering_a_uuid_or_bytes_is_v0200_naming_numbers_and_time() {
+    for (expr, ty) in [
+        ("i < j", "Uuid"),
+        ("i >= j", "Uuid"),
+        ("b > c", "Bytes"),
+        ("b <= c", "Bytes"),
+    ] {
+        let text = with_values(&format!("let x = {expr};"));
+        let (d, _) = one_error(&text);
+        assert_eq!(d.code, codes::V0200, "{expr}: {d:#?}");
+        assert!(d.message.contains(&format!("`{ty}`")), "{expr}: {d:#?}");
+        assert!(
+            d.notes
+                .iter()
+                .any(|n| n.contains("numbers and `Time` only")),
+            "{expr}: {d:#?}"
+        );
+    }
+}
+
+/// Review Focus 2: admitting `Time` to the orderings leaves arithmetic
+/// on it refused.
+#[test]
+fn arithmetic_on_a_time_stays_v0200() {
+    for expr in ["t + u", "t - u", "t * u"] {
+        let text = with_values(&format!("let x = {expr};"));
+        let (d, _) = one_error(&text);
+        assert_eq!(d.code, codes::V0200, "{expr}: {d:#?}");
+        assert!(d.message.contains("`Time`"), "{expr}: {d:#?}");
+        assert!(
+            d.notes.iter().any(|n| n.contains("numeric types only")),
+            "{expr}: {d:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_time_and_a_uuid_print_with_braces_and_bytes_is_v0203() {
+    ok(&with_values(
+        "println!(\"{} {}\", t, i);\n    let s = format!(\"{}{}\", u, j);",
+    ));
+    let (d, sources) = one_error(&with_values("println!(\"{}\", b);"));
+    assert_eq!(d.code, codes::V0203, "{d:#?}");
+    assert_eq!(d.span, part_of(&sources, "\"{}\", b)", "b"));
+    assert!(d.message.contains("`Bytes`"), "{d:#?}");
+    assert!(
+        d.notes
+            .iter()
+            .any(|n| n.contains("`to_text`") && n.contains("`to_base64`")),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn the_v0203_note_of_other_types_lists_time_and_uuid() {
+    let (d, _) = one_error("fn main() {\n    let v = vec![1];\n    println!(\"{}\", v);\n}\n");
+    assert_eq!(d.code, codes::V0203, "{d:#?}");
+    assert!(
+        d.notes.iter().any(|n| n
+            == "only numbers, `bool`, `string`, `Error`, `Time`, and `Uuid` have a printed form"),
+        "{d:#?}"
+    );
+}
+
+#[test]
+fn assert_eq_shows_a_time_and_a_uuid_and_not_bytes() {
+    for (ty, value, show) in [
+        ("Time", "Time::now()", true),
+        ("Uuid", "Uuid::new()", true),
+        ("Bytes", "Bytes::from_text(\"x\")", false),
+    ] {
+        let text = format!(
+            "fn main() {{}}\n#[test]\nfn checks() {{\n    let a: {ty} = {value};\n    \
+             let b: {ty} = {value};\n    assert_eq(a, b);\n}}\n"
+        );
+        let program = ok(&text);
+        let checks = function(&program, "checks");
+        let HirExprKind::Assert {
+            kind: AssertKind::Eq { show: shown },
+            ..
+        } = stmt_expr(checks, 2).kind
+        else {
+            panic!("an assert_eq: {:?}", stmt_expr(checks, 2));
+        };
+        assert_eq!(shown, show, "{ty}");
+    }
+}
+
+#[test]
+fn parse_reads_a_time_and_a_uuid_and_not_bytes() {
+    let program = ok(
+        "fn f(text: string) -> Result<Uuid, Error> {\n    let id: Uuid = text.parse()?;\n    Ok(id)\n}\n\
+         fn main() {\n    let s = \"2026-10-07T12:00:00Z\";\n    let t: Result<Time, Error> = s.parse();\n}\n",
+    );
+    assert_eq!(
+        local_ty(function(&program, "main"), "t"),
+        result_of(Ty::Time)
+    );
+    assert_eq!(local_ty(function(&program, "f"), "id"), Ty::Uuid);
+    assert!(program.uses_std);
+
+    let (d, sources) = one_error(
+        "fn main() {\n    let s = \"a\";\n    let b: Result<Bytes, Error> = s.parse();\n}\n",
+    );
+    assert_eq!(d.code, codes::V0200, "{d:#?}");
+    assert_eq!(d.span, span_of(&sources, "s.parse()"));
+    assert_eq!(
+        d.message,
+        "`parse` reads a number, `bool`, `Time`, or `Uuid` from text, and cannot make a `Bytes`"
+    );
+}
+
+#[test]
+fn clone_of_a_time_or_uuid_is_v0100_and_of_bytes_a_copy() {
+    for (value, name) in [("Time::now()", "Time"), ("Uuid::new()", "Uuid")] {
+        let text = format!("fn main() {{\n    let x = {value};\n    let c = x.clone();\n}}\n");
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0100, "{name}: {d:#?}");
+        assert_eq!(d.span, part_of(&sources, "x.clone()", "clone"), "{name}");
+        assert_eq!(
+            d.message,
+            format!(
+                "`{name}` needs no `.clone()`: numbers, `bool`, `Time`, and `Uuid` are copied \
+                 on use; drop `.clone()`"
+            )
+        );
+    }
+    let program = ok("fn copy(b: Bytes) -> Bytes {\n    b.clone()\n}\n\
+         fn main() {\n    let b = Bytes::from_text(\"x\");\n    let c = b.clone();\n}\n");
+    assert_eq!(local_ty(function(&program, "main"), "c"), Ty::Bytes);
+}
+
+#[test]
+fn a_struct_holding_each_of_the_three_derives_eq_and_clone() {
+    let program = ok(
+        "struct Stamp {\n    at: Time,\n    id: Uuid,\n    data: Bytes,\n}\n\
+         enum Event {\n    At(Time),\n    Id(Uuid),\n    Data(Bytes),\n}\n\
+         fn main() {\n    let s = Stamp { at: Time::now(), id: Uuid::new(), data: Bytes::from_text(\"x\") };\n    \
+         let c = s.clone();\n    let same = s == c;\n    let e = Event::At(Time::now());\n    \
+         let f = e.clone();\n    let both = e == f;\n}\n",
+    );
+    let all = Derives {
+        clone: true,
+        eq: true,
+    };
+    assert_eq!(program.structs[0].derives, all);
+    assert_eq!(program.enums[0].derives, all);
+}
+
+#[test]
+fn sort_takes_times_and_contains_takes_each_of_the_three() {
+    ok(&with_values(
+        "let mut times = vec![t, u];\n    times.sort();\n    let a = times.contains(t);\n    \
+         let ids = vec![i, j];\n    let d = ids.contains(i);\n    \
+         let data = vec![Bytes::from_text(\"x\")];\n    let e = data.contains(b);",
+    ));
+    for (stmts, ty) in [
+        ("let mut ids = vec![i, j];\n    ids.sort();", "Vec<Uuid>"),
+        ("let mut data = vec![b, c];\n    data.sort();", "Vec<Bytes>"),
+    ] {
+        let (d, _) = one_error(&with_values(stmts));
+        assert_eq!(d.code, codes::V0200, "{ty}: {d:#?}");
+        assert_eq!(
+            d.message,
+            format!(
+                "`sort` needs a `Vec` of an integer type, `bool`, `string`, or `Time`, and this \
+                 is `{ty}`"
+            )
+        );
+    }
+}
+
+#[test]
+fn a_uuid_is_a_map_key_and_a_time_or_bytes_is_v0101() {
+    let program = ok(
+        "fn main() {\n    let mut m: HashMap<Uuid, string> = HashMap::new();\n    \
+         let id = Uuid::new();\n    let old = m.insert(id, \"a\");\n    let has = m.contains_key(id);\n}\n",
+    );
+    assert_eq!(
+        local_ty(function(&program, "main"), "m"),
+        map_of(Ty::Uuid, Ty::String)
+    );
+    for (key, at) in [("Time", "Time"), ("Bytes", "Bytes")] {
+        let text = format!("fn main() {{\n    let m: HashMap<{key}, i32> = HashMap::new();\n}}\n");
+        let (d, sources) = one_error(&text);
+        assert_eq!(d.code, codes::V0101, "{key}: {d:#?}");
+        assert_eq!(d.span, part_of(&sources, &format!("<{key},"), at), "{key}");
+        assert_eq!(
+            d.message,
+            "a `HashMap` key must be of an integer type, `bool`, `string`, or `Uuid`"
+        );
+    }
+}
+
 // --- JSON (M5a spec 2.4, 2.9) -----------------------------------------------
 
 const WRITE: Serde = Serde {
@@ -4446,6 +4907,36 @@ fn a_nested_struct_vec_or_map_field_is_v0210_naming_it() {
         assert!(said.contains("a variable holds one value"), "{d:#?}");
         assert!(!said.contains("JSON"), "{d:#?}");
     }
+}
+
+/// `Time`, `Uuid`, and `Bytes` go through JSON both ways, and `env::parse`
+/// reads `Time` and an `Option<Uuid>` but refuses `Bytes` (milestone 5c
+/// spec 2.4).
+#[test]
+fn time_uuid_and_bytes_go_through_json_and_env_but_bytes_not_env() {
+    let program = ok(
+        "struct Record {\n    at: Time,\n    id: Uuid,\n    data: Bytes,\n}\n\
+         struct Settings {\n    start: Time,\n    owner: Option<Uuid>,\n}\n\
+         fn main() {\n    let r: Result<Record, Error> = json::parse(\"{}\");\n    \
+         match r {\n        Ok(v) => println!(\"{}\", json::stringify(v)),\n        \
+         Err(e) => {}\n    }\n    let s: Result<Settings, Error> = env::parse();\n}\n",
+    );
+    let both = Serde {
+        serialize: true,
+        deserialize: true,
+    };
+    assert_eq!(program.structs[0].serde, both);
+    assert_eq!(program.structs[1].serde, READ);
+    let (d, sources) = one_error(
+        "struct Keys {\n    key: Bytes,\n}\n\
+         fn main() {\n    let r: Result<Keys, Error> = env::parse();\n}\n",
+    );
+    assert_eq!(d.code, codes::V0210, "{d:#?}");
+    assert_eq!(
+        d.labels[0].text,
+        "`Bytes` is not a type that the environment can hold"
+    );
+    assert_eq!(d.labels[0].span, span_of(&sources, "key: Bytes"));
 }
 
 #[test]
@@ -5642,6 +6133,27 @@ mod packages {
         };
         assert_eq!(d.code, codes::V0105, "{d:#?}");
     }
+
+    /// Milestone 5c spec 2.5: a package's facade takes and gives `Time`,
+    /// `Uuid`, and `Bytes`, and its enum holds a `Bytes`.
+    #[test]
+    fn a_package_s_facade_takes_and_gives_time_uuid_and_bytes() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/packages/facade_types");
+        let mut build = crate::test_packages::Build::default();
+        build.add_dir("facade_types", dir, &[("varyk-std", Dep::Rust)]);
+        let text = "fn main() {\n    let b = Bytes::from_text(\"abc\");\n    let n = facade_types::ext::size(b);\n    let kept = facade_types::ext::keep(b);\n    let at = facade_types::ext::read_time(\"2026-10-07T12:00:00Z\");\n    let id = facade_types::ext::same(Uuid::new());\n    match facade_types::ext::next(true) {\n        facade_types::ext::Message::Binary(m) => println!(\"{}\", m.len()),\n        facade_types::ext::Message::Text(text) => println!(\"{}\", text),\n    }\n    println!(\"{} {} {} {}\", n, kept.len(), at.is_some(), id);\n}\n";
+        let deps = [("facade_types", Dep::Package("facade_types"))];
+        let program = build
+            .check(text, &deps)
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        let main = function(&program, "main");
+        assert_eq!(local_ty(main, "n"), Ty::Int(IntKind::Usize));
+        assert_eq!(local_ty(main, "kept"), Ty::Bytes);
+        assert_eq!(local_ty(main, "at"), Ty::Option(Box::new(Ty::Time)));
+        assert_eq!(local_ty(main, "id"), Ty::Uuid);
+        assert_eq!(local_ty(main, "m"), Ty::Bytes);
+    }
 }
 
 /// Programs using the stub `varyk-http` (milestone 5b4 spec 2.1, 6).
@@ -6022,6 +6534,82 @@ mod http {
         let routes = routes_of(&program, "main");
         assert_eq!(routes[0].params, vec![Binding::Body]);
         assert_eq!(routes[1].params, vec![Binding::Body]);
+    }
+
+    /// Milestone 5c spec 2.4: a `Time` or `Uuid` is a path parameter, and
+    /// one or an `Option` of one a query parameter.
+    #[test]
+    fn a_time_or_uuid_path_or_query_parameter_binds() {
+        let program = checks(&app_program(
+            "async fn h(id: Uuid, at: Time, since: Time, until: Option<Time>, owner: Uuid, by: Option<Uuid>) {}\n",
+            "    app.get(\"/items/{id}/{at}\", h);\n",
+        ));
+        let routes = routes_of(&program, "main");
+        assert_eq!(
+            routes[0].params,
+            vec![
+                Binding::Path("id".to_string()),
+                Binding::Path("at".to_string()),
+                Binding::Query("since".to_string()),
+                Binding::Query("until".to_string()),
+                Binding::Query("owner".to_string()),
+                Binding::Query("by".to_string()),
+            ]
+        );
+    }
+
+    /// Milestone 5c spec 2.4: a `Bytes` is neither a path nor a query
+    /// parameter (V0219), and the texts list `Time` and `Uuid`.
+    #[test]
+    fn a_bytes_path_or_query_parameter_is_v0219() {
+        let d = one(&app_program(
+            "async fn h(data: Bytes) {}\n",
+            "    app.get(\"/files/{data}\", h);\n",
+        ));
+        assert_eq!(d.code, codes::V0219, "{d:#?}");
+        assert!(
+            d.message
+                .contains("an integer, `bool`, `string`, `Time`, or `Uuid`"),
+            "{d:#?}"
+        );
+        for parameter in ["data: Bytes", "data: Option<Bytes>"] {
+            let d = one(&app_program(
+                &format!("async fn h({parameter}) {{}}\n"),
+                "    app.get(\"/files\", h);\n",
+            ));
+            assert_eq!(d.code, codes::V0219, "{d:#?}");
+            assert!(
+                d.notes.iter().any(|note| note.contains(
+                    "an integer, `bool`, `string`, `Time`, `Uuid`, or an `Option` of one"
+                )),
+                "{d:#?}"
+            );
+        }
+        let d = one(&app_program(
+            "async fn h() {}\n",
+            "    app.get(\"/files/{id}\", h);\n",
+        ));
+        assert!(
+            d.notes
+                .iter()
+                .any(|note| note.contains("an integer type, `bool`, `string`, `Time`, or `Uuid`")),
+            "{d:#?}"
+        );
+    }
+
+    /// Milestone 5c spec 2.4: a struct holding the three is a route's body
+    /// and return value.
+    #[test]
+    fn a_route_s_body_and_return_may_hold_time_uuid_and_bytes() {
+        let program = checks(&app_program(
+            "struct Record {\n    id: Uuid,\n    at: Time,\n    data: Bytes,\n}\nasync fn put(record: Record) -> Record {\n    Record { id: record.id, at: record.at, data: record.data.clone() }\n}\n",
+            "    app.post(\"/records\", put);\n",
+        ));
+        let routes = routes_of(&program, "main");
+        assert_eq!(routes[0].params, vec![Binding::Body]);
+        assert_eq!(routes[0].ret, ReturnShape::Json);
+        let record = &program.structs[struct_id(&program, "Record").0 as usize];
+        assert!(record.serde.serialize && record.serde.deserialize);
     }
 
     #[test]

@@ -165,6 +165,28 @@ fn run_readings() {
     );
 }
 
+/// `Time`, `Uuid`, and `Bytes` (milestone 5c spec 9): a time read with
+/// `from_iso` and moved with `add_seconds`, a parsed id printed in
+/// lowercase, a struct of the three through JSON and back, and the bytes
+/// as text and base64. `Time::now()` and `Uuid::new()` are called and not
+/// printed, so the output is fixed.
+#[test]
+fn run_records() {
+    assert_runs(
+        "examples/records.vr",
+        "0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e at 2026-10-07T10:00:00Z\n\
+         expires at 2026-10-07T11:00:00Z, 3600 seconds later\n\
+         {\"id\":\"0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e\",\"at\":\"2026-10-07T10:00:00Z\",\
+         \"data\":\"aGVsbG8sIHdvcmxk\"}\n\
+         read back the same: true\n\
+         hello, world\n\
+         aGVsbG8sIHdvcmxk\n\
+         a new upload has its own id: true\n\
+         `42` is not a Uuid like 01890a5d-ac96-774b-bcce-b302099a8057\n\
+         `2026-10-07 12:00` is not a time like 2026-10-07T12:00:00Z\n",
+    );
+}
+
 #[test]
 fn run_text() {
     assert_runs(
@@ -578,6 +600,144 @@ fn run_table_rows() {
     assert_runs(
         "crates/varyk/tests/fixtures/codegen/tables/main.vr",
         "2 true\ntrue\n7\ntrue\nfalse\nfalse\n9 true false\nHELLO, YOU true\na+b\nfalse true\n",
+    );
+}
+
+/// `Bytes` passed, stored, moved, returned, and cloned builds and runs
+/// (milestone 5c spec 2.3).
+#[test]
+fn run_bytes_ownership() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/codegen/bytes_ownership/main.vr",
+        "5\n5\naGVsbG8=\n5\n3\n2\n",
+    );
+}
+
+/// Trailing values of each admitted type build and run (milestone 5b3
+/// spec 2.2): `Time`, `Uuid`, and an `Option<Time>` by value, a `Bytes`
+/// lent from a local, a parameter, and a borrowed return, an
+/// `Option<Bytes>` looked through, and an `if` lent whole (milestone 5c
+/// spec 2.4, 4).
+#[test]
+fn run_trailing_values() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/codegen/trailing_values/main.vr",
+        "17 54 42 41 user 7 Ada\nnick\n75 82 3 true\n36\n",
+    );
+}
+
+/// Every call of `Time`, `Uuid`, and `Bytes` builds and gives what spec
+/// 2.1 to 2.3 say (milestone 5c); the `Uuid` constructors and `now` are
+/// called but not printed, since their values differ on every run.
+#[test]
+fn run_time_ids_bytes() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/codegen/time_ids_bytes/main.vr",
+        "2026-10-07T10:00:00.5Z\n\
+         `2026-10-07 12:00` is not a time like 2026-10-07T12:00:00Z\n\
+         1970-01-01T00:00:00Z\n\
+         1970-01-01T00:00:01.5Z\n\
+         `253402300800` seconds since 1970 is out of range for a time, which runs from the \
+         year 0000 to the year 9999\n\
+         true\n\
+         2001-09-09T01:46:40Z 1000000000 1000000000000000\n\
+         2001-09-09T01:46:00Z\n\
+         2001-09-09T01:47:00Z\n\
+         1000000000 1000000000\n\
+         6 false aMOpbGxv\n\
+         6 héllo\n\
+         true 0\n\
+         hi\n\
+         the text is not standard base64 with padding\n\
+         the bytes are not UTF-8 text: byte 0 starts no character\n",
+    );
+}
+
+/// Comparing, printing, parsing, copying, and keys of `Time`, `Uuid`, and
+/// `Bytes` run as spec 2.1 to 2.4 say (milestone 5c): times compared and
+/// sorted, a `Uuid` read from uppercase text printed lowercase, a one-entry
+/// `HashMap<Uuid, string>` (one, since `keys` has no fixed order), and
+/// `Bytes` compared and cloned; and `varyk test` runs its `#[test]`, which
+/// `varyk run` leaves out, with `assert_eq` on two `Time`s.
+#[test]
+fn run_and_test_records_compare() {
+    let path = "crates/varyk/tests/fixtures/codegen/records_compare/main.vr";
+    assert_runs(
+        path,
+        "true true false true\n\
+         false true\n\
+         1970-01-01T00:16:40Z 1970-01-01T00:25:00Z 1970-01-01T00:33:20Z\n\
+         true\n\
+         0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e\n\
+         first\n\
+         true\n\
+         true\n\
+         true\n\
+         2026-10-07T11:00:00.25Z\n\
+         true false\n\
+         true\n\
+         true\n",
+    );
+    let output = varyk(&["test", path]);
+    let out = stdout_of(&output);
+    assert!(output.status.success(), "{out}\n{}", stderr_of(&output));
+    assert!(out.contains("test times_compare ... ok"), "{out}");
+}
+
+/// `Time`, `Uuid`, and `Bytes` through JSON (milestone 5c spec 2.4): a
+/// record written, printed, read back, and equal to the first; a number
+/// for a `Time` and base64 without its padding for a `Bytes` are errors.
+#[test]
+fn run_records_json() {
+    assert_runs(
+        "crates/varyk/tests/fixtures/codegen/records_json/main.vr",
+        "{\"at\":\"2026-10-07T10:00:00.5Z\",\"id\":\"0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e\",\
+         \"data\":\"aGVsbG8=\",\"seen\":\"2026-10-07T10:00:00.5Z\",\
+         \"ids\":[\"0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e\",\"6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b\"]}\n\
+         true\n\
+         error: invalid type: integer `1791374400`, expected a time like \
+         2026-10-07T12:00:00Z at line 1 column 17\n\
+         error: the text is not standard base64 with padding at line 1 column 14\n",
+    );
+}
+
+/// `records_env` run in an empty directory, with `START` and `OWNER` set
+/// or removed, so a tester's own environment or a `.env` cannot change the
+/// output, following `run_config_with`.
+fn run_records_env_with(set: &[(&str, &str)], remove: &[&str]) -> Output {
+    let program = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/codegen/records_env/main.vr")
+        .to_string_lossy()
+        .into_owned();
+    varyk_run_with(&["run", &program], &empty_dir("records-env"), set, remove)
+}
+
+/// `env::parse` reads a `Time` and an `Option<Uuid>` (milestone 5c spec
+/// 2.4): both printed, the id `None` once its variable is removed, and a
+/// time that does not read an error naming its variable.
+#[test]
+fn run_records_env() {
+    let output = run_records_env_with(
+        &[
+            ("START", "2026-10-07T12:00:00+02:00"),
+            ("OWNER", "0192F0C4-7A3E-7B5C-9D1E-2F3A4B5C6D7E"),
+        ],
+        &[],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(
+        stdout_of(&output),
+        "start 2026-10-07T10:00:00Z\nowner 0192f0c4-7a3e-7b5c-9d1e-2f3a4b5c6d7e\n"
+    );
+    assert_eq!(stderr_of(&output), "");
+    let output = run_records_env_with(&[("START", "2026-10-07T12:00:00Z")], &["OWNER"]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "start 2026-10-07T12:00:00Z\nno owner\n");
+    let output = run_records_env_with(&[("START", "2026-10-07 12:00")], &["OWNER"]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(
+        stdout_of(&output),
+        "error: `START`: `2026-10-07 12:00` is not a time like 2026-10-07T12:00:00Z\n"
     );
 }
 
@@ -1605,6 +1765,31 @@ fn the_varyk_http_stub_s_test_passes() {
     assert!(stdout.contains("2 passed"), "{stdout}");
 }
 
+/// The fixture package `facade_types` passes its own tests under `varyk
+/// test` (milestone 5c spec 2.5): its `.rs` facade takes and gives
+/// `Time`, `Uuid`, and `Bytes`, holds them in `pub` fields, and gives an
+/// enum whose variant holds a `Bytes`.
+#[test]
+fn facade_types_s_test_passes() {
+    let dir = common::package_copy("tests/fixtures/packages", "facade_types");
+    let output = varyk_logged(&dir, &["test"]);
+    assert_ok(&output);
+    let stdout = stdout_of(&output);
+    for name in [
+        "a_time_goes_through_the_facade",
+        "an_id_goes_through_the_facade",
+        "bytes_are_lent_and_given",
+        "an_upload_holds_the_three",
+        "a_binary_message_holds_bytes",
+    ] {
+        assert!(
+            stdout.contains(&format!("test tests::{name} ... ok")),
+            "{stdout}"
+        );
+    }
+    assert!(stdout.contains("5 passed"), "{stdout}");
+}
+
 /// What `http_user` prints (its `src/main.vr` says the same).
 const HTTP_USER_OUTPUT: &str = "GET /users/1 -> 200 {\"id\":1,\"name\":\"Ada\"}\n\
      GET /users/9 -> 404 {\"error\":\"not found\"}\n\
@@ -1615,6 +1800,9 @@ const HTTP_USER_OUTPUT: &str = "GET /users/1 -> 200 {\"id\":1,\"name\":\"Ada\"}\
      GET /search?prefix=A -> 400 {\"error\":\"the query parameter `exact` is missing\"}\n\
      GET /search?prefix=Bo&exact=true -> 200 [\"Bo\"]\n\
      GET /search?exact=true -> 400 {\"error\":\"an exact search needs a prefix\"}\n\
+     GET /orders/0192e1c4-5b8a-7c3d-9e4f-0123456789ab?since=2026-10-07T12:00:00Z -> 200 order 0192e1c4-5b8a-7c3d-9e4f-0123456789ab since 2026-10-07T12:00:00Z\n\
+     GET /orders/0192e1c4-5b8a-7c3d-9e4f-0123456789ab -> 200 order 0192e1c4-5b8a-7c3d-9e4f-0123456789ab\n\
+     GET /orders/42 -> 400 {\"error\":\"the path parameter `id` cannot be read from `42`\"}\n\
      POST /users -> 201 {\"id\":3,\"name\":\"Cy\"}\n\
      POST /users -> 400 {\"error\":\"a user needs a name\"}\n\
      POST /users -> 400 {\"error\":\"the body `user` is not valid: missing field `name` at line 1 column 13\"}\n\

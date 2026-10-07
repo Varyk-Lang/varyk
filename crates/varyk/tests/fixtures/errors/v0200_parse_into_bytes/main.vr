@@ -1,0 +1,4 @@
+fn main() {
+    let text = "aGk=";
+    let data: Result<Bytes, Error> = text.parse();
+}

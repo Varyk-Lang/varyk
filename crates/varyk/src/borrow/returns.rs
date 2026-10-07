@@ -23,7 +23,7 @@
 
 use varyk_syntax::Span;
 
-use super::slots::clone_fix_it;
+use super::slots::{clone_fix_it, clones};
 use super::{BORROWED_NOTE, Context, GONE_NOTE, PlacesOutput, places, push_unique};
 use crate::diagnostics::{Diagnostic, codes};
 use crate::hir::{
@@ -378,7 +378,7 @@ impl ClosureRoots<'_> {
     /// `class`, its body of type `ty`; `None` when it returns something
     /// new.
     pub(super) fn diagnostic(&self, class: Classification, ty: &Ty) -> Option<Diagnostic> {
-        let copy = if *ty == Ty::String {
+        let copy = if clones(ty) {
             "return a copy instead, with `.clone()`"
         } else {
             "return a new value instead"
@@ -438,7 +438,7 @@ impl ClosureRoots<'_> {
                 if self.chain {
                     // A copy in one place leaves a part beside something
                     // new: no one fix-it mends it.
-                    let copies = if *ty == Ty::String {
+                    let copies = if clones(ty) {
                         "return copies in both places, with `.clone()`"
                     } else {
                         "return new values in both places"
@@ -554,8 +554,8 @@ impl Report<'_> {
     /// The diagnostic of `class`; `None` for a class that is no error.
     fn diagnostic(&self, class: Classification) -> Option<Diagnostic> {
         let ret = &self.function.ret;
-        // For text, `.clone()` makes the copy.
-        let copy = if *ret == Ty::String {
+        // For text and `Bytes`, `.clone()` makes the copy.
+        let copy = if clones(ret) {
             "return a copy instead, with `.clone()`"
         } else {
             "return a new value instead"
@@ -612,7 +612,7 @@ impl Report<'_> {
                     .with_note(format!(
                         "a function may return part of only one of its parameters; {one}, or make \
                          two functions",
-                        one = if *ret == Ty::String {
+                        one = if clones(ret) {
                             "return a copy in one of the places, with `.clone()`"
                         } else {
                             "return a new value in one of the places"

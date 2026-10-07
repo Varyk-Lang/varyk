@@ -1,3 +1,5 @@
+use crate::{Bytes, Time, Uuid};
+
 /// One value passed beside a call's other arguments, as a facade's last
 /// `Vec<varyk_std::Value>` parameter takes them: a SQL parameter, for
 /// one. Generated code builds it with `Value::from`, which never fails.
@@ -8,6 +10,29 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Text(String),
+    Time(Time),
+    Uuid(Uuid),
+    Bytes(Bytes),
+}
+
+impl From<Time> for Value {
+    fn from(value: Time) -> Value {
+        Value::Time(value)
+    }
+}
+
+impl From<Uuid> for Value {
+    fn from(value: Uuid) -> Value {
+        Value::Uuid(value)
+    }
+}
+
+/// The bytes are lent: the clone adds to a reference count and allocates
+/// nothing, since every `Bytes` shares its buffer.
+impl From<&Bytes> for Value {
+    fn from(value: &Bytes) -> Value {
+        Value::Bytes(value.clone())
+    }
 }
 
 impl From<bool> for Value {
@@ -59,7 +84,9 @@ macro_rules! from_option {
     )*};
 }
 
-from_option!(bool, &str, f32, f64, i8, i16, i32, i64, u8, u16, u32);
+from_option!(
+    bool, &str, f32, f64, i8, i16, i32, i64, u8, u16, u32, Time, Uuid, &Bytes
+);
 
 #[cfg(test)]
 mod tests {
@@ -97,6 +124,41 @@ mod tests {
         assert_eq!(Value::from(Some(true)), Value::Bool(true));
         assert_eq!(Value::from(Some(7u32)), Value::Int(7));
         assert_eq!(Value::from(Some(0.5f64)), Value::Float(0.5));
+    }
+
+    #[test]
+    fn a_time_a_uuid_and_bytes_give_their_variants() {
+        let time = crate::Time::from_unix(0);
+        assert_eq!(time.clone().map(Value::from), time.map(Value::Time));
+        let id = crate::Uuid::v4();
+        assert_eq!(Value::from(id), Value::Uuid(id));
+        let bytes = crate::Bytes::from_text("hi");
+        assert_eq!(Value::from(&bytes), Value::Bytes(bytes.clone()));
+    }
+
+    #[test]
+    fn a_lent_bytes_shares_its_buffer() {
+        let bytes = crate::Bytes::from_text("hi");
+        match Value::from(&bytes) {
+            Value::Bytes(lent) => assert_eq!(lent.as_ref().as_ptr(), bytes.as_ref().as_ptr()),
+            other => panic!("gave {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_optional_time_uuid_or_bytes_is_null_or_its_value() {
+        assert_eq!(Value::from(None::<crate::Time>), Value::Null);
+        assert_eq!(Value::from(None::<crate::Uuid>), Value::Null);
+        assert_eq!(Value::from(None::<&crate::Bytes>), Value::Null);
+        let time = crate::Time::from_unix(0);
+        assert_eq!(
+            time.clone().map(|t| Value::from(Some(t))),
+            time.map(Value::Time)
+        );
+        let id = crate::Uuid::v4();
+        assert_eq!(Value::from(Some(id)), Value::Uuid(id));
+        let bytes = crate::Bytes::from_text("hi");
+        assert_eq!(Value::from(Some(&bytes)), Value::Bytes(bytes.clone()));
     }
 
     #[test]

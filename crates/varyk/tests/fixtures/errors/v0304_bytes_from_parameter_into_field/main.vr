@@ -1,0 +1,16 @@
+struct Upload {
+    data: Bytes,
+}
+
+fn body(data: Bytes) -> Bytes {
+    data
+}
+
+fn make_upload(data: Bytes) -> Upload {
+    Upload { data: body(data) }
+}
+
+fn main() {
+    let upload = make_upload(Bytes::from_text("hello"));
+    println!("{}", upload.data.len());
+}
