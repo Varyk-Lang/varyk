@@ -8,4 +8,4 @@ name = "users"
 path = "src/main.vr"
 
 [dependencies]
-varyk-std = "0.7.2"
+varyk-std = "0.8.0"
