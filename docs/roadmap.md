@@ -184,7 +184,7 @@ Its own work, in its own repository:
 
 After 5b4, the next packages:
 
-- [ ] [`varyk-mongo`](https://github.com/Varyk-Lang/varyk-mongo/blob/main/docs/specs/2026-10-09-varyk-mongo-design.md)
+- [x] [`varyk-mongo`](https://github.com/Varyk-Lang/varyk-mongo/blob/main/docs/specs/2026-10-09-varyk-mongo-design.md)
 
 `varyk-redis` is next.
 

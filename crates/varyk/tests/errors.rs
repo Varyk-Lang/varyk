@@ -237,6 +237,7 @@ error_case!(v0101_unsized_rust_struct, "V0101", fix_it: false);
 error_case!(v0101_cfg_rust_struct, "V0101", fix_it: false);
 error_case!(v0101_pub_use_rust_type, "V0101", fix_it: false);
 package_error_case!(v0101_sql_not_added, "V0101", "src/main.vr");
+package_error_case!(v0101_mongo_not_added, "V0101", "src/main.vr");
 error_case!(v0102_unknown_field, "V0102", fix_it: false);
 error_case!(v0102_unknown_variant_field_pattern, "V0102", fix_it: false);
 error_case!(v0103_binding_named_after_variant, "V0103", fix_it: false);
