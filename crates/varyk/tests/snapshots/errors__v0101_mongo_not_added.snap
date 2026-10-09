@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0101]: unknown type `mongo::Database`
+ --> crates/varyk/tests/fixtures/errors/v0101_mongo_not_added/src/main.vr:2:13
+  |
+2 |     client: mongo::Database,
+  |             ^^^^^^^^^^^^^^^ unknown type `mongo::Database`
+  |
+  = note: `mongo` is not a package of this build; `varyk add mongo` adds varyk-mongo

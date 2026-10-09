@@ -27,15 +27,16 @@ impl Symbols {
     }
 
     /// The note for an unknown path `path`, as written, whose first name
-    /// is `http` or `sql`, the official shorthands of `varyk add`, when
-    /// nothing here goes by that name: no dependency of the package, no
-    /// module of the package, and no `use` alias of `from`'s file. The
-    /// package was most likely never added.
+    /// is `http`, `sql`, or `mongo`, the official shorthands of `varyk
+    /// add`, when nothing here goes by that name: no dependency of the
+    /// package, no module of the package, and no `use` alias of `from`'s
+    /// file. The package was most likely never added.
     pub(crate) fn not_added(&self, from: ModuleId, path: &str) -> Option<String> {
         let (first, _) = path.split_once("::")?;
         let package = match first {
             "http" => "varyk-http",
             "sql" => "varyk-sql",
+            "mongo" => "varyk-mongo",
             _ => return None,
         };
         if self.dep(first).is_some()

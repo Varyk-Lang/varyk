@@ -3045,8 +3045,8 @@ varyk run [file.vr] [--release] [-- args...]     build, then run with the given 
 varyk test [file.vr]                             build the tests and run them
 varyk init [dir] [--lib]                         write a new package
 varyk add [cargo add args]                       run cargo add in the package
-varyk add http sql                               add the official packages as `http` and `sql`
-varyk add sql [cargo add args]                   add one official package under its short name
+varyk add http sql mongo                         add the official packages as `http`, `sql`, and `mongo`
+varyk add sql [cargo add args]                   add one official package under its short name (`http`, `sql`, `mongo`)
 varyk publish [--assemble-only] [-- cargo args]  check, assemble a plain Rust crate, and run
                                                   cargo publish there
 ```
@@ -3144,29 +3144,29 @@ A package that uses other Varyk packages is built as described under
 you give, in the package found upward from the current directory (so a
 relative `--path` is relative to the package), and passes cargo's output and
 exit code through; Varyk interprets none of the arguments except the
-official names `http` and `sql` (below). Outside a package it says "no
-Varyk package here". Cargo reads the package's `Cargo.toml`, which names
+official names `http`, `sql`, and `mongo` (below). Outside a package it says
+"no Varyk package here". Cargo reads the package's `Cargo.toml`, which names
 the `.vr` root, so `varyk add --path ../lib` works in any package `varyk
 init` made.
 
-`varyk add http` and `varyk add sql` add the official packages: each runs
-`cargo add varyk-http --rename http` or `cargo add varyk-sql --rename sql`,
-so code writes `http::App` or `sql::connect`. The crate name written in full
-(`varyk add varyk-http`) does the same. Name several and each runs its own
+`varyk add http`, `varyk add sql`, and `varyk add mongo` add the official
+packages: each runs `cargo add varyk-http --rename http`, `cargo add varyk-sql
+--rename sql`, or `cargo add varyk-mongo --rename mongo`, so code writes
+`http::App`, `sql::connect`, or `mongo::connect`. The crate name written in
+full (`varyk add varyk-http`) does the same. Name several and each runs its own
 `cargo add`, in order, stopping at the first failure (`varyk add http sql`);
-that form takes no other argument, and `varyk add http sql --features
-postgres` is refused with "pass other arguments with one package at a time".
-With one official name first, any later arguments go to cargo as written
-(`varyk add sql --features postgres`). A short name with `--rename` is
-refused, "write the full name: `varyk add varyk-http --rename web`" (naming the
-package asked for), since
-`http` and `sql` are also names of unrelated crates; the full name with
-`--rename` passes through to cargo, as does any call whose first argument is
-not an official name (`varyk add serde`). Each package lives in its own
-repository, and its README says what it offers. A path starting `http::` or
-`sql::` that names nothing, when the package has no dependency, module, or
-`use` by that name, gets a note saying so: "`sql` is not a package of this
-build; `varyk add sql` adds varyk-sql".
+that form takes no other argument, and `varyk add http sql --features postgres`
+is refused with "pass other arguments with one package at a time". With one
+official name first, any later arguments go to cargo as written (`varyk add sql
+--features postgres`). A short name with `--rename` is refused, "write the full
+name: `varyk add varyk-http --rename web`" (naming the package asked for),
+since `http`, `sql`, and `mongo` are also names of unrelated crates; the full
+name with `--rename` passes through to cargo, as does any call whose first
+argument is not an official name (`varyk add serde`). Each package lives in its
+own repository, and its README says what it offers. A path starting `http::`,
+`sql::`, or `mongo::` that names nothing, when the package has no dependency,
+module, or `use` by that name, gets a note saying so: "`sql` is not a package
+of this build; `varyk add sql` adds varyk-sql".
 
 A program that uses `varyk-std` (it names `Error`, calls one of its
 features, such as `json`, `log`, `time::sleep`, or `Task::all`, starts a call, or has an

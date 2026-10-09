@@ -26,7 +26,9 @@ JSON, configuration from the environment, logging, tests, `async` functions
 and tasks, times, ids, and bytes, and Varyk packages that use Varyk packages
 work today, and so do SQL databases through the
 [`varyk-sql`](https://github.com/Varyk-Lang/varyk-sql) package
-(`varyk add sql`), and HTTP services through the
+(`varyk add sql`), MongoDB through the
+[`varyk-mongo`](https://github.com/Varyk-Lang/varyk-mongo) package
+(`varyk add mongo`), and HTTP services through the
 [`varyk-http`](https://github.com/Varyk-Lang/varyk-http) package
 (`varyk add http`), with every route checked against its handler before
 anything runs. What works today is under [Status](#status).
@@ -194,7 +196,7 @@ varyk build [file.vr]    generate and build the Rust; prints the executable path
 varyk run [file.vr]      build, then run the program, forwarding its exit code
 varyk test [file.vr]     build the program's #[test] functions and run them
 varyk init [dir]         write a new package; --lib writes a library
-varyk add [args]         run cargo add in the package; varyk add sql adds the database package
+varyk add [args]         run cargo add in the package; varyk add sql adds the database package, varyk add mongo the MongoDB one
 varyk publish            publish the package to crates.io as a plain Rust crate
 ```
 
@@ -224,6 +226,8 @@ and it reports every error it knows about with a code, a plain-word
 message, and, where it can, a suggested fix. Calendar dates, durations,
 time zones, and much more are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
+
+`varyk add mongo` adds the MongoDB package `varyk-mongo`.
 
 Milestone 5c adds three built-in types: `Time`, a point in time in UTC
 read and written as `2026-10-07T12:00:00Z`; `Uuid`, where `Uuid::new()`

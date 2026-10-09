@@ -137,8 +137,9 @@ pub enum Command {
     ///
     /// Runs `cargo add` with the arguments given, in the package found
     /// upward from the current directory, and forwards its output and exit
-    /// code; Varyk interprets none of the arguments except the shorthand
-    /// `sql`, which adds the official package `varyk-sql` as `sql`.
+    /// code; Varyk interprets none of the arguments except the shorthands
+    /// `http`, `sql`, and `mongo`, which add the official packages
+    /// `varyk-http`, `varyk-sql`, and `varyk-mongo` under those names.
     Add {
         /// Arguments for `cargo add`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -798,7 +799,11 @@ fn run_publish(assemble_only: bool, args: &[String], message_format: MessageForm
 /// The official packages `varyk add` has a shorthand for: the name typed,
 /// and the crate it adds (renamed to the shorthand so code can name it).
 /// Each crate name is also accepted as written.
-const SHORTHANDS: &[(&str, &str)] = &[("http", "varyk-http"), ("sql", "varyk-sql")];
+const SHORTHANDS: &[(&str, &str)] = &[
+    ("http", "varyk-http"),
+    ("sql", "varyk-sql"),
+    ("mongo", "varyk-mongo"),
+];
 
 /// The row of an official package named by its shorthand or its crate.
 fn official(arg: &str) -> Option<&'static (&'static str, &'static str)> {
@@ -1040,6 +1045,18 @@ mod add_tests {
         assert_eq!(
             add_args(&args(&["http"])),
             runs(&[&["varyk-http", "--rename", "http"]])
+        );
+    }
+
+    #[test]
+    fn the_mongo_shorthand_becomes_its_row() {
+        assert_eq!(
+            add_args(&args(&["mongo"])),
+            runs(&[&["varyk-mongo", "--rename", "mongo"]])
+        );
+        assert_eq!(
+            add_args(&args(&["varyk-mongo"])),
+            runs(&[&["varyk-mongo", "--rename", "mongo"]])
         );
     }
 

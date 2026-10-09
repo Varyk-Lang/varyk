@@ -1,0 +1,7 @@
+struct State {
+    client: mongo::Database,
+}
+
+fn main() {
+    println!("started");
+}
