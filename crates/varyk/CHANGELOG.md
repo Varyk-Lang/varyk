@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.2](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.8.1...varyk-v0.8.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* varyk add mongo adds the MongoDB package ([14235c1](https://github.com/Varyk-Lang/varyk/commit/14235c1ec637e8f33d2da2dfc147ca19cc7bb997))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * varyk-syntax bumped from 0.8.1 to 0.8.2
+
 ## [0.8.1](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.8.0...varyk-v0.8.1) (2026-10-10)
 
 

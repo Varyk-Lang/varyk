@@ -1,5 +1,5 @@
 {
-  "crates/varyk-std": "0.8.1",
-  "crates/varyk-syntax": "0.8.1",
-  "crates/varyk": "0.8.1"
+  "crates/varyk-std": "0.8.2",
+  "crates/varyk-syntax": "0.8.2",
+  "crates/varyk": "0.8.2"
 }

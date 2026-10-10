@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/Varyk-Lang/varyk/compare/varyk-syntax-v0.8.1...varyk-syntax-v0.8.2) (2026-10-10)
+
+
+### Miscellaneous Chores
+
+* **varyk-syntax:** Synchronize varyk versions
+
 ## [0.8.1](https://github.com/Varyk-Lang/varyk/compare/varyk-syntax-v0.8.0...varyk-syntax-v0.8.1) (2026-10-10)
 
 
