@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/Varyk-Lang/varyk/compare/varyk-std-v0.8.0...varyk-std-v0.8.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* Time, Uuid, and Bytes keep their type outside JSON ([908ec2f](https://github.com/Varyk-Lang/varyk/commit/908ec2fab46e93b13a1f97f3215657381c3e992b))
+
 ## [0.8.0](https://github.com/Varyk-Lang/varyk/compare/varyk-std-v0.7.2...varyk-std-v0.8.0) (2026-10-07)
 
 
