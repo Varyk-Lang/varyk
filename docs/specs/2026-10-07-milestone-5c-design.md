@@ -346,6 +346,10 @@ code is (M5a):
   `visit_byte_buf`). JSON never calls the raw ones for a string, so the
   two cannot be confused; the raw ones are how `varyk-sql` hands a
   `bytea` or `BLOB` column to a field (section 6.2).
+- From varyk 0.8.1 the serialize forms above are what a human-readable
+  serializer gets, JSON included. One that is not gets typed forms
+  instead (`varyk_std::serde_names`, `docs/language.md`, "A facade for a
+  package").
 - `Debug`, which `Value`'s derive needs, prints the written form, and
   `Bytes` as its base64. Assertion messages print with `{}`, not
   `Debug` (M5a), so they show a `Time` or a `Uuid` and not a `Bytes`.

@@ -186,10 +186,15 @@ impl FromStr for Time {
     }
 }
 
-/// The written form, as a string.
+/// The written form, as a string; to a serializer that is not
+/// human-readable, the Unix microseconds under `serde_names::TIME`.
 impl Serialize for Time {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
+        if serializer.is_human_readable() {
+            serializer.collect_str(self)
+        } else {
+            serializer.serialize_newtype_struct(crate::serde_names::TIME, &self.to_unix_micros())
+        }
     }
 }
 
@@ -521,5 +526,28 @@ mod tests {
             Err(e) => assert!(e.message().contains(&not_a_time("2026-10-07")), "{e}"),
             Ok(row) => panic!("read {row:?}"),
         }
+    }
+
+    #[test]
+    fn serializes_as_text_when_readable_and_in_json() {
+        use serde_test::{Configure, Token, assert_ser_tokens};
+        let time = Time(1_500_000);
+        assert_ser_tokens(&time.readable(), &[Token::Str("1970-01-01T00:00:01.5Z")]);
+        assert_eq!(crate::json::stringify(&time), "\"1970-01-01T00:00:01.5Z\"");
+    }
+
+    #[test]
+    fn serializes_as_microseconds_under_its_name_when_compact() {
+        use serde_test::{Configure, Token, assert_ser_tokens};
+        let time = Time(-7);
+        assert_ser_tokens(
+            &time.compact(),
+            &[
+                Token::NewtypeStruct {
+                    name: crate::serde_names::TIME,
+                },
+                Token::I64(-7),
+            ],
+        );
     }
 }
