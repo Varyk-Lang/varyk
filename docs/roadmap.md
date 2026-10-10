@@ -153,7 +153,7 @@ stays small, and anything heavy is a package the writer adds.
 - [x] A `.rs` parameter of type `&'static str` taking only text written in the program
 - [x] `varyk_std::Error` as the error type of a `.rs` function's result
 - [x] `pub use` in a `.vr` file, and `varyk add sql`
-- [x] `varyk-sql`, in its own repository, on sqlx: SQLite, Postgres, and MySQL, each a cargo feature; `connect` and `connect_with`, `migrate`, `begin` and `commit`, and on a pool or a transaction `one`, `first`, `all`, and `run`, each taking the query and its values; rows read into structs by column name; each database's own placeholders, passed through; the query text a literal, so a query built from input is a compile error; no secret in an error message
+- [x] `varyk-sql`, in its own repository, on sqlx: SQLite, Postgres, and MySQL, each a cargo feature; `connect` and `connect_with`, `migrate`, `begin` and `commit`, and on a pool or a transaction `one`, `first`, `all`, and `run`, each taking the query and its values; rows read into structs by column name; each database's own placeholders, passed through (from `varyk-sql` 0.4, `$1`, `$2`, and so on work on every database, and `?` still works on SQLite and MySQL); the query text a literal, so a query built from input is a compile error; no secret in an error message
 
 The `Serialize` half of the type parameter, for sending a Varyk value out,
 moves to 5b4, where the HTTP client needs it.
@@ -182,7 +182,11 @@ Its own work, in its own repository:
 
 - [ ] An agent evaluation: the examples written by a model from `docs/language.md` alone, pass rates published, before any page claims that agents write Varyk well
 
-After 5b4, `varyk-mongo` and `varyk-redis` are the next packages.
+After 5b4, the next packages:
+
+- [ ] [`varyk-mongo`](https://github.com/Varyk-Lang/varyk-mongo/blob/main/docs/specs/2026-10-09-varyk-mongo-design.md)
+
+`varyk-redis` is next.
 
 ### Milestone 5c: time, ids, and bytes
 
@@ -217,6 +221,14 @@ The packages, each in its own repository:
 
 `.rs` signatures naming Varyk-declared types, which the type parameter of
 milestone 5b3 makes unnecessary for what a facade needs (moved from 5b2).
+
+A document literal in the language, with values written inline, for MongoDB
+and JSON. `varyk-mongo` builds its documents from structs until then; the
+shape of the literal is an open question in
+[open-questions.md](open-questions.md).
+
+`{name}` capture in `println!` and `format!`, the Rust 1.58 form, inside the
+`{}` syntax the language has.
 
 Declaring generics, traits, and attributes in Varyk code. Each waits on an
 open question in the spec.
