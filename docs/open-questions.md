@@ -170,3 +170,11 @@ Recorded, deliberately unanswered.
 - Should `Bytes` be indexed, sliced, and built from a `Vec<u8>`, and
   should there be a growable buffer? Milestone 5c's `Bytes` is made whole
   from text or base64, or handed over by a package.
+- Should the language have a document literal, with values written inline,
+  for MongoDB and JSON? What is its type, and does JSON share it? `varyk-mongo`
+  builds its documents from structs until this is answered.
+- `varyk-mongo` escapes a `$regex` value taken from input, so it matches as
+  plain text anywhere in a field. Should there be a form for a prefix search
+  from input (`^` then the escaped value), which an index can serve?
+- Should `varyk-mongo` have a transaction call that retries? It needs a
+  function as a facade argument, and Varyk has no function values.
