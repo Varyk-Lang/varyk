@@ -2818,6 +2818,13 @@ upgrading](#varyk-add-and-upgrading)); its README says what it offers.
 For Rust readers: the call is written
 `::store::kv::Store::one::<User>(&db, "user/1", vec![])`.
 
+A facade whose serializer is not human-readable (a binary database format)
+gets a `Time` as its `i64` Unix microseconds in a newtype struct named
+`varyk_std::serde_names::TIME`, a `Uuid` as its 16 raw bytes in one named
+`varyk_std::serde_names::UUID`, and a `Bytes` as raw bytes, so it can store
+each as a native type; these forms are one-way, and a human-readable
+serializer, JSON included, still gets the written string.
+
 ## Packages
 
 A Varyk package can use another Varyk package, and so can that package, to

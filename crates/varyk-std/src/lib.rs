@@ -10,6 +10,7 @@ pub mod json;
 mod log;
 mod parse;
 mod runtime;
+pub mod serde_names;
 mod task;
 pub mod time;
 mod timestamp;

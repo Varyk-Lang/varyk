@@ -91,10 +91,25 @@ impl fmt::Debug for Uuid {
     }
 }
 
-/// The written form, as a string.
+/// The 16 bytes as one binary value; a `&[u8; 16]` would be a tuple.
+struct RawBytes<'a>(&'a [u8; 16]);
+
+impl Serialize for RawBytes<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(self.0)
+    }
+}
+
+/// The written form, as a string; to a serializer that is not
+/// human-readable, the 16 bytes under `serde_names::UUID`.
 impl Serialize for Uuid {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
+        if serializer.is_human_readable() {
+            serializer.collect_str(self)
+        } else {
+            serializer
+                .serialize_newtype_struct(crate::serde_names::UUID, &RawBytes(self.as_bytes()))
+        }
     }
 }
 
@@ -236,6 +251,36 @@ mod tests {
             UuidVisitor
                 .visit_byte_buf::<ValueError>(vec![0; 17])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn serializes_as_text_when_readable_and_in_json() {
+        use serde_test::{Configure, Token, assert_ser_tokens};
+        let Ok(id) = Uuid::from_str(ID) else {
+            panic!("{ID} does not parse");
+        };
+        assert_ser_tokens(&id.readable(), &[Token::Str(ID)]);
+        assert_eq!(crate::json::stringify(&id), format!("\"{ID}\""));
+    }
+
+    #[test]
+    fn serializes_as_sixteen_bytes_under_its_name_when_compact() {
+        use serde_test::{Configure, Token, assert_ser_tokens};
+        let Ok(id) = Uuid::from_str(ID) else {
+            panic!("{ID} does not parse");
+        };
+        assert_ser_tokens(
+            &id.compact(),
+            &[
+                Token::NewtypeStruct {
+                    name: crate::serde_names::UUID,
+                },
+                Token::Bytes(&[
+                    0x01, 0x89, 0x0a, 0x5d, 0xac, 0x96, 0x77, 0x4b, 0xbc, 0xce, 0xb3, 0x02, 0x09,
+                    0x9a, 0x80, 0x57,
+                ]),
+            ],
         );
     }
 }

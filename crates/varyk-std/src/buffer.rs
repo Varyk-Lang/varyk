@@ -89,10 +89,15 @@ impl fmt::Debug for Bytes {
     }
 }
 
-/// A string of standard base64 with padding.
+/// A string of standard base64 with padding; to a serializer that is not
+/// human-readable, the raw bytes.
 impl Serialize for Bytes {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(&Base64Display::new(&self.0, &STANDARD))
+        if serializer.is_human_readable() {
+            serializer.collect_str(&Base64Display::new(&self.0, &STANDARD))
+        } else {
+            serializer.serialize_bytes(&self.0)
+        }
     }
 }
 
@@ -227,5 +232,27 @@ mod tests {
         let at = buffer.as_ptr();
         let owned = BytesVisitor.visit_byte_buf::<ValueError>(buffer);
         assert_eq!(owned.map(|b| b.as_ref().as_ptr()), Ok(at));
+    }
+
+    #[test]
+    fn serializes_as_base64_when_readable_and_in_json() {
+        use serde_test::{Configure, Token, assert_ser_tokens};
+        assert_eq!(
+            crate::json::stringify(&Bytes::from_text("hi?>")),
+            "\"aGk/Pg==\""
+        );
+        assert_ser_tokens(
+            &Bytes::from_text("hi?>").readable(),
+            &[Token::Str("aGk/Pg==")],
+        );
+    }
+
+    #[test]
+    fn serializes_as_raw_bytes_when_compact() {
+        use serde_test::{Configure, Token, assert_ser_tokens};
+        assert_ser_tokens(
+            &Bytes::from_text("hi?>").compact(),
+            &[Token::Bytes(b"hi?>")],
+        );
     }
 }

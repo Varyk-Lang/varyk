@@ -23,3 +23,6 @@ time = { version = "0.3.45", features = ["parsing", "formatting"] }
 uuid = { version = "1.20", features = ["v4", "v7"] }
 bytes = "1.10.1"
 base64 = "0.22"
+
+[dev-dependencies]
+serde_test = "1"
