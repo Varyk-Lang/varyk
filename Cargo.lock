@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "varyk"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "annotate-snippets",
  "clap",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "varyk-std"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "base64",
  "bytes",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "varyk-syntax"
-version = "0.8.0"
+version = "0.8.1"
 
 [[package]]
 name = "wasm-bindgen"

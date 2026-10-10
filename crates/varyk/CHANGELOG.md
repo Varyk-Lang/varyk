@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.1](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.8.0...varyk-v0.8.1) (2026-10-10)
+
+
+### Miscellaneous Chores
+
+* **varyk:** Synchronize varyk versions
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * varyk-syntax bumped from 0.8.0 to 0.8.1
+
 ## [0.8.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.7.2...varyk-v0.8.0) (2026-10-07)
 
 
