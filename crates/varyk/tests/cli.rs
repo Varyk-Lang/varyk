@@ -63,6 +63,23 @@ fn version_flag_prints_the_crate_version() {
 }
 
 #[test]
+fn help_lists_lsp_and_lsp_answers_help() {
+    let out = varyk(&["--help"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("lsp ")),
+        "expected `lsp` in the help, got: {stdout}"
+    );
+
+    // The VS Code extension probes the command this way.
+    let out = varyk(&["lsp", "--help"]);
+    assert!(out.status.success(), "status: {:?}", out.status);
+}
+
+#[test]
 fn check_on_a_missing_file_exits_one_with_a_plain_stderr_message() {
     let output = varyk(&["check", "does/not/exist.vr"]);
 

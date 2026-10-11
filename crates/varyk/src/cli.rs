@@ -14,6 +14,8 @@
 //! varyk publish [-- cargo args]                   check, assemble a plain Rust crate, and
 //!                                                  run cargo publish there, forwarding its
 //!                                                  exit code and output (M3 spec 2.6)
+//! varyk lsp                                      speak the Language Server Protocol on
+//!                                                  stdin and stdout, for editors
 //! ```
 //!
 //! With no file, each works on the package found upward from the current
@@ -24,7 +26,8 @@
 //! stderr; JSON diagnostics go to stdout, one object per line (spec
 //! section 6.6's output-streams paragraph), except under `run`, where
 //! stdout is the program's own, so they go to stderr, and under `test`,
-//! whose stdout is the test runner's.
+//! whose stdout is the test runner's. `lsp` ignores it: its stdout is the
+//! protocol's (language server spec 2).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -79,8 +82,8 @@ fn json_line(message_format: MessageFormat, line: &str) {
     }
 }
 
-/// The `check`, `build`, `run`, `test`, `init`, `add`, and
-/// `publish` subcommands.
+/// The `check`, `build`, `run`, `test`, `init`, `add`, `publish`, and
+/// `lsp` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Check the program for errors.
@@ -162,6 +165,12 @@ pub enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Speak the Language Server Protocol on standard input and output,
+    /// for editors.
+    ///
+    /// Shows `varyk check`'s diagnostics on open and on save, and offers
+    /// each fix-it as a quick fix.
+    Lsp,
 }
 
 /// Parses the process arguments and dispatches to the requested
@@ -188,16 +197,37 @@ pub fn run() -> ExitCode {
             assemble_only,
             args,
         } => run_publish(assemble_only, &args, message_format),
+        Command::Lsp => crate::lsp::serve(std::io::stdin().lock(), std::io::stdout().lock()),
     }
 }
 
 /// What a command works on: a single file, or a package (M3 spec 2.1).
-struct Target {
+pub(crate) struct Target {
     /// The entry `.vr` file.
-    entry: PathBuf,
-    package: Option<Package>,
+    pub(crate) entry: PathBuf,
+    pub(crate) package: Option<Package>,
     /// Every file read so far (the manifest, in package mode).
-    sources: Vec<SourceFile>,
+    pub(crate) sources: Vec<SourceFile>,
+}
+
+/// Why locating or checking a target failed, not yet printed: what
+/// [`target_for_file`] and [`check_target`] return.
+pub(crate) enum Failure {
+    /// Diagnostics, with the sources they point into.
+    Diagnostics(Vec<Diagnostic>, Vec<SourceFile>),
+    /// A plain message: the text `varyk check` prints after `error: `.
+    Message(String),
+}
+
+/// Prints `failure` as the commands always have: a message on stderr
+/// after `error: `, diagnostics in `message_format`.
+fn emit_failure(failure: &Failure, message_format: MessageFormat) {
+    match failure {
+        Failure::Diagnostics(diagnostics, sources) => {
+            emit_diagnostics(diagnostics, sources, message_format);
+        }
+        Failure::Message(message) => eprintln!("error: {message}"),
+    }
 }
 
 /// Decides what a command works on (M3 spec 2.1): with no `file`, the
@@ -216,7 +246,6 @@ fn locate_for(
     message_format: MessageFormat,
     publish: bool,
 ) -> Result<Target, ExitCode> {
-    let mut sources = Vec::new();
     let located = match file {
         None => {
             let Some(manifest) = manifest_here() else {
@@ -246,31 +275,52 @@ fn locate_for(
                 );
                 return Err(ExitCode::FAILURE);
             }
-            Some(package::load(&manifest, &mut sources))
+            let mut sources = Vec::new();
+            let loaded = package::load(&manifest, &mut sources);
+            package_target(loaded, sources)
         }
         Some(path) => {
             if path.extension().and_then(|ext| ext.to_str()) != Some("vr") {
                 eprintln!("error: expected a `.vr` file, got `{}`", path.display());
                 return Err(ExitCode::FAILURE);
             }
-            Package::for_file(path, &mut sources)
+            target_for_file(path)
         }
     };
-    match located {
+    located.map_err(|failure| {
+        emit_failure(&failure, message_format);
+        ExitCode::FAILURE
+    })
+}
+
+/// What a command named `path`, a `.vr` file, works on (M3 spec 2.1): the
+/// package whose root `path` is, else `path` alone. Prints nothing; a bad
+/// manifest comes back as its diagnostics.
+pub(crate) fn target_for_file(path: &Path) -> Result<Target, Failure> {
+    let mut sources = Vec::new();
+    match Package::for_file(path, &mut sources) {
         None => Ok(Target {
-            entry: file.expect("no file always finds a package").to_path_buf(),
+            entry: path.to_path_buf(),
             package: None,
             sources,
         }),
-        Some(Ok(package)) => Ok(Target {
+        Some(loaded) => package_target(loaded, sources),
+    }
+}
+
+/// The target of a package `loaded` from its manifest, whose files so
+/// far are `sources`.
+fn package_target(
+    loaded: Result<Package, Vec<Diagnostic>>,
+    sources: Vec<SourceFile>,
+) -> Result<Target, Failure> {
+    match loaded {
+        Ok(package) => Ok(Target {
             entry: package.entry.clone(),
             package: Some(package),
             sources,
         }),
-        Some(Err(diagnostics)) => {
-            emit_diagnostics(&diagnostics, &sources, message_format);
-            Err(ExitCode::FAILURE)
-        }
+        Err(diagnostics) => Err(Failure::Diagnostics(diagnostics, sources)),
     }
 }
 
@@ -305,7 +355,7 @@ fn run_check(file: Option<&Path>, message_format: MessageFormat) -> ExitCode {
 
 /// A checked target: its program, the Varyk packages of its build, and
 /// the package graph they were found in, when one was read.
-struct Loaded {
+pub(crate) struct Loaded {
     program: HirProgram,
     packages: Vec<CheckedPackage>,
     graph: Option<Graph>,
@@ -314,36 +364,38 @@ struct Loaded {
 /// Reads `target`'s entry and checks it into HIR, after reading the
 /// package graph when the package lists a dependency besides `varyk-std`
 /// (M5b2 spec 4.1), then checks the `varyk-std` lines of the build under
-/// `rule` ([`StdRule::Publish`] for `varyk publish` only); reports an
-/// unreadable file or any diagnostics itself and returns the exit code to
-/// use on failure.
-fn load(
-    mut target: Target,
-    message_format: MessageFormat,
-    rule: StdRule,
-) -> Result<(Loaded, Target), ExitCode> {
-    let path = &target.entry;
-    let text = match fs::read_to_string(path) {
+/// `rule` ([`StdRule::Publish`] for `varyk publish` only). Prints
+/// nothing: an unreadable entry or any diagnostics come back as the
+/// [`Failure`].
+pub(crate) fn check_target(mut target: Target, rule: StdRule) -> Result<(Loaded, Target), Failure> {
+    let text = match fs::read_to_string(&target.entry) {
         Ok(text) => text,
         Err(err) => {
-            eprintln!("error: cannot read `{}`: {err}", path.display());
-            return Err(ExitCode::FAILURE);
+            return Err(Failure::Message(format!(
+                "cannot read `{}`: {err}",
+                target.entry.display()
+            )));
         }
     };
     let graph = match &target.package {
         Some(package) => match Graph::read(package) {
             Ok(graph) => graph,
-            Err(diagnostics) => {
-                emit_diagnostics(&diagnostics, &target.sources, message_format);
-                return Err(ExitCode::FAILURE);
-            }
+            Err(diagnostics) => return Err(Failure::Diagnostics(diagnostics, target.sources)),
         },
         None => None,
     };
-    let sources = &mut target.sources;
-    let entry = SourceFile::new(FileId(sources.len() as u32), path.to_path_buf(), text);
+    let entry = SourceFile::new(
+        FileId(target.sources.len() as u32),
+        target.entry.clone(),
+        text,
+    );
 
-    match check_file(entry, target.package.as_ref(), graph.as_ref(), sources) {
+    match check_file(
+        entry,
+        target.package.as_ref(),
+        graph.as_ref(),
+        &mut target.sources,
+    ) {
         Ok(checked) => {
             let build_uses_std = checked.program.uses_std
                 || checked
@@ -379,15 +431,24 @@ fn load(
                 };
                 Ok((loaded, target))
             } else {
-                emit_diagnostics(&std_problems, &target.sources, message_format);
-                Err(ExitCode::FAILURE)
+                Err(Failure::Diagnostics(std_problems, target.sources))
             }
         }
-        Err(diagnostics) => {
-            emit_diagnostics(&diagnostics, sources, message_format);
-            Err(ExitCode::FAILURE)
-        }
+        Err(diagnostics) => Err(Failure::Diagnostics(diagnostics, target.sources)),
     }
+}
+
+/// [`check_target`], reporting an unreadable file or any diagnostics
+/// itself and returning the exit code to use on failure.
+fn load(
+    target: Target,
+    message_format: MessageFormat,
+    rule: StdRule,
+) -> Result<(Loaded, Target), ExitCode> {
+    check_target(target, rule).map_err(|failure| {
+        emit_failure(&failure, message_format);
+        ExitCode::FAILURE
+    })
 }
 
 /// Runs `build`: checks the target, generates the Rust crate (printing it

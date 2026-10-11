@@ -2079,7 +2079,8 @@ blocks for built-in types; a `use` of an enum variant; naming a crate from
 Varyk code (write a `.rs` facade instead: a Rust file of the package that
 wraps what the program needs from the crate in plain functions, as
 "Calling Rust" shows); and everything planned for later milestones, such
-as `varyk fmt` and a language server.
+as `varyk fmt`, and hover and completion in an editor (see
+[Editors](#editors) for what an editor shows today).
 
 `unwrap` and `expect` are never added, in this or any later milestone: a
 call that stops the program when a value is absent defeats the purpose of a
@@ -3056,6 +3057,7 @@ varyk add http sql mongo                         add the official packages as `h
 varyk add sql [cargo add args]                   add one official package under its short name (`http`, `sql`, `mongo`)
 varyk publish [--assemble-only] [-- cargo args]  check, assemble a plain Rust crate, and run
                                                   cargo publish there
+varyk lsp                                        the language server your editor runs (see Editors)
 ```
 
 Without a file, each command works on the package found by looking for
@@ -3244,6 +3246,32 @@ needs no `varyk`: a consumer adds it to `[dependencies]` like any crate
 and builds it with plain `cargo build`, and `cargo install` of a
 published Varyk binary works the same way. A Varyk package that depends on a
 published Varyk library names it directly (see [Packages](#packages)).
+
+## Editors
+
+`varyk lsp` is the language server: an editor starts it and talks to it
+through its standard input and output, in the Language Server Protocol,
+and you never run it by hand. It takes no arguments and ignores
+`--message-format`. The Varyk extensions for VS Code and Zed, in
+[`varyk-editors`](https://github.com/Varyk-Lang/varyk-editors), start it
+for you; any other editor that speaks the protocol can too.
+
+Each time you open or save a `.vr` file, the server checks the program
+the file belongs to, exactly as `varyk check` would, and the editor
+underlines every error at its place, with its message, its notes, and its
+code. It checks what is on disk, so an error you fix shows as fixed once
+you save. An error with a suggested fix offers it as a quick fix, which
+may change another file (a missing `pub` is added where the item is
+declared); the fix is offered only while the file is as the last check
+read it, so after an edit, save first.
+
+The program a file belongs to is the package around the file, when its `Cargo.toml` has `src/main.vr` or
+`src/lib.vr`; otherwise the nearest `main.vr` in the file's folder or a
+folder above it, up to the folder open in the editor; otherwise the file
+alone. A module no `mod` line reaches yet gets no errors until one does.
+
+Hover, go-to-definition, completion, and checking as you type are not
+there yet.
 
 ## Error codes
 

@@ -12,6 +12,7 @@ pub mod diagnostics;
 pub mod driver;
 pub mod hir;
 pub mod interop;
+pub mod lsp;
 pub mod package;
 pub mod packages;
 pub mod resolve;

@@ -37,6 +37,11 @@ written for people and AI agents alike.
   fixture under `crates/varyk/tests/fixtures/errors/<code>_<slug>/`, a
   registration in `crates/varyk/tests/errors.rs`, and a line in the code
   list at the end of `docs/language.md`.
+- The grammars that highlight Varyk in editors live in two other
+  repositories: `Varyk-Lang/varyk-editors` (the VS Code and Zed extensions
+  and the TextMate grammar) and `Varyk-Lang/tree-sitter-varyk` (the
+  Tree-sitter grammar). A change to the syntax comes with pull requests
+  there; `AGENTS.md` has the rule.
 
 ## Commit messages and releases
 
