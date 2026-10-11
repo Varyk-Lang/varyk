@@ -286,14 +286,15 @@ fn is_mapped_name(name: &str) -> bool {
 /// What to change in a signature that is not callable for a reason of its
 /// own rather than one of its types (M3 spec 4.2).
 fn uncallable_note(imported: &ImportedFn) -> Option<String> {
-    if let Some(RustTy::Opaque(receiver)) = imported.params.first() {
-        if imported.owner.is_some() && receiver.contains("self") {
-            return Some(
-                "Varyk calls a method that takes `&self` or `&mut self`; a method that takes \
+    if let Some(RustTy::Opaque(receiver)) = imported.params.first()
+        && imported.owner.is_some()
+        && receiver.contains("self")
+    {
+        return Some(
+            "Varyk calls a method that takes `&self` or `&mut self`; a method that takes \
                  `self` any other way is not supported"
-                    .to_string(),
-            );
-        }
+                .to_string(),
+        );
     }
     if let Some(why) = imported.type_param_refused {
         return Some(format!(

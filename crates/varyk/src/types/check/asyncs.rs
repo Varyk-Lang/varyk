@@ -467,10 +467,10 @@ pub(super) fn map_value_spans(closure: &Expr) -> Vec<Span> {
         return Vec::new();
     };
     let mut spans = vec![body.span];
-    if let ExprKind::Block(block) = &body.kind {
-        if let (true, Some(tail)) = (block.stmts.is_empty(), &block.tail) {
-            spans.push(tail.span);
-        }
+    if let ExprKind::Block(block) = &body.kind
+        && let (true, Some(tail)) = (block.stmts.is_empty(), &block.tail)
+    {
+        spans.push(tail.span);
     }
     spans
 }

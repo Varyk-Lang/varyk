@@ -87,10 +87,10 @@ pub(super) fn infer(
         owned_returns: function.ret != Ty::Unit && !matches!(class, Classification::Part(_)),
     };
     flows.block(&function.body);
-    if flows.owned_returns {
-        if let Some(tail) = &function.body.tail {
-            flows.owned_slot(tail);
-        }
+    if flows.owned_returns
+        && let Some(tail) = &function.body.tail
+    {
+        flows.owned_slot(tail);
     }
     let Flows {
         mut owned,
@@ -699,10 +699,10 @@ impl Flows<'_> {
                 mix.free.push(id);
             } else if is_new_text(leaf) {
                 mix.owned_call = true;
-            } else if let Some(place) = self.place(leaf) {
-                if place.borrowed {
-                    mix.borrowed.push((leaf.span, place.origin));
-                }
+            } else if let Some(place) = self.place(leaf)
+                && place.borrowed
+            {
+                mix.borrowed.push((leaf.span, place.origin));
             }
         }
         if mix.owned_call || !mix.free.is_empty() {

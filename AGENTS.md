@@ -25,8 +25,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-CI runs the same on stable and on the minimum supported Rust version, 1.85.
-Do not use language features newer than 1.85 (let-chains, for example).
+CI runs the same on stable and on the minimum supported Rust version, 1.88.
+Do not use language features newer than 1.88.
 The programs under `examples/`, single files and the packages in
 `examples/packages/`, must keep building and printing their expected
 output; `crates/varyk/tests/examples.rs` checks that.

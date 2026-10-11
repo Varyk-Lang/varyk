@@ -676,10 +676,10 @@ impl Symbols {
         // A bare name (no path segment before it) may be a `use` alias of
         // `from`'s own file (spec 3.3); already visibility-checked when it
         // was registered, so it returns straight away.
-        if module.is_none() {
-            if let Some(UseTarget::Fn(callee)) = self.scopes[from.0 as usize].use_fns.get(name) {
-                return Ok(*callee);
-            }
+        if module.is_none()
+            && let Some(UseTarget::Fn(callee)) = self.scopes[from.0 as usize].use_fns.get(name)
+        {
+            return Ok(*callee);
         }
         let target = self.target_module(from, module)?;
         let scope = &self.scopes[target.0 as usize];
@@ -720,10 +720,10 @@ impl Symbols {
         name: &str,
     ) -> Result<UserType, LookupError> {
         // Same `use`-alias shortcut as `lookup_fn`.
-        if module.is_none() {
-            if let Some(UseTarget::Type(found)) = self.scopes[from.0 as usize].use_types.get(name) {
-                return Ok(*found);
-            }
+        if module.is_none()
+            && let Some(UseTarget::Type(found)) = self.scopes[from.0 as usize].use_types.get(name)
+        {
+            return Ok(*found);
         }
         let target = self.target_module(from, module)?;
         let scope = &self.scopes[target.0 as usize];
@@ -1017,20 +1017,20 @@ impl Symbols {
             for arg in &ty.args {
                 args.push(self.resolve_type(arg, from)?);
             }
-            if let (Some(key), true) = (args.first(), name == "HashMap") {
-                if !key.is_map_key() {
-                    return Err(Diagnostic::new(
-                        codes::V0101,
-                        ty.args[0].span,
-                        "a `HashMap` key must be of an integer type, `bool`, `string`, or \
+            if let (Some(key), true) = (args.first(), name == "HashMap")
+                && !key.is_map_key()
+            {
+                return Err(Diagnostic::new(
+                    codes::V0101,
+                    ty.args[0].span,
+                    "a `HashMap` key must be of an integer type, `bool`, `string`, or \
                          `Uuid`",
-                    )
-                    .with_note(
-                        "a key is compared and hashed to find its value; in Rust terms, the key \
+                )
+                .with_note(
+                    "a key is compared and hashed to find its value; in Rust terms, the key \
                          type must implement `Eq` and `Hash`, which floats, `Time`, `Bytes`, and \
                          Varyk's own types do not",
-                    ));
-                }
+                ));
             }
             let mut args = args.into_iter().map(Box::new);
             let mut next = || args.next().unwrap_or_else(|| Box::new(Ty::Unit));
@@ -2182,16 +2182,16 @@ fn resolve_signature(
         seen.entry(&name.name).or_insert(name.span);
         match symbols.resolve_binding_type(&param.ty, module) {
             Ok(ty) => {
-                if function.is_pub {
-                    if let Some(diagnostic) = symbols.private_in_public(
+                if function.is_pub
+                    && let Some(diagnostic) = symbols.private_in_public(
                         &ty,
                         param.ty.span,
                         &function.name.name,
                         reach,
                         exported,
-                    ) {
-                        diagnostics.push(diagnostic);
-                    }
+                    )
+                {
+                    diagnostics.push(diagnostic);
                 }
                 let mode = if param.mutable {
                     ParamMode::MutableBorrow
@@ -2209,16 +2209,16 @@ fn resolve_signature(
         None => Ty::Unit,
         Some(written) => match symbols.resolve_type(written, module) {
             Ok(ty) => {
-                if function.is_pub {
-                    if let Some(diagnostic) = symbols.private_in_public(
+                if function.is_pub
+                    && let Some(diagnostic) = symbols.private_in_public(
                         &ty,
                         written.span,
                         &function.name.name,
                         reach,
                         exported,
-                    ) {
-                        diagnostics.push(diagnostic);
-                    }
+                    )
+                {
+                    diagnostics.push(diagnostic);
                 }
                 ty
             }

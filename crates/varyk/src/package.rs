@@ -245,19 +245,17 @@ fn load_as(
     // Every top-level key cargo reads as a table must be one; anything
     // else is a manifest cargo refuses, whichever way the value is spelled.
     for name in TABLE_KEYS {
-        if let Some((key, value)) = entry(&doc, name) {
-            if !matches!(value.get_ref(), DeValue::Table(_)) {
-                diagnostics.push(
-                    Diagnostic::new(
-                        codes::V0403,
-                        at(key.span()),
-                        format!("`{name}` must be a table, `[{name}]`"),
-                    )
-                    .with_note(
-                        "cargo would refuse this manifest; write the table as cargo expects",
-                    ),
-                );
-            }
+        if let Some((key, value)) = entry(&doc, name)
+            && !matches!(value.get_ref(), DeValue::Table(_))
+        {
+            diagnostics.push(
+                Diagnostic::new(
+                    codes::V0403,
+                    at(key.span()),
+                    format!("`{name}` must be a table, `[{name}]`"),
+                )
+                .with_note("cargo would refuse this manifest; write the table as cargo expects"),
+            );
         }
     }
     for (key, value) in package {
@@ -267,19 +265,18 @@ fn load_as(
     }
     // `rust-version` is a version without the patch part being required
     // (`1.85`), and without pre-release or build parts.
-    if let Some((_, value)) = entry(package, "rust-version") {
-        if let DeValue::String(version) = value.get_ref() {
-            if !is_partial_version(version) {
-                diagnostics.push(
-                    Diagnostic::new(
-                        codes::V0403,
-                        at(value.span()),
-                        format!("`{version}` is not a Rust version"),
-                    )
-                    .with_note("cargo needs `MAJOR.MINOR` or `MAJOR.MINOR.PATCH`, such as `1.85`"),
-                );
-            }
-        }
+    if let Some((_, value)) = entry(package, "rust-version")
+        && let DeValue::String(version) = value.get_ref()
+        && !is_partial_version(version)
+    {
+        diagnostics.push(
+            Diagnostic::new(
+                codes::V0403,
+                at(value.span()),
+                format!("`{version}` is not a Rust version"),
+            )
+            .with_note("cargo needs `MAJOR.MINOR` or `MAJOR.MINOR.PATCH`, such as `1.85`"),
+        );
     }
     if let Some((links, _)) = entry(package, "links") {
         diagnostics.push(
@@ -429,20 +426,20 @@ fn load_as(
     }
     // `build` may only be left out or `false`: no crate Varyk builds runs a
     // build script (M5b2 spec 4.6).
-    if let Some((key, value)) = entry(package, "build") {
-        if matches!(value.get_ref(), DeValue::String(_) | DeValue::Boolean(true)) {
-            diagnostics.push(
-                Diagnostic::new(
-                    codes::V0401,
-                    at(key.span()),
-                    "a build script cannot be used",
-                )
-                .with_note(
-                    "the crates `varyk build` makes and `varyk publish` assembles run no build \
+    if let Some((key, value)) = entry(package, "build")
+        && matches!(value.get_ref(), DeValue::String(_) | DeValue::Boolean(true))
+    {
+        diagnostics.push(
+            Diagnostic::new(
+                codes::V0401,
+                at(key.span()),
+                "a build script cannot be used",
+            )
+            .with_note(
+                "the crates `varyk build` makes and `varyk publish` assembles run no build \
                      script; leave `build` out, or write `build = false`",
-                ),
-            );
-        }
+            ),
+        );
     }
     if let Some((_, targets)) = table(&doc, "target") {
         for (_, target) in targets {
@@ -638,23 +635,24 @@ fn load_as(
         &at,
         &mut diagnostics,
     );
-    if has_main && !has_lib {
-        if let Some(reserved) = program_name_problem(&name) {
-            diagnostics.push(
-                Diagnostic::new(
-                    codes::V0403,
-                    package_span,
-                    format!(
-                        "this program cannot be called `{name}`: Cargo, Rust's build tool, keeps \
+    if has_main
+        && !has_lib
+        && let Some(reserved) = program_name_problem(&name)
+    {
+        diagnostics.push(
+            Diagnostic::new(
+                codes::V0403,
+                package_span,
+                format!(
+                    "this program cannot be called `{name}`: Cargo, Rust's build tool, keeps \
                          its own `{reserved}` folder where it would put the program"
-                    ),
-                )
-                .with_note(
-                    "pick another name, or make the package a library (`src/lib.vr`), which \
-                     may use this name",
                 ),
-            );
-        }
+            )
+            .with_note(
+                "pick another name, or make the package a library (`src/lib.vr`), which \
+                     may use this name",
+            ),
+        );
     }
     if !diagnostics.is_empty() {
         return Err(diagnostics);

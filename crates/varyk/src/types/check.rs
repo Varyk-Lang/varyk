@@ -1803,16 +1803,15 @@ impl FnChecker<'_> {
             }
             Err(LookupError::Unknown) => {
                 // `Shape::Circle { .. }`: a variant with named fields.
-                if let Some((prefix, last)) = module.and_then(split_last) {
-                    if let Ok(UserType::Enum(enum_id)) =
+                if let Some((prefix, last)) = module.and_then(split_last)
+                    && let Ok(UserType::Enum(enum_id)) =
                         self.symbols
                             .lookup_type(self.module, prefix.as_ref(), &last.name)
-                    {
-                        let def = &self.symbols.enums[enum_id.0 as usize];
-                        if def.variant(&name.name).is_some() {
-                            let owner = module.map(path_text).unwrap_or_default();
-                            return self.named_variant(enum_id, &owner, name, fields, span);
-                        }
+                {
+                    let def = &self.symbols.enums[enum_id.0 as usize];
+                    if def.variant(&name.name).is_some() {
+                        let owner = module.map(path_text).unwrap_or_default();
+                        return self.named_variant(enum_id, &owner, name, fields, span);
                     }
                 }
                 let diagnostic = self
@@ -2155,19 +2154,19 @@ impl FnChecker<'_> {
             diagnostic = diagnostic.with_note(note);
         }
         // A `Result` where its value is wanted: suggest `?`.
-        if let Ty::Result(ok, error) = found {
-            if **error == Ty::Error {
-                diagnostic = self.question_help(diagnostic, span, expected, Some(ok));
-            }
+        if let Ty::Result(ok, error) = found
+            && **error == Ty::Error
+        {
+            diagnostic = self.question_help(diagnostic, span, expected, Some(ok));
         }
         // A `Shared` is not the struct it holds (milestone 5b1 spec 2.6).
-        if let Ty::Shared(inner) = found {
-            if **inner == *expected {
-                diagnostic = diagnostic.with_note(
-                    "a `Shared` is a handle to the struct, not the struct itself; read the \
+        if let Ty::Shared(inner) = found
+            && **inner == *expected
+        {
+            diagnostic = diagnostic.with_note(
+                "a `Shared` is a handle to the struct, not the struct itself; read the \
                      fields it needs through the handle and pass those instead",
-                );
-            }
+            );
         }
         self.diagnostics.push(diagnostic);
     }
@@ -2237,10 +2236,10 @@ impl FnChecker<'_> {
             }
         };
         if matches!(error, LookupError::Unknown) {
-            if let Some(name) = hint {
-                if let Some(note) = self.symbols.did_you_mean(self.module, name) {
-                    diagnostic = diagnostic.with_note(note);
-                }
+            if let Some(name) = hint
+                && let Some(note) = self.symbols.did_you_mean(self.module, name)
+            {
+                diagnostic = diagnostic.with_note(note);
             }
             if let Some(note) = self.symbols.not_added(self.module, path) {
                 diagnostic = diagnostic.with_note(note);

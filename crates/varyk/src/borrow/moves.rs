@@ -166,21 +166,21 @@ impl Rule for Moves<'_> {
             marks.remove(&local);
             return;
         }
-        if let Some(&moved) = marks.get(&local) {
-            if self.reported.insert((span.start, span.end)) {
-                let name = &self.locals[local.0 as usize].name;
-                let mut diagnostic = Diagnostic::new(
-                    codes::V0305,
-                    span,
-                    format!("`{name}` was given away earlier and cannot be used again"),
-                )
-                .with_label(moved, format!("`{name}` is given away here"));
-                if repeating {
-                    diagnostic = diagnostic
-                        .with_note("it was given away the previous time through the loop");
-                }
-                self.diagnostics.push(diagnostic);
+        if let Some(&moved) = marks.get(&local)
+            && self.reported.insert((span.start, span.end))
+        {
+            let name = &self.locals[local.0 as usize].name;
+            let mut diagnostic = Diagnostic::new(
+                codes::V0305,
+                span,
+                format!("`{name}` was given away earlier and cannot be used again"),
+            )
+            .with_label(moved, format!("`{name}` is given away here"));
+            if repeating {
+                diagnostic =
+                    diagnostic.with_note("it was given away the previous time through the loop");
             }
+            self.diagnostics.push(diagnostic);
         }
         let info = &self.locals[local.0 as usize];
         if access == Access::Move && movable(info) && self.never_given_away.contains(&local) {

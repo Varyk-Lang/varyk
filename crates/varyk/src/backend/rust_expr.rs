@@ -460,11 +460,11 @@ impl<'a> FnEmitter<'a> {
             } => {
                 let (mut path, modes) = self.callee(*callee, type_arg.as_ref());
                 // `json::parse` and `env::parse` name the type they read (M5a spec 7.5).
-                if let (Callee::Builtin(id), Ty::Result(read, _)) = (callee, &expr.ty) {
-                    if matches!(id.get().owner, Owner::Json | Owner::Env) {
-                        let read = rust_type(self.program, read, self.module);
-                        path = format!("{path}::<{read}>");
-                    }
+                if let (Callee::Builtin(id), Ty::Result(read, _)) = (callee, &expr.ty)
+                    && matches!(id.get().owner, Owner::Json | Owner::Env)
+                {
+                    let read = rust_type(self.program, read, self.module);
+                    path = format!("{path}::<{read}>");
                 }
                 // `Task::all` over tasks giving a `Result` returns at the
                 // first `Err`, `varyk-std`'s `try_all`; `Task::all_settled`

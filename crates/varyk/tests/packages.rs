@@ -1238,7 +1238,7 @@ fn an_assembled_crate_with_a_pub_use_passes_clippy() {
         .current_dir(&krate)
         .output();
     match clippy {
-        // No clippy on this toolchain (the 1.85 job installs none): nothing to check.
+        // No clippy on this toolchain (the 1.88 job installs none): nothing to check.
         Ok(out)
             if String::from_utf8_lossy(&out.stderr).contains("no such command")
                 || String::from_utf8_lossy(&out.stderr)

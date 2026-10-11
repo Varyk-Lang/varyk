@@ -169,7 +169,7 @@ form, so the agent fixes its own mistakes before a person looks.
 
 ## Try it
 
-You need a stable Rust toolchain, 1.85 or newer, installed through
+You need a stable Rust toolchain, 1.88 or newer, installed through
 [rustup](https://rustup.rs). Varyk calls `cargo` to build your program.
 
 Install the compiler from crates.io, write a new package, and run it:

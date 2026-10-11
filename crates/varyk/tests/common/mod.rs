@@ -200,11 +200,11 @@ fn sibling_dependencies(dir: &Path) -> Vec<String> {
 fn run_dir(kind: &str) -> PathBuf {
     static SWEPT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join(kind);
-    if let Ok(mut swept) = SWEPT.lock() {
-        if !swept.iter().any(|done| done == kind) {
-            sweep(&parent);
-            swept.push(kind.to_string());
-        }
+    if let Ok(mut swept) = SWEPT.lock()
+        && !swept.iter().any(|done| done == kind)
+    {
+        sweep(&parent);
+        swept.push(kind.to_string());
     }
     parent.join(std::process::id().to_string())
 }

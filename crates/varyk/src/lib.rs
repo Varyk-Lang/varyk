@@ -278,11 +278,11 @@ fn shown(dir: &Path) -> PathBuf {
 fn without_repeated_fix_its(mut diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
     let mut seen = Vec::new();
     for diagnostic in &mut diagnostics {
-        if let Some(fix_it) = diagnostic.fix_it.take() {
-            if !seen.contains(&fix_it) {
-                seen.push(fix_it.clone());
-                diagnostic.fix_it = Some(fix_it);
-            }
+        if let Some(fix_it) = diagnostic.fix_it.take()
+            && !seen.contains(&fix_it)
+        {
+            seen.push(fix_it.clone());
+            diagnostic.fix_it = Some(fix_it);
         }
     }
     diagnostics

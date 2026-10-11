@@ -507,15 +507,15 @@ fn gone_message(
         };
         return format!("the `Vec` this value is part of {when}, so {consequence}");
     }
-    if let HirExprKind::Field { base, .. } = &leaf.kind {
-        if let (Ty::Struct(id), false) = (&base.ty, is_block_like(field_root(base))) {
-            let name = cx.struct_name(*id);
-            return format!(
-                "this value is kept inside {} `{name}` that is not stored anywhere, so \
+    if let HirExprKind::Field { base, .. } = &leaf.kind
+        && let (Ty::Struct(id), false) = (&base.ty, is_block_like(field_root(base)))
+    {
+        let name = cx.struct_name(*id);
+        return format!(
+            "this value is kept inside {} `{name}` that is not stored anywhere, so \
                  {consequence}; store the `{name}` with `let` first",
-                article(name)
-            );
-        }
+            article(name)
+        );
     }
     if !is_block_like(whole) {
         return format!("this value is gone after this line, so {consequence}");
@@ -765,10 +765,10 @@ fn places(
         diagnostics,
     };
     analyzer.block(body);
-    if *ret != Ty::Unit {
-        if let Some(tail) = &body.tail {
-            analyzer.returned(tail);
-        }
+    if *ret != Ty::Unit
+        && let Some(tail) = &body.tail
+    {
+        analyzer.returned(tail);
     }
     let dropped = (0..analyzer.locals.len())
         .map(|id| analyzer.dropped_advice(LocalId(id as u32)))
@@ -1360,10 +1360,10 @@ impl FnAnalyzer<'_> {
     /// V0001 when `call` has `rooted` and the argument it borrows from is
     /// not stored anywhere (see [`borrowed_receiver`]).
     fn rooted_argument_stored(&mut self, call: &HirExpr) {
-        if let Some(argument) = rooted_argument(call) {
-            if let Err(diagnostic) = borrowed_receiver(self.cx, argument) {
-                self.diagnostics.push(diagnostic);
-            }
+        if let Some(argument) = rooted_argument(call)
+            && let Err(diagnostic) = borrowed_receiver(self.cx, argument)
+        {
+            self.diagnostics.push(diagnostic);
         }
     }
 
@@ -1473,10 +1473,10 @@ impl FnAnalyzer<'_> {
                 for root in roots(leaf) {
                     push_unique(&mut self.assigned.roots[index], root);
                 }
-            } else if let HirExprKind::Local(id) = leaf.kind {
-                if leaf.ty == Ty::String {
-                    push_unique(&mut self.assigned.copies[index], id);
-                }
+            } else if let HirExprKind::Local(id) = leaf.kind
+                && leaf.ty == Ty::String
+            {
+                push_unique(&mut self.assigned.copies[index], id);
             }
         }
     }
@@ -1845,12 +1845,12 @@ impl FnAnalyzer<'_> {
                 self.diagnostics.push(diagnostic);
                 return;
             }
-            if let Some(mutable) = *lent {
-                if include_copy || !value.ty.is_copy() {
-                    let receiver = index == 0 && method.is_some();
-                    for root in roots(value) {
-                        held.push((root, mutable, value.span, receiver));
-                    }
+            if let Some(mutable) = *lent
+                && (include_copy || !value.ty.is_copy())
+            {
+                let receiver = index == 0 && method.is_some();
+                for root in roots(value) {
+                    held.push((root, mutable, value.span, receiver));
                 }
             }
         }
@@ -2688,10 +2688,10 @@ impl FnAnalyzer<'_> {
                 decl.name
             ));
         }
-        if diagnostic.code == codes::V0300 {
-            if let Some(note) = &self.alias_notes[root.0 as usize] {
-                diagnostic = diagnostic.with_note(note.clone());
-            }
+        if diagnostic.code == codes::V0300
+            && let Some(note) = &self.alias_notes[root.0 as usize]
+        {
+            diagnostic = diagnostic.with_note(note.clone());
         }
         diagnostic
     }

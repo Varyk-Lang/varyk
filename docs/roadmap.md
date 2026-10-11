@@ -12,7 +12,7 @@ date. An item in progress is marked in its text.
 
 Spec: `docs/specs/2026-09-23-varyk-design.md`.
 
-- [x] Workspace with `varyk-syntax` and `varyk` crates, stable toolchain, MSRV 1.85 checked in CI, edition 2024
+- [x] Workspace with `varyk-syntax` and `varyk` crates, stable toolchain, MSRV checked in CI (1.85, 1.88 since 0.9), edition 2024
 - [x] Lexer and recursive-descent parser with spans on every node
 - [x] Resolver, type checker, and borrow analysis (modes, places, moves, per-binding string representation) producing HIR
 - [x] `println!` intrinsic with placeholder-count check
