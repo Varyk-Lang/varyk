@@ -2978,15 +2978,22 @@ code that uses it, once per package cargo resolved, however many paths reach
 it. Its `pub` items then enter your program as items from another package.
 If it does not pass, its errors are shown at its own files with the note
 "in the package `units` 0.1.0, which this build uses", and checking stops;
-the usual cause is a package written for another version of Varyk, and one
-of the errors is then V0404 on its `varyk-std` line. The `Cargo.lock` of a
-package you depend on is ignored: only the lock of the package being built
-decides versions. When the build uses `varyk-std`, the version cargo picks
-must be no older than the compiler's (V0404 at the program's `varyk-std`
-line, or its `Cargo.toml` when it has none, with `cargo update -p
-varyk-std` as help). A program counts as logging, and so as using
-`varyk-std`, when any Varyk package of the build calls `log`, so a
-package's log lines are not lost in a program that writes none.
+the usual cause is a package written for another version of Varyk. When
+its `varyk-std` line names a varyk newer than the compiler, one of the
+errors is V0404 on that line; when it names an older minor, each error gets
+one more note, "`units` was written for varyk 0.8; a newer release of it
+may build with this compiler". The `Cargo.lock` of a package you depend on
+is ignored: only the lock of the package being built decides versions.
+Every Varyk crate of the build uses the compiler's own `varyk-std`,
+whatever version a package's line names (see [`varyk add` and
+upgrading](#varyk-add-and-upgrading)). Only `varyk publish` asks that the
+`varyk-std` cargo picks for the build, from the lines and the lock as
+written, be no older than the compiler's (V0404 at the program's
+`varyk-std` line, or its `Cargo.toml` when it has none), since the crate it
+ships is built by plain cargo from those. A program counts as logging,
+and so as using `varyk-std`, when any Varyk package of the build calls
+`log`, so a package's log lines are not lost in a program that writes
+none.
 
 `varyk build`, `varyk run`, and `varyk test` then write a crate for each
 Varyk package of the build under `target/varyk/packages/<name>-<version>/`:
@@ -3173,16 +3180,38 @@ features, such as `json`, `log`, `time::sleep`, or `Task::all`, starts a call, o
 async `main` or an async test; `Shared` alone, which is std's `Arc`, does
 not count) needs `varyk-std` in `[dependencies]`, as `"X.Y"` or `"X.Y.Z"`
 (a leading `^` is fine) or a table with such a `version` and no `path`,
-`git`, `optional`, or `package`, where `X.Y` is the compiler's version
-(`~`, `=`, `>=`, `*` and lists are refused); and if `Cargo.lock` locks
-`varyk-std`, a version no older than the compiler's. When the program or
-a Varyk package it uses needs `varyk-std`, the one `varyk-std` cargo picks
-for the whole build must be no older than the compiler's either (V0404 at
-the program's `varyk-std` line, or its `Cargo.toml`). `varyk check` says
-which of these fails (V0404) and the line to write. To upgrade, run
-`cargo install varyk`, then whatever `varyk check` asks for: change the
-line, or run `cargo update -p varyk-std`. A single file has no
-`Cargo.toml`; its generated crate depends on the compiler's exact version.
+`git`, `optional`, or `package` (`~`, `=`, `>=`, `*` and lists are
+refused). The version is the oldest varyk the program or package was
+written for: this compiler and every later one accept it, and an earlier
+one refuses it (V0404, "this package needs varyk 0.8 or later", with the
+compiler's own version in a note). To upgrade, run `cargo install varyk`.
+
+Whatever the line says, the build uses the compiler's own `varyk-std`: in
+every manifest it writes for the build, the program's and each Varyk
+package's, the `varyk-std` line becomes the compiler's version. The
+program's own `Cargo.toml` and `Cargo.lock` are never written. Until the
+program's line is on the compiler's minor and its lock holds the
+compiler's `varyk-std`, each build asks the crates.io index for it again,
+which needs the network every time. To end that, move the line (or add
+one, if the program has none) and run `cargo update -p varyk-std` in the
+program's folder; when the lock already holds two `varyk-std`s (a package
+of the build written for an older minor), cargo calls that name
+ambiguous, and `cargo update -p varyk-std@X.Y.Z`, naming the one on the
+compiler's minor, does it instead.
+
+`varyk publish` asks more, since the crate it ships is built by plain
+cargo with the `varyk-std` its `Cargo.toml` and lock name, and no varyk
+rewrites them: the line must be on the compiler's minor ("`varyk-std` must
+be version 0.9, the version of this compiler"); a `Cargo.lock` that locks
+`varyk-std` on that minor must lock one no older than the compiler; and,
+when the program or a Varyk package it uses needs `varyk-std`, the one
+`varyk-std` cargo picks for the whole build must be no older than the
+compiler's either (V0404 at the program's `varyk-std` line, or its
+`Cargo.toml`). The note names both causes: a Varyk package of the build
+written for an older varyk, for which a release of it written for this one
+is the fix, or a lock that is out of date, for which `cargo update -p
+varyk-std` is. A single file has no `Cargo.toml`; its generated crate
+depends on the compiler's exact version.
 
 ### `varyk publish`
 
@@ -3283,7 +3312,7 @@ Every error has a code. A code is never reused for a different meaning.
 | V0401 | something in `Cargo.toml` Varyk does not support yet: a key outside the fixed set `check` reads, a `src/bin/`, `examples/`, `tests/`, or `benches/` directory or the root file of the other kind (`src/lib.rs` beside `src/main.vr`), which cargo would build as further targets, a setting taken from a Cargo workspace (`workspace = true`), dependencies for only some platforms (`[target.'cfg(..)'.dependencies]`), `links`, which needs a build script no crate Varyk builds runs, a `build` key other than `build = false`, a dependency keyed `std`, `core`, or `alloc`, `[lints]`, or `[patch]` or `[replace]`, in the package or in the root manifest of an enclosing workspace; or a Varyk package the build reaches other than through the `[dependencies]` of the program or of a Varyk package it uses (through `[dev-dependencies]`, as an `optional` dependency a feature turned on, or through a Rust crate), or a Varyk package of the build with the same name and version as another `path` package or Varyk package of the build; the message names the package and what reaches it; also a dependency marked `optional` named in Varyk code |
 | V0402 | a Cargo target table not supported yet: `[[example]]`, `[[test]]`, `[[bench]]`, or a `[[bin]]` or `[lib]` that is not the one naming the package's own root (`name` the package's name, `path` `src/main.vr` or `src/lib.vr`, no other key) |
 | V0403 | a `Cargo.toml` that cannot be used: it cannot be read, is not valid TOML, has a top-level key cargo reads as a table (`workspace`, `dependencies`, `features`, ...) that is not one, has no `[package]` `name`, names with `workspace` a directory that has no workspace manifest or sits under a `Cargo.toml` whose `workspace` is not a table, or its `name` is not letters, digits, `-`, and `_` starting with a letter or `_`, or a `[package]` key has a value of the wrong shape (`license = 1`), or its `rust-version` is not `MAJOR.MINOR[.PATCH]`, or is `cache`, `package`, or `packages`, or a program (not a library) is called `deps`, `examples`, `build`, or `incremental` in any case, the names of Cargo's own build folders, or its `version` is present but not text of the form `MAJOR.MINOR.PATCH` that cargo accepts; or its package has both `src/main.vr` and `src/lib.vr` (from the command line, a `Cargo.toml` found but whose package has neither is reported before any check runs: "no Varyk package here" and why, in one line) |
-| V0404 | the `varyk-std` dependency of a program that uses it (or of a Varyk package of the build that uses it, at that package's own `Cargo.toml`, whose lock is not read) is missing, comes from a `path` or `git`, is `optional` or renamed, has a requirement that is not `X.Y` or `X.Y.Z` (optionally `^`) on the compiler's version, or `Cargo.lock` locks an older `varyk-std`; or, when the program or a Varyk package it uses needs `varyk-std`, the `varyk-std` cargo resolves for the build is older than the compiler (at the program's `varyk-std` line, or its `Cargo.toml`, and not beside the `Cargo.lock` one); the note gives the line to write, or `cargo update -p varyk-std` |
+| V0404 | a `varyk-std` line this compiler cannot build with, in a program that uses `varyk-std` (or in a Varyk package of the build that uses it, at that package's own `Cargo.toml`, whose lock is not read): missing, from a `path` or `git`, `optional` or renamed, a requirement that is not `X.Y` or `X.Y.Z` (optionally `^`), or newer than the compiler (the note gives the compiler's version and `cargo install varyk`). Under `varyk publish`, also a line on any minor but the compiler's, a `Cargo.lock` that locks a `varyk-std` on the compiler's minor older than the compiler, or, when the program or a Varyk package it uses needs `varyk-std`, an older `varyk-std` resolved for the build (at the program's `varyk-std` line, or its `Cargo.toml`, and not beside the `Cargo.lock` one); the note gives the line to write, or `cargo update -p varyk-std` |
 | V0405 | cargo could not work out which packages the build uses (`cargo metadata` failed, for example on a `path` dependency whose folder is missing, or offline with a package not yet downloaded); the note carries cargo's own message |
 | V0406 | a package whose `Cargo.toml` does not name its `.vr` root as its target: no `[[bin]]` (`name` the package's name, `path = "src/main.vr"`) or `[lib]` (`path = "src/lib.vr"`); the note and the help give the lines to add |
 | V0407 | the `varyk-http` package of the build does not match this compiler: its `App`, `Request`, or `Response` is not a struct named at its root, at its `Cargo.toml`; the note names the package's version, this compiler's, and what is missing, and points to the version table in `varyk-http`'s README |

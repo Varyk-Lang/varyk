@@ -664,3 +664,4 @@ Appended to the decisions log of M1 §10.
 | Versioning | a version range in `Cargo.toml`, minor and lock checked by `varyk check` | upgrades are `cargo update`; a mismatch is a diagnostic, never a rustc error |
 | Single files | depend on `varyk-std` at the compiler's exact version | there is no manifest to respect |
 | TOML | not in 5a | nothing on the golden path needs it; the same machinery adds it later |
+| Versioning, amended (2026-10-11) | the `varyk-std` line is the oldest varyk a package needs; the build uses the compiler's own `varyk-std`; the minor and the lock are checked by `varyk publish` only | see [2026-10-11-std-minimum-design.md](2026-10-11-std-minimum-design.md) |

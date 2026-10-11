@@ -14,7 +14,7 @@ use std::process::{Command, ExitStatus};
 use varyk_syntax::FileId;
 
 use crate::CheckedPackage;
-use crate::backend::{Backend, CrateInfo, GeneratedCrate, RustBackend, with_local_std};
+use crate::backend::{Backend, CrateInfo, GeneratedCrate, RustBackend, with_build_std};
 use crate::packages::{DepTarget, Graph};
 
 mod cargo;
@@ -152,8 +152,9 @@ pub fn package_dirs(root: &Path, graph: &Graph) -> io::Result<Vec<PathBuf>> {
 /// its own keys (M5b2 spec 5), with its isolated manifest given the
 /// generated root as its library target, named after the package with
 /// `-` as `_` (cargo refuses a `-` there), its dependencies on Varyk
-/// packages turned into those packages' crates, and, under
-/// `VARYK_STD_PATH`, its `varyk-std` that directory (spec 4.7).
+/// packages turned into those packages' crates, and its `varyk-std` the
+/// compiler's own, its version or the directory `VARYK_STD_PATH` names
+/// (std-minimum spec 3).
 pub fn package_crates(
     checked: &[CheckedPackage],
     graph: &Graph,
@@ -167,7 +168,7 @@ pub fn package_crates(
             let manifest = with_lib_target(package.manifest.clone(), &package.name);
             let info = CrateInfo {
                 name: package.name.clone(),
-                manifest: with_local_std(with_package_paths(manifest, deps, dirs)),
+                manifest: with_build_std(with_package_paths(manifest, deps, dirs)),
                 std_dependency: None,
             };
             Some(PackageCrate {

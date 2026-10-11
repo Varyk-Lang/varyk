@@ -1639,3 +1639,129 @@ fn a_warning_in_a_package_is_not_shown() {
     let stderr = stderr(&output);
     assert!(!stderr.contains("unused"), "{stderr}");
 }
+
+// --- A package's `varyk-std` line is its minimum (std-minimum spec 7) -------
+
+/// Under one new directory: `std-stub/`, a stub crate named `varyk-std` at
+/// 0.1.0, which crates.io never published and no release outgrows;
+/// `units/`, a library whose `varyk-std` line is `"0.1"` and which names
+/// `Error`, so its line is checked; and `app/`, a program on the
+/// compiler's version that uses `units` by `path`, whose
+/// `.cargo/config.toml` patches the stub in under a renamed entry beside
+/// the one `VARYK_STD_PATH` adds. Returns the parent directory.
+fn older_minor_package() -> PathBuf {
+    let parent = empty_dir("older_minor_std");
+    fs::create_dir_all(parent.join("std-stub/src")).unwrap();
+    fs::write(
+        parent.join("std-stub/Cargo.toml"),
+        "[package]\nname = \"varyk-std\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(parent.join("std-stub/src/lib.rs"), "").unwrap();
+
+    fs::create_dir_all(parent.join("units/src")).unwrap();
+    fs::write(
+        parent.join("units/Cargo.toml"),
+        "[package]\nname = \"units\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [lib]\npath = \"src/lib.vr\"\n\n[dependencies]\nvaryk-std = \"0.1\"\n",
+    )
+    .unwrap();
+    fs::write(
+        parent.join("units/src/lib.vr"),
+        "pub fn positive(n: i32) -> Result<i32, Error> {\n    if n < 0 {\n        \
+         return Err(Error::new(\"negative\"));\n    }\n    Ok(n)\n}\n",
+    )
+    .unwrap();
+
+    fs::create_dir_all(parent.join("app/src")).unwrap();
+    fs::create_dir_all(parent.join("app/.cargo")).unwrap();
+    fs::write(
+        parent.join("app/Cargo.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [[bin]]\nname = \"app\"\npath = \"src/main.vr\"\n\n[dependencies]\n\
+             units = {{ path = \"../units\" }}\nvaryk-std = \"{}\"\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .unwrap();
+    fs::write(
+        parent.join("app/.cargo/config.toml"),
+        "[patch.crates-io]\nvaryk-std-old = { package = \"varyk-std\", path = \"../std-stub\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        parent.join("app/src/main.vr"),
+        "fn main() {\n    match units::positive(3) {\n        \
+         Ok(n) => println!(\"positive {}\", n),\n        \
+         Err(e) => println!(\"failed: {}\", e.message()),\n    }\n}\n",
+    )
+    .unwrap();
+    parent
+}
+
+/// A package whose `varyk-std` line is an older minor builds under this
+/// compiler: the program checks, builds, and runs, and every generated
+/// manifest names the compiler's own `varyk-std` (std-minimum spec 3, 7).
+#[test]
+fn a_package_written_for_an_older_varyk_builds_with_the_compilers_varyk_std() {
+    let parent = older_minor_package();
+    let app = parent.join("app");
+
+    assert_success(&varyk_in(&app, &["check"]));
+    let output = varyk_in(&app, &["run"]);
+    assert_success(&output);
+    assert_eq!(stdout(&output), "positive 3\n");
+
+    let std = common::std_path().display().to_string();
+    for manifest in [
+        "target/varyk/app/Cargo.toml",
+        "target/varyk/packages/units-0.1.0/Cargo.toml",
+    ] {
+        let text = fs::read_to_string(app.join(manifest)).unwrap();
+        assert!(text.contains(&std), "{manifest}:\n{text}");
+        assert!(!text.contains("\"0.1\""), "{manifest}:\n{text}");
+    }
+}
+
+/// `varyk publish` keeps the exact minor: a package on an older one is
+/// V0404 with publish's message (std-minimum spec 2, 7).
+#[test]
+fn publish_refuses_a_package_whose_varyk_std_line_is_an_older_minor() {
+    let parent = older_minor_package();
+
+    let output = varyk_in(&parent.join("units"), &["publish", "--assemble-only"]);
+
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let stderr = stderr(&output);
+    assert!(stderr.contains("V0404"), "{stderr}");
+    let (major, minor) = (
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
+    );
+    assert!(
+        stderr.contains(&format!(
+            "`varyk-std` must be version {major}.{minor}, the version of this compiler"
+        )),
+        "{stderr}"
+    );
+}
+
+/// `varyk publish` of a program whose build resolves an older `varyk-std`,
+/// through a package written for an older varyk, is V0404 for it
+/// (std-minimum spec 2, 7).
+#[test]
+fn publish_refuses_a_program_whose_build_resolves_an_older_varyk_std() {
+    let parent = older_minor_package();
+
+    let output = varyk_in(&parent.join("app"), &["publish", "--assemble-only"]);
+
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let stderr = stderr(&output);
+    assert!(stderr.contains("V0404"), "{stderr}");
+    assert!(
+        stderr
+            .contains("this build would use `varyk-std` 0.1.0, which is older than this compiler"),
+        "{stderr}"
+    );
+}
