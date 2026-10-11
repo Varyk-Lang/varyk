@@ -1,0 +1,11 @@
+---
+source: crates/varyk/tests/errors.rs
+expression: without_version(& stderr)
+---
+error[V0404]: this program needs varyk 999.0 or later
+ --> crates/varyk/tests/fixtures/errors/v0404_std_newer_than_compiler/Cargo.toml:7:1
+  |
+7 | varyk-std = "999.0"
+  | ^^^^^^^^^ this program needs varyk 999.0 or later
+  |
+  = note: this compiler is varyk [version]; `cargo install varyk` installs the newest

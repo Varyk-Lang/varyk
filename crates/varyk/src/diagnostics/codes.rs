@@ -199,9 +199,12 @@ pub const V0402: &str = "V0402";
 /// `[package]` `name`, an invalid or reserved `name`, or both or neither
 /// of `src/main.vr` and `src/lib.vr`.
 pub const V0403: &str = "V0403";
-/// A program that uses `varyk-std` whose `Cargo.toml` does not depend on
-/// it, depends on it from a `path` or `git` or with a version that is not
-/// the compiler's minor, or whose `Cargo.lock` holds an older one.
+/// A `varyk-std` line this compiler cannot build with, in a program or
+/// package that uses `varyk-std`: missing, from a `path` or `git`,
+/// optional, renamed, not `X.Y` or `X.Y.Z` (optionally with `^`), or newer
+/// than the compiler. Under `varyk publish`, also any minor but the
+/// compiler's, a locked `varyk-std` on the compiler's minor older than it,
+/// or an older `varyk-std` resolved for the build.
 pub const V0404: &str = "V0404";
 /// Cargo could not say which packages the build uses (`cargo metadata`
 /// failed, or could not be run); carries cargo's own message.

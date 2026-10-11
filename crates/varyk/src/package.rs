@@ -868,15 +868,31 @@ fn table_key_span(doc: &DeTable<'_>, name: &str) -> Option<Range<usize>> {
     entry(doc, name).map(|(key, _)| key.span())
 }
 
-/// The `varyk-std` checks of spec 5.1 (V0404), for a program that uses
-/// `varyk-std` (`uses_std`); `compiler_version` is the compiler's own.
-/// `varyk-std` must be in `[dependencies]` as a crates.io requirement on
-/// the compiler's minor version, and a locked `varyk-std` must be no older
-/// than the compiler. Never runs cargo.
+/// Which `varyk-std` rule a check applies (std-minimum spec 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StdRule {
+    /// Every command but `varyk publish`: the line is the oldest varyk
+    /// the package builds with, and the build uses the compiler's own
+    /// `varyk-std`.
+    Build,
+    /// `varyk publish`: also the compiler's own minor, no stale lock, and
+    /// no older `varyk-std` resolved for the build, since plain cargo
+    /// builds what it ships with the versions its manifests and lock name.
+    Publish,
+}
+
+/// The `varyk-std` checks of spec 5.1 (V0404) as std-minimum spec 2
+/// amends them, for a program that uses `varyk-std` (`uses_std`);
+/// `compiler_version` is the compiler's own. `varyk-std` must be in
+/// `[dependencies]` as a crates.io requirement, `X.Y` or `X.Y.Z` with an
+/// optional `^`, no newer than the compiler. Under [`StdRule::Publish`]
+/// it must also be on the compiler's minor, and a locked `varyk-std` on
+/// that minor must be no older than the compiler. Never runs cargo.
 pub fn check_std_dependency(
     package: &Package,
     uses_std: bool,
     compiler_version: &str,
+    rule: StdRule,
 ) -> Vec<Diagnostic> {
     let Some(compiler) = version_triple(compiler_version).filter(|_| uses_std) else {
         return Vec::new();
@@ -889,24 +905,19 @@ pub fn check_std_dependency(
     let at = spans.entry.unwrap_or(spans.anchor);
     let refuse =
         |message: &str| vec![Diagnostic::new(codes::V0404, at, message).with_note(line.clone())];
-    match package.dependencies.get("varyk-std") {
+    // `~0.2`, `>=0.2`, a list, ...: the note gives a line that works.
+    let not_a_version = "`varyk-std` must be a version, such as the one below";
+    let what = match package.kind {
+        Kind::Binary => "program",
+        Kind::Library => "package",
+    };
+    let requirement = match package.dependencies.get("varyk-std") {
         None => {
-            let what = match package.kind {
-                Kind::Binary => "program",
-                Kind::Library => "package",
-            };
             return refuse(&format!(
                 "this {what} needs `varyk-std`, which `Cargo.toml` does not list"
             ));
         }
-        Some(toml::Value::String(requirement)) => {
-            if !requirement_matches(requirement, compiler) {
-                return refuse(&format!(
-                    "`varyk-std` must be version {}.{}, the version of this compiler",
-                    compiler.0, compiler.1
-                ));
-            }
-        }
+        Some(toml::Value::String(requirement)) => requirement,
         Some(toml::Value::Table(dependency)) => {
             for (key, why) in [
                 (
@@ -925,18 +936,38 @@ pub fn check_std_dependency(
                 }
             }
             match dependency.get("version") {
-                Some(toml::Value::String(requirement))
-                    if requirement_matches(requirement, compiler) => {}
-                Some(_) => {
-                    return refuse(&format!(
-                        "`varyk-std` must be version {}.{}, the version of this compiler",
-                        compiler.0, compiler.1
-                    ));
-                }
+                Some(toml::Value::String(requirement)) => requirement,
+                Some(_) => return refuse(not_a_version),
                 None => return refuse("`varyk-std` must say which version to use"),
             }
         }
-        Some(_) => return refuse("`varyk-std` must be a version, such as the one below"),
+        Some(_) => return refuse(not_a_version),
+    };
+    let Some(version) = requirement_version(requirement) else {
+        return refuse(not_a_version);
+    };
+    if version > compiler {
+        let written = requirement.strip_prefix('^').unwrap_or(requirement);
+        return vec![
+            Diagnostic::new(
+                codes::V0404,
+                at,
+                format!("this {what} needs varyk {written} or later"),
+            )
+            .with_note(format!(
+                "this compiler is varyk {}.{}.{}; `cargo install varyk` installs the newest",
+                compiler.0, compiler.1, compiler.2
+            )),
+        ];
+    }
+    if rule == StdRule::Build {
+        return Vec::new();
+    }
+    if (version.0, version.1) != (compiler.0, compiler.1) {
+        return refuse(&format!(
+            "`varyk-std` must be version {}.{}, the version of this compiler",
+            compiler.0, compiler.1
+        ));
     }
     if locked_older(package, compiler) {
         return vec![
@@ -951,22 +982,26 @@ pub fn check_std_dependency(
     Vec::new()
 }
 
-/// The `varyk-std` checks of a program's build (M5b2 spec 4.2): first
-/// [`check_std_dependency`] for the program, which `uses_std`; then, when
-/// that finds nothing and any package of the build uses `varyk-std`
-/// (`build_uses_std`), the `varyk-std` cargo resolved for the build
-/// (`resolved`, from the package graph) must be no older than the
-/// compiler. That is V0404 at the program's `varyk-std` line, or at its
-/// `Cargo.toml` when it has none, so a stale lock is reported once.
+/// The `varyk-std` checks of a program's build (M5b2 spec 4.2, as
+/// std-minimum spec 2 amends it): first [`check_std_dependency`] for the
+/// program, which `uses_std`, under `rule`; then, under
+/// [`StdRule::Publish`] only, when that finds nothing and any package of
+/// the build uses `varyk-std` (`build_uses_std`), the `varyk-std` cargo
+/// resolved for the build (`resolved`, from the package graph) must be no
+/// older than the compiler. That is V0404 at the program's `varyk-std`
+/// line, or at its `Cargo.toml` when it has none, so a stale lock is
+/// reported once. Every other command builds with the compiler's own
+/// `varyk-std`, whatever cargo resolves for the graph.
 pub fn check_build_std(
     package: &Package,
     uses_std: bool,
     build_uses_std: bool,
     resolved: Option<&str>,
     compiler_version: &str,
+    rule: StdRule,
 ) -> Vec<Diagnostic> {
-    let problems = check_std_dependency(package, uses_std, compiler_version);
-    if !problems.is_empty() || !build_uses_std {
+    let problems = check_std_dependency(package, uses_std, compiler_version, rule);
+    if !problems.is_empty() || !build_uses_std || rule == StdRule::Build {
         return problems;
     }
     let (Some(compiler), Some(resolved)) = (version_triple(compiler_version), resolved) else {
@@ -985,8 +1020,10 @@ pub fn check_build_std(
             ),
         )
         .with_note(
-            "the program and the Varyk packages it uses share one `varyk-std`, and cargo picked \
-             an older one than this compiler needs; run `cargo update -p varyk-std`",
+            "a published package is built with the `varyk-std` its `Cargo.toml` and \
+             `Cargo.lock` name, and here that is an older one: either a Varyk package it uses \
+             was written for an older varyk, so use a release of it written for this one, or \
+             `Cargo.lock` is out of date, so run `cargo update -p varyk-std`",
         ),
     ]
 }
@@ -999,9 +1036,21 @@ pub(crate) fn version_triple(text: &str) -> Option<(u64, u64, u64)> {
     parts.next().is_none().then_some(triple)
 }
 
-/// Whether `requirement` is `MAJOR.MINOR` or `MAJOR.MINOR.PATCH`, with an
-/// optional leading `^`, on the compiler's major and minor.
-fn requirement_matches(requirement: &str, compiler: (u64, u64, u64)) -> bool {
+/// The `(major, minor)` of `package`'s `varyk-std` requirement, a string
+/// or a table's `version`, when it is one [`check_std_dependency`] reads.
+pub(crate) fn std_minor(package: &Package) -> Option<(u64, u64)> {
+    let requirement = match package.dependencies.get("varyk-std")? {
+        toml::Value::String(requirement) => requirement,
+        toml::Value::Table(dependency) => dependency.get("version")?.as_str()?,
+        _ => return None,
+    };
+    requirement_version(requirement).map(|(major, minor, _)| (major, minor))
+}
+
+/// The version a `varyk-std` requirement names, when it is `MAJOR.MINOR`
+/// (read as `MAJOR.MINOR.0`) or `MAJOR.MINOR.PATCH`, with an optional
+/// leading `^`.
+fn requirement_version(requirement: &str) -> Option<(u64, u64, u64)> {
     let text = requirement.strip_prefix('^').unwrap_or(requirement);
     let numbers: Vec<Option<u64>> = text
         .split('.')
@@ -1010,14 +1059,17 @@ fn requirement_matches(requirement: &str, compiler: (u64, u64, u64)) -> bool {
             if digits { part.parse().ok() } else { None }
         })
         .collect();
-    matches!(
-        numbers.as_slice(),
-        [Some(major), Some(minor)] | [Some(major), Some(minor), Some(_)]
-            if (*major, *minor) == (compiler.0, compiler.1)
-    )
+    match numbers.as_slice() {
+        [Some(major), Some(minor)] => Some((*major, *minor, 0)),
+        [Some(major), Some(minor), Some(patch)] => Some((*major, *minor, *patch)),
+        _ => None,
+    }
 }
 
-/// Whether `Cargo.lock` locks a `varyk-std` older than `compiler`.
+/// Whether `Cargo.lock` locks a `varyk-std` on `compiler`'s minor that is
+/// older than `compiler`. One on an older minor is most often a Varyk
+/// package's, which the resolved-version check of [`check_build_std`]
+/// reports by its cause.
 fn locked_older(package: &Package, compiler: (u64, u64, u64)) -> bool {
     let Some(lock) = package
         .lock
@@ -1036,7 +1088,9 @@ fn locked_older(package: &Package, compiler: (u64, u64, u64)) -> bool {
                 .get("version")
                 .and_then(toml::Value::as_str)
                 .and_then(version_triple)
-                .is_some_and(|version| version < compiler)
+                .is_some_and(|version| {
+                    (version.0, version.1) == (compiler.0, compiler.1) && version < compiler
+                })
     })
 }
 
@@ -1637,41 +1691,95 @@ pub(crate) mod tests {
     }
 
     /// V0404 messages for a package whose `[dependencies]` is `deps`, a
-    /// compiler at `compiler`, and the given lock text.
+    /// compiler at `compiler`, the given lock text, and `rule`.
     fn std_check(
         deps: &str,
         lock: Option<&str>,
         uses_std: bool,
         compiler: &str,
+        rule: StdRule,
     ) -> Vec<Diagnostic> {
-        let dir = package("std", &format!("{MANIFEST}{deps}"), "src/main.vr");
+        std_check_at("src/main.vr", deps, lock, uses_std, compiler, rule)
+    }
+
+    /// [`std_check`] for a package whose root is `root`.
+    fn std_check_at(
+        root: &str,
+        deps: &str,
+        lock: Option<&str>,
+        uses_std: bool,
+        compiler: &str,
+        rule: StdRule,
+    ) -> Vec<Diagnostic> {
+        let dir = package("std", &format!("{MANIFEST}{deps}"), root);
         if let Some(lock) = lock {
             dir.write("Cargo.lock", lock);
         }
         let mut sources = Vec::new();
         let package = load(&dir.0.join("Cargo.toml"), &mut sources).expect("loads");
-        check_std_dependency(&package, uses_std, compiler)
+        check_std_dependency(&package, uses_std, compiler, rule)
     }
 
+    const RULES: [StdRule; 2] = [StdRule::Build, StdRule::Publish];
+
+    /// Whether `deps` passes under both rules with a compiler at 0.2.5.
     fn accepted(deps: &str) -> bool {
-        std_check(deps, None, true, "0.2.5").is_empty()
+        RULES
+            .iter()
+            .all(|&rule| std_check(deps, None, true, "0.2.5", rule).is_empty())
     }
 
     const STD_LOCK: &str =
         "version = 4\n\n[[package]]\nname = \"varyk-std\"\nversion = \"0.2.0\"\n";
 
+    /// Lines against a compiler at 1.2.5, each written with and without
+    /// `^`: on its minor and no newer, on an older minor or major, newer.
+    const SAME_MINOR: [&str; 3] = ["1.2.5", "1.2", "1.2.4"];
+    const OLDER_MINOR: [&str; 3] = ["1.1", "1.1.9", "0.9"];
+    const NEWER: [&str; 4] = ["1.2.6", "1.3", "1.3.0", "2.0"];
+
+    /// The V0404s of the line `varyk-std = "{line}"` and `"^{line}"`
+    /// against a compiler at 1.2.5 under `rule`.
+    fn minimum_check(line: &str, rule: StdRule) -> [Vec<Diagnostic>; 2] {
+        [line.to_string(), format!("^{line}")].map(|req| {
+            std_check(
+                &format!("[dependencies]\nvaryk-std = \"{req}\"\n"),
+                None,
+                true,
+                "1.2.5",
+                rule,
+            )
+        })
+    }
+
+    /// Asserts `found` is the one V0404 for a line that needs varyk `line`.
+    fn assert_needs_newer(found: &[Diagnostic], what: &str, line: &str) {
+        assert_eq!(found.len(), 1, "{line}: {found:#?}");
+        assert_eq!(found[0].code, codes::V0404, "{line}");
+        assert_eq!(
+            found[0].message,
+            format!("this {what} needs varyk {line} or later")
+        );
+        assert_eq!(
+            found[0].notes,
+            ["this compiler is varyk 1.2.5; `cargo install varyk` installs the newest"]
+        );
+    }
+
     #[test]
     fn a_missing_std_dependency_is_v0404_with_the_line_to_write() {
-        let found = std_check("[dependencies]\n", None, true, "0.2.5");
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].code, codes::V0404);
-        assert!(found[0].notes[0].contains("varyk-std = \"0.2.5\""));
-        assert!(found[0].fix_it.is_none());
-        assert_eq!(
-            std_check("", None, true, "0.2.5").len(),
-            1,
-            "no table at all"
-        );
+        for rule in RULES {
+            let found = std_check("[dependencies]\n", None, true, "0.2.5", rule);
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].code, codes::V0404);
+            assert!(found[0].notes[0].contains("varyk-std = \"0.2.5\""));
+            assert!(found[0].fix_it.is_none());
+            assert_eq!(
+                std_check("", None, true, "0.2.5", rule).len(),
+                1,
+                "no table at all"
+            );
+        }
     }
 
     #[test]
@@ -1680,7 +1788,7 @@ pub(crate) mod tests {
             "\"0.2\"",
             "\"0.2.0\"",
             "\"^0.2\"",
-            "\"0.2.9\"",
+            "\"0.2.5\"",
             "\"^0.2.1\"",
             "{ version = \"0.2\" }",
             "{ version = \"0.2.0\", features = [\"x\"] }",
@@ -1694,9 +1802,57 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_std_line_at_or_below_the_compiler_is_accepted_by_the_build() {
+        for line in SAME_MINOR.into_iter().chain(OLDER_MINOR) {
+            for found in minimum_check(line, StdRule::Build) {
+                assert!(found.is_empty(), "{line}: {found:#?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_std_line_newer_than_the_compiler_needs_a_newer_varyk() {
+        for rule in RULES {
+            for line in NEWER {
+                let [plain, caret] = minimum_check(line, rule);
+                assert_needs_newer(&plain, "program", line);
+                assert_needs_newer(&caret, "program", line);
+            }
+        }
+        let found = std_check_at(
+            "src/lib.vr",
+            "[dependencies]\nvaryk-std = { version = \"^1.3\" }\n",
+            None,
+            true,
+            "1.2.5",
+            StdRule::Build,
+        );
+        assert_needs_newer(&found, "package", "1.3");
+    }
+
+    #[test]
+    fn publish_wants_the_compilers_minor() {
+        for line in SAME_MINOR {
+            for found in minimum_check(line, StdRule::Publish) {
+                assert!(found.is_empty(), "{line}: {found:#?}");
+            }
+        }
+        for line in OLDER_MINOR {
+            for found in minimum_check(line, StdRule::Publish) {
+                assert_eq!(found.len(), 1, "{line}: {found:#?}");
+                assert_eq!(found[0].code, codes::V0404, "{line}");
+                assert_eq!(
+                    found[0].message,
+                    "`varyk-std` must be version 1.2, the version of this compiler"
+                );
+                assert!(found[0].notes[0].contains("varyk-std = \"1.2.5\""));
+            }
+        }
+    }
+
+    #[test]
     fn other_std_requirements_are_v0404() {
         for req in [
-            "\"0.1\"",
             "\"0.3\"",
             "\"~0.2\"",
             "\"=0.2.0\"",
@@ -1705,6 +1861,7 @@ pub(crate) mod tests {
             "\"0\"",
             "\"1.2\"",
             "\"0.2.x\"",
+            "\"0.2.1.0\"",
             "\"0.2, 0.3\"",
             "3",
             "{ path = \"../std\" }",
@@ -1714,56 +1871,87 @@ pub(crate) mod tests {
             "{ version = \"0.2\", package = \"x\" }",
             "{ features = [\"x\"] }",
             "{ version = \"~0.2\" }",
+            "{ version = 2 }",
         ] {
-            let found = std_check(
-                &format!("[dependencies]\nvaryk-std = {req}\n"),
-                None,
-                true,
-                "0.2.5",
-            );
-            assert_eq!(found.len(), 1, "{req}");
-            assert_eq!(found[0].code, codes::V0404, "{req}");
+            for rule in RULES {
+                let found = std_check(
+                    &format!("[dependencies]\nvaryk-std = {req}\n"),
+                    None,
+                    true,
+                    "0.2.5",
+                    rule,
+                );
+                assert_eq!(found.len(), 1, "{req} {rule:?}");
+                assert_eq!(found[0].code, codes::V0404, "{req} {rule:?}");
+            }
         }
+        // An older minor builds, so a line that is no version names none.
+        let found = std_check(
+            "[dependencies]\nvaryk-std = \"~0.1\"\n",
+            None,
+            true,
+            "0.2.5",
+            StdRule::Build,
+        );
+        assert_eq!(
+            found[0].message,
+            "`varyk-std` must be a version, such as the one below"
+        );
     }
 
     #[test]
     fn the_std_requirement_follows_the_compilers_version_argument() {
         let deps = "[dependencies]\nvaryk-std = \"0.3\"\n";
-        assert!(std_check(deps, None, true, "0.3.1").is_empty());
-        assert_eq!(std_check(deps, None, true, "0.2.0").len(), 1);
+        for rule in RULES {
+            assert!(std_check(deps, None, true, "0.3.1", rule).is_empty());
+            assert_eq!(std_check(deps, None, true, "0.2.0", rule).len(), 1);
+        }
     }
 
     #[test]
-    fn a_lock_older_than_the_compiler_is_v0404_with_cargo_update() {
+    fn a_lock_older_than_the_compiler_is_v0404_with_cargo_update_under_publish() {
         let deps = "[dependencies]\nvaryk-std = \"0.2\"\n";
-        let found = std_check(deps, Some(STD_LOCK), true, "0.2.1");
+        let publish = |lock, compiler| std_check(deps, lock, true, compiler, StdRule::Publish);
+        let found = publish(Some(STD_LOCK), "0.2.1");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].code, codes::V0404);
         assert_eq!(found[0].notes, ["run `cargo update -p varyk-std`"]);
-        assert!(
-            std_check(deps, Some(STD_LOCK), true, "0.2.0").is_empty(),
-            "equal is fine"
-        );
-        assert!(
-            std_check(deps, None, true, "0.2.1").is_empty(),
-            "no lock is fine"
-        );
+        assert!(publish(Some(STD_LOCK), "0.2.0").is_empty(), "equal is fine");
+        assert!(publish(None, "0.2.1").is_empty(), "no lock is fine");
         let other = "version = 4\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n";
-        assert!(std_check(deps, Some(other), true, "0.2.1").is_empty());
+        assert!(publish(Some(other), "0.2.1").is_empty());
+        // The build uses the compiler's own `varyk-std`, whatever is locked.
+        assert!(std_check(deps, Some(STD_LOCK), true, "0.2.1", StdRule::Build).is_empty());
+    }
+
+    #[test]
+    fn a_lock_whose_older_std_is_on_an_older_minor_is_accepted() {
+        let deps = "[dependencies]\nvaryk-std = \"0.2\"\n";
+        let lock = "version = 4\n\n[[package]]\nname = \"varyk-std\"\nversion = \"0.1.0\"\n\n\
+                    [[package]]\nname = \"varyk-std\"\nversion = \"0.2.1\"\n";
+        for rule in RULES {
+            assert!(
+                std_check(deps, Some(lock), true, "0.2.1", rule).is_empty(),
+                "{rule:?}"
+            );
+        }
     }
 
     #[test]
     fn a_package_that_does_not_use_std_is_never_checked() {
-        assert!(
-            std_check(
-                "[dependencies]\nvaryk-std = \"0.1\"\n",
-                Some(STD_LOCK),
-                false,
-                "0.2.1"
-            )
-            .is_empty()
-        );
-        assert!(std_check("", None, false, "0.2.1").is_empty());
+        for rule in RULES {
+            assert!(
+                std_check(
+                    "[dependencies]\nvaryk-std = \"9.1\"\n",
+                    Some(STD_LOCK),
+                    false,
+                    "0.2.1",
+                    rule
+                )
+                .is_empty()
+            );
+            assert!(std_check("", None, false, "0.2.1", rule).is_empty());
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-varyk-std = "0.1"
+varyk-std = "999.0"
 
 [[bin]]
 name = "app"

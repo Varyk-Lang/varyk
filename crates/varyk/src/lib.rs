@@ -26,7 +26,7 @@ use varyk_syntax::{FileId, SourceFile, Span};
 use borrow::analyze;
 use diagnostics::{Diagnostic, codes};
 use hir::HirProgram;
-use package::{Kind, Package};
+use package::{Kind, Package, StdRule};
 use packages::{Graph, Listing, VarykPackage};
 pub use resolve::Dependencies;
 use resolve::{Packages, resolve_root};
@@ -202,19 +202,41 @@ fn check_dependency(
         Err(mut errors) => {
             // A package that does not pass is most often one written for
             // another Varyk version (spec 4.2), so its `varyk-std` line is
-            // checked too, whatever the package uses.
+            // checked too, whatever the package uses: one newer than the
+            // compiler is V0404, and one on an older minor adds a note to
+            // each error (std-minimum spec 2).
             if package.dependencies.contains_key("varyk-std") {
                 errors.extend(package::check_std_dependency(
                     &package,
                     true,
                     env!("CARGO_PKG_VERSION"),
+                    StdRule::Build,
                 ));
+            }
+            let compiler = package::version_triple(env!("CARGO_PKG_VERSION"));
+            if let Some(((major, minor), _)) = package::std_minor(&package)
+                .zip(compiler)
+                .filter(|(written, compiler)| *written < (compiler.0, compiler.1))
+            {
+                let note = format!(
+                    "`{}` was written for varyk {major}.{minor}; a newer release of it may build \
+                     with this compiler",
+                    package.name
+                );
+                errors = errors
+                    .into_iter()
+                    .map(|error| error.with_note(note.clone()))
+                    .collect();
             }
             return Err(errors);
         }
     };
-    let problems =
-        package::check_std_dependency(&package, program.uses_std, env!("CARGO_PKG_VERSION"));
+    let problems = package::check_std_dependency(
+        &package,
+        program.uses_std,
+        env!("CARGO_PKG_VERSION"),
+        StdRule::Build,
+    );
     if problems.is_empty() {
         Ok((program, package.isolated_manifest()))
     } else {
@@ -367,5 +389,57 @@ mod tests {
         // `units` neither logs nor uses `varyk-std`.
         assert!(!checked.packages[0].program.logs);
         assert!(!checked.packages[0].program.uses_std);
+    }
+
+    #[test]
+    fn a_failing_package_written_for_an_older_varyk_says_so() {
+        let dir = TempDir::new("older_units");
+        dir.write(
+            "units/Cargo.toml",
+            "[package]\nname = \"units\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.vr\"\n\n[dependencies]\nvaryk-std = \"0.1\"\n",
+        );
+        dir.write(
+            "units/src/lib.vr",
+            "pub fn size() -> i64 {\n    \"large\"\n}\n",
+        );
+        dir.write(
+            "shop/Cargo.toml",
+            "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"shop\"\npath = \"src/main.vr\"\n\n[dependencies]\nunits = { path = \"../units\" }\n",
+        );
+        let shop = dir.write(
+            "shop/src/main.vr",
+            "fn main() {\n    println!(\"{}\", units::size());\n}\n",
+        );
+        let graph = Graph::for_tests(
+            vec![VarykPackage {
+                dir: dir.0.join("units"),
+                name: "units".to_string(),
+                version: "0.1.0".to_string(),
+                source: None,
+                deps: Vec::new(),
+            }],
+            vec![("units".to_string(), DepTarget::Varyk(0))],
+        );
+        let mut sources = Vec::new();
+        let program = package::load(&dir.0.join("shop/Cargo.toml"), &mut sources)
+            .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+        let text = fs::read_to_string(&shop).expect("read shop");
+        let entry = SourceFile::new(FileId(sources.len() as u32), shop, text);
+        let Err(diagnostics) = check_file(entry, Some(&program), Some(&graph), &mut sources) else {
+            panic!("`units` does not type-check");
+        };
+        assert!(!diagnostics.is_empty());
+        for diagnostic in &diagnostics {
+            assert_eq!(diagnostic.code, codes::V0200, "{diagnostic:#?}");
+            for note in [
+                "`units` was written for varyk 0.1; a newer release of it may build with this compiler",
+                "in the package `units` 0.1.0, which this build uses",
+            ] {
+                assert!(
+                    diagnostic.notes.iter().any(|n| n == note),
+                    "{diagnostic:#?}"
+                );
+            }
+        }
     }
 }

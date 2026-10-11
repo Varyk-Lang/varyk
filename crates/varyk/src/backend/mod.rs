@@ -106,18 +106,35 @@ fn path_value(path: &std::path::Path) -> toml::Value {
     toml::Value::Table(table)
 }
 
-/// A package's isolated manifest with its `varyk-std` dependency, if it
-/// has one, replaced by a `path` dependency on the directory
-/// `VARYK_STD_PATH` names, when that is set (M5a spec 5.3). `varyk
-/// publish` never calls this.
-pub fn with_local_std(mut manifest: toml::Table) -> toml::Table {
-    let Some(path) = local_std() else {
-        return manifest;
-    };
+/// A Varyk package's isolated manifest, written for the build, with its
+/// `[dependencies]` `varyk-std` entry, if it has one, replaced whole by
+/// the compiler's own: a `path` dependency on the directory
+/// `VARYK_STD_PATH` names when that is set (M5a spec 5.3), else `"A.B.C"`,
+/// the compiler's version, so every Varyk crate of a build uses one
+/// `varyk-std`, whatever minimum its line names (std-minimum spec 3). A
+/// published manifest is never rewritten: `varyk publish` writes the
+/// package's own. A plain Rust crate of the build is not passed here and
+/// keeps its own line.
+pub fn with_build_std(manifest: toml::Table) -> toml::Table {
+    with_std(manifest, build_std_value(local_std()))
+}
+
+/// The `varyk-std` entry of [`with_build_std`]: `{ path = .. }` on
+/// `local`, else the compiler's version, with no `=`.
+fn build_std_value(local: Option<PathBuf>) -> toml::Value {
+    match local {
+        Some(path) => path_value(&path),
+        None => toml::Value::String(env!("CARGO_PKG_VERSION").to_string()),
+    }
+}
+
+/// `manifest` with its `[dependencies]` `varyk-std` entry, if it has one,
+/// replaced whole by `value`.
+fn with_std(mut manifest: toml::Table, value: toml::Value) -> toml::Table {
     if let Some(toml::Value::Table(dependencies)) = manifest.get_mut("dependencies")
         && dependencies.contains_key("varyk-std")
     {
-        dependencies.insert("varyk-std".to_string(), path_value(&path));
+        dependencies.insert("varyk-std".to_string(), value);
     }
     manifest
 }
@@ -466,6 +483,65 @@ mod tests {
             manifest["dependencies"]["varyk-std"]["path"].as_str(),
             Some("/w/crates/varyk-std"),
             "{text}"
+        );
+    }
+
+    fn manifest(text: &str) -> toml::Table {
+        text.parse().expect("valid TOML")
+    }
+
+    fn version() -> toml::Value {
+        toml::Value::String("0.9.0".to_string())
+    }
+
+    #[test]
+    fn the_build_std_replaces_a_varyk_std_line_written_as_a_string() {
+        let rewritten = with_std(
+            manifest("[dependencies]\nvaryk-std = \"0.1\"\nserde = \"1\"\n"),
+            version(),
+        );
+        assert_eq!(
+            rewritten,
+            manifest("[dependencies]\nvaryk-std = \"0.9.0\"\nserde = \"1\"\n")
+        );
+    }
+
+    #[test]
+    fn the_build_std_replaces_a_varyk_std_line_written_as_a_table_whole() {
+        let rewritten = with_std(
+            manifest(
+                "[dependencies]\nvaryk-std = { version = \"^0.8\", features = [\"x\"], registry = \"mine\" }\n",
+            ),
+            version(),
+        );
+        assert_eq!(
+            rewritten,
+            manifest("[dependencies]\nvaryk-std = \"0.9.0\"\n")
+        );
+    }
+
+    #[test]
+    fn the_build_std_leaves_a_manifest_without_a_varyk_std_line_unchanged() {
+        let without_line = manifest("[package]\nname = \"p\"\n\n[dependencies]\nserde = \"1\"\n");
+        assert_eq!(with_std(without_line.clone(), version()), without_line);
+
+        let without_dependencies =
+            manifest("[package]\nname = \"p\"\n\n[dev-dependencies]\nvaryk-std = \"0.1\"\n");
+        assert_eq!(
+            with_std(without_dependencies.clone(), version()),
+            without_dependencies
+        );
+    }
+
+    #[test]
+    fn the_build_std_is_the_compiler_version_without_an_equals_sign() {
+        assert_eq!(
+            build_std_value(None),
+            toml::Value::String(env!("CARGO_PKG_VERSION").to_string())
+        );
+        assert_eq!(
+            build_std_value(Some(PathBuf::from("/w/crates/varyk-std"))),
+            path_value(std::path::Path::new("/w/crates/varyk-std"))
         );
     }
 }

@@ -679,6 +679,7 @@ fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::StdRule;
 
     #[test]
     fn a_listing_for_a_git_or_other_registry_package_names_where_it_came_from() {
@@ -917,10 +918,16 @@ mod tests {
         }
     }
 
-    /// The `varyk-std` checks of a program `app` whose `[dependencies]`
-    /// are `deps`, beside `lock` if any, in a build whose `varyk-std` is
-    /// the one `STD` records, 0.4.0, with a compiler at 0.5.0.
-    fn build_std(deps: &str, lock: Option<&str>, uses_std: bool) -> Vec<Diagnostic> {
+    /// The `varyk-std` checks of `varyk publish` for a program `app` whose
+    /// `[dependencies]` are `deps`, beside `lock` if any, in a build whose
+    /// `varyk-std` is the one `STD` records, 0.4.0, with a compiler at
+    /// `compiler`.
+    fn build_std(
+        deps: &str,
+        lock: Option<&str>,
+        uses_std: bool,
+        compiler: &str,
+    ) -> Vec<Diagnostic> {
         use crate::package::tests::{MANIFEST, package};
         let dir = package("graph_std", &format!("{MANIFEST}{deps}"), "src/main.vr");
         if let Some(lock) = lock {
@@ -931,7 +938,14 @@ mod tests {
             .unwrap_or_else(|diagnostics| panic!("loads: {diagnostics:#?}"));
         let resolved = resolved_std(STD);
         assert_eq!(resolved.as_deref(), Some("0.4.0"));
-        crate::package::check_build_std(&program, uses_std, true, resolved.as_deref(), "0.5.0")
+        crate::package::check_build_std(
+            &program,
+            uses_std,
+            true,
+            resolved.as_deref(),
+            compiler,
+            StdRule::Publish,
+        )
     }
 
     #[test]
@@ -940,6 +954,7 @@ mod tests {
             "[dependencies]\nroute = { path = \"../route\" }\nvaryk-std = \"0.5\"\n",
             None,
             true,
+            "0.5.0",
         );
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].code, codes::V0404);
@@ -959,6 +974,7 @@ mod tests {
             "[dependencies]\nroute = { path = \"../route\" }\n",
             None,
             false,
+            "0.5.0",
         );
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].code, codes::V0404);
@@ -970,11 +986,12 @@ mod tests {
 
     #[test]
     fn a_stale_lock_is_reported_once_beside_the_resolved_std() {
-        let lock = "version = 4\n\n[[package]]\nname = \"varyk-std\"\nversion = \"0.4.0\"\n";
+        let lock = "version = 4\n\n[[package]]\nname = \"varyk-std\"\nversion = \"0.5.0\"\n";
         let found = build_std(
             "[dependencies]\nroute = { path = \"../route\" }\nvaryk-std = \"0.5\"\n",
             Some(lock),
             true,
+            "0.5.1",
         );
         assert_eq!(found.len(), 1, "{found:#?}");
         assert!(found[0].message.contains("`Cargo.lock`"), "{found:#?}");
@@ -994,18 +1011,22 @@ mod tests {
         let mut sources = Vec::new();
         let program = crate::package::load(&dir.0.join("Cargo.toml"), &mut sources)
             .unwrap_or_else(|diagnostics| panic!("loads: {diagnostics:#?}"));
-        let check = |build_uses_std, compiler| {
+        let check = |build_uses_std, compiler, rule| {
             crate::package::check_build_std(
                 &program,
                 true,
                 build_uses_std,
                 resolved.as_deref(),
                 compiler,
+                rule,
             )
         };
-        assert!(check(true, "0.4.0").is_empty());
-        assert!(check(false, "0.4.1").is_empty());
-        assert_eq!(check(true, "0.4.1").len(), 1);
+        assert!(check(true, "0.4.0", StdRule::Publish).is_empty());
+        assert!(check(false, "0.4.1", StdRule::Publish).is_empty());
+        assert_eq!(check(true, "0.4.1", StdRule::Publish).len(), 1);
+        // The build uses the compiler's own `varyk-std`, whatever cargo
+        // resolves for the graph.
+        assert!(check(true, "0.4.1", StdRule::Build).is_empty());
         // No `varyk-std` in the build at all.
         assert_eq!(resolved_std(BASIC), None);
     }

@@ -193,7 +193,7 @@ generated Rust have no stability guarantee before 1.0.
 | Configuration | `env::parse` into a struct; environment, then `.env`, then default | Node dotenv's order; one mechanism with JSON; `.env` never written to the process |
 | Logging | four calls in `println!` form on tracing; `LOG`, `LOG_FORMAT=json` | readable in a terminal, ingestible in production, no code change between them |
 | Tests | `#[test]` functions in place; `assert` only in tests | maps to Rust's `#[test]` and `cargo test`; stopping the program is for tests only |
-| Versioning | a version range in `Cargo.toml`, minor and lock checked by `varyk check` | upgrades are `cargo update`; a mismatch is a diagnostic, never a rustc error |
+| Versioning | the `varyk-std` line in `Cargo.toml` is the oldest varyk a package needs, a newer one refused by `varyk check`; the build uses the compiler's own `varyk-std`; the minor and the lock checked by `varyk publish` | a minor varyk release does not stop published packages from building; a mismatch is a diagnostic, never a rustc error |
 | Single files | depend on `varyk-std` at the compiler's exact version | there is no manifest to respect |
 | TOML | not in 5a | nothing on the golden path needs it; the same machinery adds it later |
 | Waiting (5b1) | explicit `async fn` and `.await` | familiar to JavaScript and Rust writers and to models; a waiting point is visible |

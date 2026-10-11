@@ -34,12 +34,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use varyk_syntax::{FileId, SourceFile};
 
 use crate::backend::{
-    Backend, CrateInfo, GeneratedCrate, RustBackend, StdDependency, with_local_std,
+    Backend, CrateInfo, GeneratedCrate, RustBackend, StdDependency, with_build_std,
 };
 use crate::diagnostics::{Diagnostic, render_human, render_json};
 use crate::driver::{self, DriverError, PackageCrate};
 use crate::hir::HirProgram;
-use crate::package::{self, Kind, Package};
+use crate::package::{self, Kind, Package, StdRule};
 use crate::packages::Graph;
 use crate::{CheckedPackage, check_file};
 
@@ -295,7 +295,9 @@ fn manifest_here() -> Option<PathBuf> {
 /// reported and exits before `check_file` (which needs an already-read
 /// `SourceFile`) is ever called.
 fn run_check(file: Option<&Path>, message_format: MessageFormat) -> ExitCode {
-    match locate(file, message_format).and_then(|target| load(target, message_format)) {
+    match locate(file, message_format)
+        .and_then(|target| load(target, message_format, StdRule::Build))
+    {
         Ok(_) => ExitCode::SUCCESS,
         Err(code) => code,
     }
@@ -311,9 +313,15 @@ struct Loaded {
 
 /// Reads `target`'s entry and checks it into HIR, after reading the
 /// package graph when the package lists a dependency besides `varyk-std`
-/// (M5b2 spec 4.1); reports an unreadable file or any diagnostics itself
-/// and returns the exit code to use on failure.
-fn load(mut target: Target, message_format: MessageFormat) -> Result<(Loaded, Target), ExitCode> {
+/// (M5b2 spec 4.1), then checks the `varyk-std` lines of the build under
+/// `rule` ([`StdRule::Publish`] for `varyk publish` only); reports an
+/// unreadable file or any diagnostics itself and returns the exit code to
+/// use on failure.
+fn load(
+    mut target: Target,
+    message_format: MessageFormat,
+    rule: StdRule,
+) -> Result<(Loaded, Target), ExitCode> {
     let path = &target.entry;
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
@@ -349,6 +357,7 @@ fn load(mut target: Target, message_format: MessageFormat) -> Result<(Loaded, Ta
                     build_uses_std,
                     graph.as_ref().and_then(Graph::std_version),
                     env!("CARGO_PKG_VERSION"),
+                    rule,
                 )
             });
             // The program needs `varyk-std` only because a package logs, so
@@ -458,7 +467,7 @@ fn generate_and_build(
     emit_rust: bool,
     message_format: MessageFormat,
 ) -> Result<Option<PathBuf>, ExitCode> {
-    let (loaded, target) = load(target, message_format)?;
+    let (loaded, target) = load(target, message_format, StdRule::Build)?;
     let (generated, packages) = generate(&target, &loaded)?;
 
     if emit_rust {
@@ -570,7 +579,8 @@ fn run_test(file: Option<&Path>, message_format: MessageFormat) -> ExitCode {
         MessageFormat::Json => MessageFormat::JsonToStderr,
         other => other,
     };
-    let loaded = locate(file, message_format).and_then(|target| load(target, message_format));
+    let loaded = locate(file, message_format)
+        .and_then(|target| load(target, message_format, StdRule::Build));
     let (loaded, target) = match loaded {
         Ok(pair) => pair,
         Err(code) => return code,
@@ -612,8 +622,10 @@ fn run_test(file: Option<&Path>, message_format: MessageFormat) -> ExitCode {
 /// The crate `target` generates into (M3 spec 2.4): the package's name
 /// and isolated manifest, or a generated name with a minimal manifest for
 /// a single file, depending on `varyk-std` when `program` uses it (M5a
-/// spec 5.2). Under `VARYK_STD_PATH`, `varyk-std` is that directory (M5a
-/// spec 5.3); `varyk publish` writes the package's own manifest instead.
+/// spec 5.2). A package's `varyk-std` is the compiler's own, its version
+/// or the directory `VARYK_STD_PATH` names (std-minimum spec 3); `varyk
+/// publish` keeps only the generated tree and writes the package's own
+/// manifest, so a published manifest is never rewritten.
 /// With a package `graph`, each dependency on a Varyk package is the
 /// crate written for it in `dirs`, by graph index (M5b2 spec 4.3).
 fn crate_info(
@@ -628,7 +640,7 @@ fn crate_info(
             let manifest = driver::with_package_paths(package.generated_manifest(), deps, dirs);
             CrateInfo {
                 name: package.name.clone(),
-                manifest: with_local_std(manifest),
+                manifest: with_build_std(manifest),
                 std_dependency: None,
             }
         }
@@ -757,7 +769,7 @@ fn run_publish(assemble_only: bool, args: &[String], message_format: MessageForm
         .package
         .clone()
         .expect("`locate(None, ..)` always resolves a package or returns an error");
-    let (loaded, target) = match load(target, message_format) {
+    let (loaded, target) = match load(target, message_format, StdRule::Publish) {
         Ok(pair) => pair,
         Err(code) => return code,
     };

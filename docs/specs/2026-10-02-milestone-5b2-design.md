@@ -849,3 +849,4 @@ Appended to the decisions log of M1 §10.
 | When Varyk asks cargo for the graph | in every command, when any dependency besides `varyk-std` is listed; on a manifest in its own directory | a program that passes `check` builds; the graph is the build's own |
 | JSON on another package's type | refused, V0210; convert it in its own package | serde is derived where a type is declared |
 | A type from a package not depended on | refused, V0115 | the generated Rust must be able to name it |
+| `varyk-std` of a build, amended (2026-10-11) | every manifest of the build names the compiler's own `varyk-std`; a package's line is the oldest varyk it needs; the resolved-version check runs under `varyk publish` only | see [2026-10-11-std-minimum-design.md](2026-10-11-std-minimum-design.md) |
