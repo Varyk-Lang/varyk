@@ -17,7 +17,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The minimum supported Rust version is 1.85 and CI checks it.
+The minimum supported Rust version is 1.88 and CI checks it.
 
 See also `AGENTS.md`, the short list of rules that keep the code coherent,
 written for people and AI agents alike.

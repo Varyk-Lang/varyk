@@ -99,10 +99,10 @@ pub(super) fn classify(cx: &Context, functions: &mut [HirFunction]) -> Vec<FnCla
         .map(|function| {
             let mut callees = Vec::new();
             walk_block(&mut function.body, &mut |expr| {
-                if let Some(id) = varyk_callee(expr) {
-                    if !callees.contains(&id) {
-                        callees.push(id);
-                    }
+                if let Some(id) = varyk_callee(expr)
+                    && !callees.contains(&id)
+                {
+                    callees.push(id);
                 }
             });
             callees

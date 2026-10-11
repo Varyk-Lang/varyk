@@ -782,7 +782,7 @@ fn run_with_trailing_arguments_still_prints_the_greeting() {
 /// The Rust sample in `README.md`, the fenced block after
 /// `<!-- emit-rust: examples/borrowing.vr -->`, is exactly the backend's
 /// `src/main.rs` for that example, before any rustfmt: `--emit-rust`
-/// formats it only when rustfmt is installed, and the minimal 1.85
+/// formats it only when rustfmt is installed, and the minimal 1.88
 /// toolchain has none.
 #[test]
 fn the_readme_rust_sample_is_the_current_backend_output() {

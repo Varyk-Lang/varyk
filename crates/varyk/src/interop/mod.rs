@@ -374,13 +374,13 @@ fn find_include_macro(tokens: TokenStream) -> Option<proc_macro2::Ident> {
                 previous = None;
             }
             TokenTree::Punct(punct) if punct.as_char() == '!' => {
-                if let Some(ident) = previous.take() {
-                    if matches!(
+                if let Some(ident) = previous.take()
+                    && matches!(
                         ident_name(&ident).as_str(),
                         "include" | "include_str" | "include_bytes"
-                    ) {
-                        return Some(ident);
-                    }
+                    )
+                {
+                    return Some(ident);
                 }
             }
             TokenTree::Ident(ident) => previous = Some(ident),
@@ -464,23 +464,24 @@ fn collect_names(items: &[Item], macros: &Macros) -> (Names, Option<Expander>) {
     for item in items {
         let ident = match item {
             Item::Macro(item) => {
-                if item.ident.is_none() && expander.is_none() {
-                    if let Some(risk) = macros.risk(&item.mac, true) {
-                        let path = &item.mac.path;
-                        let name = path
-                            .segments
-                            .last()
-                            .map_or_else(String::new, |seg| ident_name(&seg.ident));
-                        let line = path
-                            .segments
-                            .first()
-                            .map_or(0, |seg| seg.ident.span().start().line);
-                        expander = Some(Expander {
-                            shown: format!("{name}!"),
-                            line,
-                            risk,
-                        });
-                    }
+                if item.ident.is_none()
+                    && expander.is_none()
+                    && let Some(risk) = macros.risk(&item.mac, true)
+                {
+                    let path = &item.mac.path;
+                    let name = path
+                        .segments
+                        .last()
+                        .map_or_else(String::new, |seg| ident_name(&seg.ident));
+                    let line = path
+                        .segments
+                        .first()
+                        .map_or(0, |seg| seg.ident.span().start().line);
+                    expander = Some(Expander {
+                        shown: format!("{name}!"),
+                        line,
+                        risk,
+                    });
                 }
                 continue;
             }

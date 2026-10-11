@@ -186,11 +186,11 @@ pub(super) fn register(
                 );
                 continue;
             }
-            if decl.is_pub {
-                if let Some(diagnostic) = reexport_problem(symbols, decl, &targets) {
-                    diagnostics.push(diagnostic);
-                    continue;
-                }
+            if decl.is_pub
+                && let Some(diagnostic) = reexport_problem(symbols, decl, &targets)
+            {
+                diagnostics.push(diagnostic);
+                continue;
             }
             // The emitted `use` imports every namespace the name occupies
             // in its module (a function and a struct may share a name),
@@ -283,10 +283,10 @@ fn seed_reexports(symbols: &mut Symbols, modules: &[Module]) {
             })
             .collect();
         for item in &program.items {
-            if let Item::Use(decl) = item {
-                if decl.is_pub {
-                    pending.push((module.id, decl, files.len()));
-                }
+            if let Item::Use(decl) = item
+                && decl.is_pub
+            {
+                pending.push((module.id, decl, files.len()));
             }
         }
         files.push(introduced);
@@ -497,10 +497,10 @@ fn through_alias(
                 segments: vec![first.clone()],
                 span: first.span,
             };
-            if let UserType::Enum(id) = found {
-                if symbols.enums[id.0 as usize].variant(&member.name).is_some() {
-                    return Some(variant_error(&prefix, first, member, true));
-                }
+            if let UserType::Enum(id) = found
+                && symbols.enums[id.0 as usize].variant(&member.name).is_some()
+            {
+                return Some(variant_error(&prefix, first, member, true));
             }
             if symbols.members.contains_key(&(found, member.name.clone())) {
                 return Some(member_error(&prefix, first, member, true));

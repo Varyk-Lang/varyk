@@ -31,11 +31,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Overrides rust-toolchain.toml, which selects the stable channel.
-      RUSTUP_TOOLCHAIN: "1.85"
+      RUSTUP_TOOLCHAIN: "1.88"
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.88
 
       - name: Build
         run: cargo build --workspace

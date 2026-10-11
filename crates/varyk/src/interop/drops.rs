@@ -90,16 +90,16 @@ struct Visitor<'m, 'a> {
 
 impl<'ast> Visit<'ast> for Visitor<'_, '_> {
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        if let Some((path, _)) = &item.trait_ {
-            if let Some(last) = path.segments.last() {
-                let target = match item.self_ty.as_ref() {
-                    Type::Path(ty) if ty.qself.is_none() => {
-                        ty.path.segments.last().map(|seg| ident_name(&seg.ident))
-                    }
-                    _ => None,
-                };
-                self.impls.push((ident_name(&last.ident), target));
-            }
+        if let Some((path, _)) = &item.trait_
+            && let Some(last) = path.segments.last()
+        {
+            let target = match item.self_ty.as_ref() {
+                Type::Path(ty) if ty.qself.is_none() => {
+                    ty.path.segments.last().map(|seg| ident_name(&seg.ident))
+                }
+                _ => None,
+            };
+            self.impls.push((ident_name(&last.ident), target));
         }
         visit::visit_item_impl(self, item);
     }

@@ -68,16 +68,16 @@ impl Symbols {
             }
         };
         let mut segments = path.segments.iter();
-        if path.leading == PathStart::None {
-            if let Some(first) = segments.next() {
-                current = match self.child(current, &first.name) {
-                    Some(module) => module,
-                    None => match self.scopes[from.0 as usize].use_types.get(&first.name) {
-                        Some(UseTarget::Module(module)) => *module,
-                        _ => self.dependency_root(first)?,
-                    },
-                };
-            }
+        if path.leading == PathStart::None
+            && let Some(first) = segments.next()
+        {
+            current = match self.child(current, &first.name) {
+                Some(module) => module,
+                None => match self.scopes[from.0 as usize].use_types.get(&first.name) {
+                    Some(UseTarget::Module(module)) => *module,
+                    _ => self.dependency_root(first)?,
+                },
+            };
         }
         for segment in segments {
             current = self

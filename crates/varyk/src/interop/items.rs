@@ -226,13 +226,13 @@ pub(super) fn import_items(items: Vec<Item>, names: &Names, text: &str) -> Impor
     // method, `unsafe`, `const`, `#[cfg]`) is recorded with it.
     for item in impls {
         let Some(owner) = inherent_owner(&item) else {
-            if let Some(owner) = trait_impl_owner(&item) {
-                if let Some(target) = module.structs.iter_mut().find(|s| s.name == owner) {
-                    for impl_item in &item.items {
-                        if let ImplItem::Fn(method) = impl_item {
-                            let name = ident_name(&method.sig.ident);
-                            target.skipped_methods.push((name, "a trait method"));
-                        }
+            if let Some(owner) = trait_impl_owner(&item)
+                && let Some(target) = module.structs.iter_mut().find(|s| s.name == owner)
+            {
+                for impl_item in &item.items {
+                    if let ImplItem::Fn(method) = impl_item {
+                        let name = ident_name(&method.sig.ident);
+                        target.skipped_methods.push((name, "a trait method"));
                     }
                 }
             }
@@ -257,11 +257,11 @@ pub(super) fn import_items(items: Vec<Item>, names: &Names, text: &str) -> Impor
                 continue;
             };
             if !is_plain_pub(&method.vis) {
-                if let (Some(vis), false) = (restricted(&method.vis), block_cfg) {
-                    if !has_cfg_attr(&method.attrs) {
-                        let name = ident_name(&method.sig.ident);
-                        target.restricted_methods.push((name, vis));
-                    }
+                if let (Some(vis), false) = (restricted(&method.vis), block_cfg)
+                    && !has_cfg_attr(&method.attrs)
+                {
+                    let name = ident_name(&method.sig.ident);
+                    target.restricted_methods.push((name, vis));
                 }
                 continue;
             }

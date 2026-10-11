@@ -418,10 +418,10 @@ fn primary_span(msg: &serde_json::Value) -> Option<&serde_json::Value> {
 /// is absolute), or with `crate_src`'s prefix stripped if it is absolute.
 fn tree_relative<'a>(file_name: &'a str, crate_src: &Path) -> Cow<'a, str> {
     let path = Path::new(file_name);
-    if path.is_absolute() {
-        if let Ok(relative) = path.strip_prefix(crate_src) {
-            return relative.to_string_lossy().into_owned().into();
-        }
+    if path.is_absolute()
+        && let Ok(relative) = path.strip_prefix(crate_src)
+    {
+        return relative.to_string_lossy().into_owned().into();
     }
     file_name.into()
 }

@@ -75,10 +75,10 @@ impl FnChecker<'_> {
             }
             let message = format!("cannot find value `{full}`");
             let mut diagnostic = Diagnostic::new(codes::V0100, span, message);
-            if let Some(last) = path.segments.last() {
-                if let Some(note) = self.symbols.did_you_mean(self.module, &last.name) {
-                    diagnostic = diagnostic.with_note(note);
-                }
+            if let Some(last) = path.segments.last()
+                && let Some(note) = self.symbols.did_you_mean(self.module, &last.name)
+            {
+                diagnostic = diagnostic.with_note(note);
             }
             if let Some(note) = self.symbols.not_added(self.module, &full) {
                 diagnostic = diagnostic.with_note(note);
@@ -208,10 +208,11 @@ impl FnChecker<'_> {
         };
         // The route table's `new` is an intrinsic, and shadows the
         // facade's own (milestone 5b4 spec 2.1).
-        if let UserType::Struct(id) = user {
-            if self.symbols.is_app(id) && name.name == "new" {
-                return self.app_new(id, path, args, path_span, span);
-            }
+        if let UserType::Struct(id) = user
+            && self.symbols.is_app(id)
+            && name.name == "new"
+        {
+            return self.app_new(id, path, args, path_span, span);
         }
         if let UserType::Enum(id) = user {
             let def = &self.symbols.enums[id.0 as usize];

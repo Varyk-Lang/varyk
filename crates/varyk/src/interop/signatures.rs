@@ -459,15 +459,15 @@ pub(super) fn map_value(ty: &Type, names: &Names) -> RustTy {
     }
     // A `.rs` file's own `mod varyk_std` would be read as varyk-std's
     // here too; accepted for the MVP.
-    if let Type::Path(type_path) = ty {
-        if type_path.qself.is_none() {
-            match std_item(&type_path.path) {
-                Some(StdItem::Error) => return RustTy::Error,
-                Some(StdItem::Time) => return RustTy::Time,
-                Some(StdItem::Uuid) => return RustTy::Uuid,
-                Some(StdItem::Bytes) => return RustTy::Bytes,
-                _ => {}
-            }
+    if let Type::Path(type_path) = ty
+        && type_path.qself.is_none()
+    {
+        match std_item(&type_path.path) {
+            Some(StdItem::Error) => return RustTy::Error,
+            Some(StdItem::Time) => return RustTy::Time,
+            Some(StdItem::Uuid) => return RustTy::Uuid,
+            Some(StdItem::Bytes) => return RustTy::Bytes,
+            _ => {}
         }
     }
     RustTy::Opaque(type_to_text(ty))

@@ -51,11 +51,10 @@ impl FnChecker<'_> {
                 ..
             },
         ) = (method.name.as_str(), args, &receiver.kind)
+            && let ("map", [closure]) = (map.name.as_str(), map_args.as_slice())
         {
-            if let ("map", [closure]) = (map.name.as_str(), map_args.as_slice()) {
-                for at in map_value_spans(closure) {
-                    self.task_places.push((at, TaskPlace::MapValue));
-                }
+            for at in map_value_spans(closure) {
+                self.task_places.push((at, TaskPlace::MapValue));
             }
         }
         let receiver = self.expr(receiver, None);
@@ -446,13 +445,13 @@ impl FnChecker<'_> {
                 checked.push(None);
                 continue;
             };
-            if let (Some(Ty::Bool), ClosureResult::Bool) = (&result, closure.result) {
-                if ty != Ty::Bool {
-                    let at = closure_expr_tail_span(&closure_expr);
-                    self.mismatch(at, &Ty::Bool, &ty);
-                    checked.push(None);
-                    continue;
-                }
+            if let (Some(Ty::Bool), ClosureResult::Bool) = (&result, closure.result)
+                && ty != Ty::Bool
+            {
+                let at = closure_expr_tail_span(&closure_expr);
+                self.mismatch(at, &Ty::Bool, &ty);
+                checked.push(None);
+                continue;
             }
             subst.r = ty;
             checked.push(Some(closure_expr));
@@ -634,15 +633,13 @@ impl FnChecker<'_> {
                     self.option_try_operand = outer;
                     let Some(checked) = checked else {
                         // `Err(e)?;` has no value type to take from anywhere.
-                        if is_err_call(operand) {
-                            if let Some(hole) = self.diagnostics.get_mut(before) {
-                                if hole.code == codes::V0207 {
-                                    hole.notes.push(
-                                        "to give up with an error, write `return Err(..);`"
-                                            .to_string(),
-                                    );
-                                }
-                            }
+                        if is_err_call(operand)
+                            && let Some(hole) = self.diagnostics.get_mut(before)
+                            && hole.code == codes::V0207
+                        {
+                            hole.notes.push(
+                                "to give up with an error, write `return Err(..);`".to_string(),
+                            );
                         }
                         return None;
                     };

@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["crates/varyk-syntax", "crates/varyk", "crates/varyk-std"]
 # So cargo, when `varyk add` or the hidden crate reads a package under
 # either directory (test fixture copies land in `target/`;
@@ -14,4 +14,4 @@ license = "MIT OR Apache-2.0"
 authors = ["Vlad Mickevic"]
 repository = "https://github.com/Varyk-Lang/varyk"
 homepage = "https://varyk.com"
-rust-version = "1.85"
+rust-version = "1.88"

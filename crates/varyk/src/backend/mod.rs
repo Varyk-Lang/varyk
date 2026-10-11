@@ -114,10 +114,10 @@ pub fn with_local_std(mut manifest: toml::Table) -> toml::Table {
     let Some(path) = local_std() else {
         return manifest;
     };
-    if let Some(toml::Value::Table(dependencies)) = manifest.get_mut("dependencies") {
-        if dependencies.contains_key("varyk-std") {
-            dependencies.insert("varyk-std".to_string(), path_value(&path));
-        }
+    if let Some(toml::Value::Table(dependencies)) = manifest.get_mut("dependencies")
+        && dependencies.contains_key("varyk-std")
+    {
+        dependencies.insert("varyk-std".to_string(), path_value(&path));
     }
     manifest
 }
