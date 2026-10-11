@@ -198,6 +198,7 @@ varyk test [file.vr]     build the program's #[test] functions and run them
 varyk init [dir]         write a new package; --lib writes a library
 varyk add [args]         run cargo add in the package; varyk add sql adds the database package, varyk add mongo the MongoDB one
 varyk publish            publish the package to crates.io as a plain Rust crate
+varyk lsp                show errors and offer fixes in your editor (it starts this itself)
 ```
 
 Without a file, a command works on the package that contains the current
@@ -208,6 +209,17 @@ generated `Cargo.toml` and Rust. Every command accepts
 `--message-format=json`, which prints errors as JSON, one object per line.
 When running from this repository, put `cargo run -p varyk --` in front, as
 in the example above.
+
+### Editors
+
+The Varyk extensions for VS Code and Zed, in
+[`varyk-editors`](https://github.com/Varyk-Lang/varyk-editors), colour
+`.vr` files and run `varyk lsp`, which checks your program each time you
+open or save a file, underlines every error where it is, and offers each
+suggested fix as a quick fix. JetBrains IDEs get the colours through their
+TextMate Bundles setting, pointed at the VS Code extension's folder. Any
+other editor that speaks the Language Server Protocol can run `varyk lsp`
+itself.
 
 ## Status
 
@@ -328,6 +340,7 @@ fn display_name(&self) -> &str {
 - [docs/specs/2026-10-03-milestone-5b3-design.md](docs/specs/2026-10-03-milestone-5b3-design.md): milestone 5b3's additions.
 - [docs/specs/2026-10-05-milestone-5b4-design.md](docs/specs/2026-10-05-milestone-5b4-design.md): milestone 5b4's additions.
 - [docs/specs/2026-10-07-milestone-5c-design.md](docs/specs/2026-10-07-milestone-5c-design.md): milestone 5c's additions.
+- [docs/specs/2026-10-11-language-server-design.md](docs/specs/2026-10-11-language-server-design.md): `varyk lsp`, the language server.
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how to work on the compiler.
 
 ## License

@@ -99,6 +99,15 @@ output; `crates/varyk/tests/examples.rs` checks that.
   `docs/design.md`, `docs/roadmap.md`, `docs/open-questions.md`,
   `CONTRIBUTING.md`, or any other doc the change touches. Read the docs
   against the change before every pull request.
+- **The grammars are documents too.** The syntax of Varyk is described in
+  `docs/language.md`, the TextMate grammar of `Varyk-Lang/varyk-editors`
+  (which the website copies to `varyk.com/syntaxes/varyk.json`), and the
+  Tree-sitter grammar and queries of `Varyk-Lang/tree-sitter-varyk`. A
+  change to what the lexer or parser accepts (a keyword, a literal form,
+  an operator, a comment form, a new item, statement, expression,
+  pattern, or type) updates `docs/language.md` in the same pull request
+  and comes with pull requests to those repositories; a red nightly drift
+  check there is a bug in the grammar.
 - **Snapshots are reviewed content.** Regenerate with `INSTA_UPDATE=always`
   only for the tests you meant to change, read the new `.snap` files, and
   make sure the gate passes without the variable afterwards.
@@ -131,7 +140,7 @@ table are in `CONTRIBUTING.md`.
   imports `.rs` modules with `syn`; `packages.rs` asks cargo for the
   package graph and finds the Varyk packages of a build; `driver/` writes
   the generated tree, one crate per Varyk package, and runs cargo, `init`,
-  and `publish`
+  and `publish`; `lsp.rs` is the `varyk lsp` server for editors
 - `docs/specs/` the design the compiler is built from, with its decisions log
 - `docs/language.md` the one-page reference, including every diagnostic code
 - `docs/roadmap.md` what comes next; `docs/plans/` implementation plans and
@@ -142,5 +151,8 @@ table are in `CONTRIBUTING.md`.
   `2026-10-05-milestone-5b4-followups.md`,
   `2026-10-07-milestone-5c-followups.md`)
 - `docs/open-questions.md` design questions deliberately not yet answered
+- `Varyk-Lang/varyk-editors` the editor extensions (VS Code, Zed) and the
+  TextMate grammar; `Varyk-Lang/tree-sitter-varyk` the Tree-sitter grammar
+  and its queries
 - `TRADEMARKS.md`, `LICENSE-MIT`, `LICENSE-APACHE`; the security policy is the
   organization's shared one, shown in the Security tab

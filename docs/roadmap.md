@@ -212,7 +212,8 @@ The packages, each in its own repository:
 
 - [x] A package's `varyk-std` line is the oldest varyk it needs, so a minor varyk release does not stop it from building ([specs/2026-10-11-std-minimum-design.md](specs/2026-10-11-std-minimum-design.md))
 - [ ] `varyk fmt`, a deterministic formatter on `varyk-syntax` (moved from milestone 4; needs comment-preserving syntax)
-- [ ] Language server on `varyk-syntax`
+- [x] Language server, stage 1: diagnostics and quick fixes on save, `varyk lsp` ([specs/2026-10-11-language-server-design.md](specs/2026-10-11-language-server-design.md))
+- [ ] Language server: hover, go-to-definition, completion; needs error recovery in the parser
 - [ ] Nested modules in `.rs` files
 - [ ] Import of Rust tuple and unit structs
 - [ ] `Debug` on imported Rust structs, with a `{:?}` placeholder
