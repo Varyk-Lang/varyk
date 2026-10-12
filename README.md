@@ -225,8 +225,8 @@ itself.
 
 Varyk is experimental and pre-1.0: anything may change, including any
 syntax, error code, or command-line flag, and a new feature or a breaking
-change bumps the minor version. This is milestone 5c: times, ids, and
-bytes, on top of milestone 5b4's compiler side of HTTP, milestone 5b3's
+change bumps the minor version. The language is milestone 5c's: times, ids,
+and bytes, on top of milestone 5b4's compiler side of HTTP, milestone 5b3's
 facades for packages, milestone 5b2's Varyk packages that use Varyk
 packages, milestone 5b1's async functions and tasks, milestone 5a's data,
 configuration, logging, and tests, and milestone 4's closures, iterators, and patterns. Structs,
@@ -240,6 +240,15 @@ time zones, and much more are not there yet; see
 [docs/language.md](docs/language.md) for exactly what works.
 
 `varyk add mongo` adds the MongoDB package `varyk-mongo`.
+
+Milestone 6, tooling, has begun. `varyk lsp` is a language server: the
+extensions for VS Code and Zed in
+[`varyk-editors`](https://github.com/Varyk-Lang/varyk-editors) start it,
+and it shows every error in the editor on open and save and offers each
+fix-it as a quick fix (see [Editors](#editors)). A package's `varyk-std` line now
+names the oldest varyk it needs, so a new varyk release no longer stops a
+published package from building; and Rust 1.88 is the minimum, a
+breaking change.
 
 Milestone 5c adds three built-in types: `Time`, a point in time in UTC
 read and written as `2026-10-07T12:00:00Z`; `Uuid`, where `Uuid::new()`
@@ -340,6 +349,7 @@ fn display_name(&self) -> &str {
 - [docs/specs/2026-10-03-milestone-5b3-design.md](docs/specs/2026-10-03-milestone-5b3-design.md): milestone 5b3's additions.
 - [docs/specs/2026-10-05-milestone-5b4-design.md](docs/specs/2026-10-05-milestone-5b4-design.md): milestone 5b4's additions.
 - [docs/specs/2026-10-07-milestone-5c-design.md](docs/specs/2026-10-07-milestone-5c-design.md): milestone 5c's additions.
+- [docs/specs/2026-10-11-std-minimum-design.md](docs/specs/2026-10-11-std-minimum-design.md): a package's `varyk-std` line as the oldest varyk it needs.
 - [docs/specs/2026-10-11-language-server-design.md](docs/specs/2026-10-11-language-server-design.md): `varyk lsp`, the language server.
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how to work on the compiler.
 
