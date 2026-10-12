@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.9.0](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.8.2...varyk-v0.9.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* Rust 1.88 is the minimum supported version
+
+### Features
+
+* a package's varyk-std line is its minimum varyk ([c63d1ce](https://github.com/Varyk-Lang/varyk/commit/c63d1cee4342c0327693bd8e787f4e2fbcaf9de3))
+* varyk lsp, a language server for diagnostics and quick fixes ([331b45b](https://github.com/Varyk-Lang/varyk/commit/331b45b94c948fb7cbf7be142128ab15f61b2f29))
+
+
+### Miscellaneous Chores
+
+* Rust 1.88 is the minimum supported version ([00a04ae](https://github.com/Varyk-Lang/varyk/commit/00a04aed0317f876248b307e8b0a209323e01a2d))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * varyk-syntax bumped from 0.8.2 to 0.9.0
+
 ## [0.8.2](https://github.com/Varyk-Lang/varyk/compare/varyk-v0.8.1...varyk-v0.8.2) (2026-10-10)
 
 
