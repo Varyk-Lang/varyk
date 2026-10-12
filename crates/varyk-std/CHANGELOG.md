@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/Varyk-Lang/varyk/compare/varyk-std-v0.8.2...varyk-std-v0.9.0) (2026-10-12)
+
+
+### Miscellaneous Chores
+
+* **varyk-std:** Synchronize varyk versions
+
 ## [0.8.2](https://github.com/Varyk-Lang/varyk/compare/varyk-std-v0.8.1...varyk-std-v0.8.2) (2026-10-10)
 
 
