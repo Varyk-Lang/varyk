@@ -353,6 +353,13 @@ fn display_name(&self) -> &str {
 - [docs/specs/2026-10-11-language-server-design.md](docs/specs/2026-10-11-language-server-design.md): `varyk lsp`, the language server.
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md): how to work on the compiler.
 
+## Sponsors
+
+Varyk is built by one person and has no company behind it. If it is useful
+to you, you can
+[sponsor its development](https://github.com/sponsors/Varyk-Lang). Sponsors
+are listed here.
+
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE),
